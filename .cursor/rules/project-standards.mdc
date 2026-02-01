@@ -1,0 +1,35 @@
+---
+description: Core PlaybackSync project standards and architecture principles
+alwaysApply: true
+---
+
+# PlaybackSync Project Standards
+
+## Architecture Principles
+
+- **Single container design**: HTTP dashboard + WebSocket sync in one Node.js process
+- **Minimal dependencies**: No DB, no Redis - all state in-memory
+- **JSON message protocol**: All WebSocket messages are JSON with server-side validation
+- **Structured logging**: Use `pino` for all logging, never console.log
+- **No password storage**: Hash passwords using HMAC with server secret, never store plaintext
+
+## Code Organization
+
+- Server code in `server/` directory
+- JSON Schemas in `schemas/*.json` for message validation
+- Use `ajv` for all message schema validation
+- Keep functions focused and under 50 lines when possible
+
+## Error Handling
+
+- Always validate WebSocket messages with JSON Schema before processing
+- Send `ERROR` messages to clients for recoverable issues
+- Log errors with structured context: `logger.error('event', { roomId, clientId, error })`
+- Never expose internal errors to clients - use friendly error codes
+
+## State Management
+
+- Rooms stored in `Map<roomId, Room>` in-memory
+- Client connections in `Map<clientId, ClientConnection>` per room
+- Use tombstone pattern for client reconnection (CLIENT_TOMBSTONE_MS window)
+- Event log as ring buffer (last N events per room)

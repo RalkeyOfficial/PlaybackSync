@@ -1,0 +1,49 @@
+---
+description: WebSocket message handling and validation patterns
+globs: **/*websocket*.ts,**/*ws*.ts,**/server.ts
+alwaysApply: false
+---
+
+# WebSocket Message Handling
+
+## Message Validation
+
+- Always validate incoming messages with JSON Schema using `ajv` before processing
+- Reject invalid messages immediately with `ERROR` response
+- Never trust client timestamps - use server `server_ts` for authoritative state
+
+## Message Flow
+
+```typescript
+// ✅ GOOD - validate then process
+const isValid = validateMessage(msg, schema);
+if (!isValid) {
+  sendError(conn, 'INVALID_MESSAGE');
+  return;
+}
+await handleMessage(msg, room, client);
+
+// ❌ BAD - process without validation
+await handleMessage(msg, room, client);
+```
+
+## Broadcasting Patterns
+
+- Broadcast `STATE` after every explicit event (EVENT, EPISODE_CHANGE)
+- Include `server_ts` in all STATE messages for client synchronization
+- Use `room.connectedClients.forEach()` to broadcast - never send to single client unless intentional
+- Handle closed connections gracefully (catch send errors)
+
+## Rate Limiting
+
+- Apply per-connection rate limiter for explicit control events
+- Use token bucket or rate-limiter-flexible
+- Return `ERROR` with code `RATE_LIMITED` when exceeded
+- Log rate limit violations for monitoring
+
+## Reconnection Handling
+
+- Check for tombstone on JOIN with existing clientId
+- If tombstone valid, reattach connection instead of creating new client
+- Send current STATE immediately after successful JOIN
+- Include `lastKnownTime` in JOIN for drift detection

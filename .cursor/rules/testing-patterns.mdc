@@ -1,0 +1,45 @@
+---
+description: Testing patterns for PlaybackSync backend
+globs: **/*.test.ts,**/*.spec.ts,**/test-harness*.ts
+alwaysApply: false
+---
+
+# Testing Patterns
+
+## Unit Tests
+
+- Test JSON Schema validators with valid and invalid inputs
+- Test event handlers with mocked room state
+- Test rate limiter with various event frequencies
+- Use Jest or Mocha for test framework
+
+## Integration Tests
+
+- Use test harness (`scripts/test-harness.js`) to simulate multiple WebSocket clients
+- Test message flow: client A sends EVENT → verify clients B/C receive STATE
+- Test reconnection: disconnect and reconnect with same clientId → verify tombstone reattachment
+- Test drift reconciliation: simulate client drift → verify server corrects clients
+
+## Test Harness Patterns
+
+```typescript
+// ✅ GOOD - simulate real client behavior
+const client = await createTestClient();
+await client.join(roomId, password);
+await client.sendEvent('seek', 10);
+const state = await client.waitForState();
+expect(state.time).toBe(10);
+```
+
+## Mocking
+
+- Mock WebSocket connections for unit tests
+- Use in-memory room state for testing (don't require real server)
+- Mock time for drift reconciliation tests
+- Mock rate limiter for event handler tests
+
+## Test Data
+
+- Use predictable UUIDs for test roomId/clientId
+- Use fixed timestamps for deterministic tests
+- Clean up test rooms after each test

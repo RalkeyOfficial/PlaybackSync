@@ -1,0 +1,47 @@
+---
+description: Drift detection and reconciliation algorithm patterns
+globs: **/*drift*.ts,**/reconciliation*.ts,**/server.ts
+alwaysApply: false
+---
+
+# Drift Reconciliation
+
+## Expected Time Calculation
+
+- Server maintains authoritative `expected_time` based on last explicit event
+- If `paused == true`: `expected_time = state.time`
+- If `paused == false`: `expected_time = state.time + (now - state.last_state_update_ts)`
+- Never derive time from client reports - only use for drift detection
+
+## Reconciliation Algorithm
+
+```typescript
+// ✅ GOOD - server-authoritative reconciliation
+if (now - last_explicit_event_ts < COOLDOWN_WINDOW_MS) {
+  return; // Skip during cooldown
+}
+
+const expectedTime = calculateExpectedTime(room.state);
+const deltas = await requestTimeReports(room.clients);
+
+if (deltas.some(d => Math.abs(d) >= DRIFT_THRESHOLD_MS)) {
+  broadcastState({ time: expectedTime }); // Server time, not client time
+}
+```
+
+## Cooldown Window
+
+- Skip reconciliation for `COOLDOWN_WINDOW_MS` after explicit events
+- Prevents reconciliation from interfering with user actions
+- Update `last_explicit_event_ts` on every EVENT/EPISODE_CHANGE
+
+## TIME_REPORT Handling
+
+- Request TIME_REPORT from all clients periodically (DRIFT_CHECK_INTERVAL_MS)
+- Compute delta: `client_time - expected_time`
+- If any client exceeds DRIFT_THRESHOLD_MS, broadcast authoritative STATE
+- Never adjust server time based on client reports - only correct clients
+
+## Key Principle
+
+**Server time is authoritative. Clients are corrected to match server time, never the reverse.**

@@ -1,0 +1,57 @@
+sequenceDiagram
+    participant C as Client (initiator)
+    participant S as Server (authoritative)
+    participant O as Other Clients
+
+    rect rgba(240,240,240,0.3)
+    Note over C,S: JOIN + CLOCK_SYNC
+    C->>S: JOIN(roomId, userId)
+    S-->>C: ROOM_STATE {videoPos, playerState, serverTime}
+    C->>S: CLOCK_PING (clientSendTime)
+    S-->>C: CLOCK_PONG (serverRecvTime, serverSendTime)
+    Note right of C: compute offset = serverTime - clientTime
+    end
+
+    rect rgba(230,255,230,0.3)
+    Note over C,S: PLAY flow (scheduled start)
+    C->>S: PLAY_REQUEST {videoPos, clientTime}
+    Note right of S: compute authoritative videoPosServer\ncompute playAt = now_server + SAFETY_BUFFER_MS
+    S-->>O: PLAY {serverTime: playAt, videoPos, eventId}
+    S-->>C: PLAY {serverTime: playAt, videoPos, eventId}
+    Note left of O: compute localPlayAt = playAt - offset\nschedule video.play() at localPlayAt
+    O-->>S: ACK {eventId}
+    C-->>S: ACK {eventId}
+    Note right of S: wait up to ACK_TIMEOUT_MS\nflag missing ACKs as lagging
+    end
+
+    rect rgba(255,230,230,0.3)
+    Note over C,S: BUFFER occurs on one client
+    C-->>S: BUFFER_START {videoPos}
+    Note right of S: mark client as lagging, room continues by default
+    C-->>S: BUFFER_END {videoPos_after}
+    alt gap <= NUDGE_THRESHOLD_MS
+        S-->>C: SYNC_ADJUST {mode: nudge-rate, targetPos}
+        Note right of C: temporarily adjust playbackRate
+    else gap > SEEK_THRESHOLD_MS
+        S-->>C: SEEK {targetPos, serverTime: now, eventId}
+        C-->>S: ACK {eventId}
+        Note right of C: apply hard seek
+    end
+    end
+
+    rect rgba(240,240,255,0.3)
+    Note over O,S: PAUSE flow (immediate)
+    O->>S: PAUSE_REQUEST {videoPos, clientTime}
+    S-->>O: PAUSE {serverTime: now_server, videoPos, eventId}
+    S-->>C: PAUSE {serverTime: now_server, videoPos, eventId}
+    O-->>S: ACK {eventId}
+    C-->>S: ACK {eventId}
+    Note right of S: pause is authoritative and immediate
+    end
+
+    rect rgba(250,250,250,0.6)
+    Note over S: Configuration labels (examples only)
+    Note over S: SAFETY_BUFFER_MS = max(MEDIAN_RTT_MS, BASELINE_MARGIN_MS)
+    Note over S: ACK_TIMEOUT_MS = configurable
+    Note over S: NUDGE_THRESHOLD_MS / SEEK_THRESHOLD_MS are tunable
+    end

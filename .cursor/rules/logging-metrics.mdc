@@ -1,0 +1,48 @@
+---
+description: Structured logging and Prometheus metrics patterns
+globs: **/*.ts
+alwaysApply: false
+---
+
+# Logging & Metrics
+
+## Structured Logging (pino)
+
+```typescript
+// ✅ GOOD - structured with context
+logger.info({ roomId, clientId: maskId(clientId), event: 'join' }, 'Client joined room');
+
+// ❌ BAD - string interpolation
+logger.info(`Client ${clientId} joined room ${roomId}`);
+```
+
+## Log Levels
+
+- `info`: Normal operations (room created, client joined, events processed)
+- `warn`: Recoverable issues (rate limit hit, invalid message format)
+- `error`: Exceptions and failures (connection errors, processing failures)
+
+## Anonymization
+
+- Never log passwords (plaintext or hash)
+- Mask clientId in logs if `ANON_LOGGING=true`
+- Redact IP addresses in production logs
+- Use helper function: `maskId(id)` for sensitive identifiers
+
+## Prometheus Metrics
+
+- Use `prom-client` for all metrics
+- Gauge metrics: `playbacksync_rooms_total`, `playbacksync_connections_total`
+- Counter metrics: `playbacksync_events_total`, `playbacksync_rate_limited_total`
+- Expose `/metrics` endpoint on Fastify server
+- Use consistent naming: `playbacksync_<metric_name>_<type>`
+
+## Metric Examples
+
+```typescript
+// ✅ GOOD - increment counter with labels
+metrics.eventsTotal.inc({ eventType: 'seek', roomId });
+
+// ✅ GOOD - update gauge
+metrics.roomsTotal.set(rooms.size);
+```
