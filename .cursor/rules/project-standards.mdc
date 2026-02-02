@@ -33,3 +33,11 @@ alwaysApply: true
 - Client connections in `Map<clientId, ClientConnection>` per room
 - Use tombstone pattern for client reconnection (CLIENT_TOMBSTONE_MS window)
 - Event log as ring buffer (last N events per room)
+
+## Development Environment
+
+- **Docker container execution**: Code runs inside Docker containers, not directly on the host
+- **No build commands**: Never run `npm run build` or similar build commands - the dev container handles compilation automatically
+- **Hot reloading**: The dev container (`playbacksync-dev`) uses nodemon with tsx for automatic hot reloading
+- **Volume mounts**: Source code is mounted as volumes, so file changes are automatically detected and reloaded
+- **Testing**: Run tests inside the container context, not on the host system

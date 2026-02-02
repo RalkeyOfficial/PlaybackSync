@@ -2,7 +2,7 @@
  * Prometheus metrics setup and collection
  */
 
-import { Registry, Counter, Gauge, Histogram, collectDefaultMetrics } from 'prom-client';
+import { Registry, Gauge, collectDefaultMetrics } from 'prom-client';
 
 /**
  * Create a new Prometheus registry

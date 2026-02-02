@@ -9,7 +9,7 @@ import { getMetricsAsText } from '../utils/metrics';
  * Metrics route plugin
  */
 const metricsPlugin: FastifyPluginAsync = async fastify => {
-  fastify.get('/metrics', async (request, reply) => {
+  fastify.get('/metrics', async (_request, reply) => {
     try {
       const metrics = await getMetricsAsText();
       reply.type('text/plain; version=0.0.4; charset=utf-8');
