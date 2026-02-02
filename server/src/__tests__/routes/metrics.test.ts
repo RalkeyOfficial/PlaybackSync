@@ -4,6 +4,7 @@
 
 import { createTestServer } from '../helpers/test-server';
 import { setupTestEnv, cleanupTestEnv } from '../helpers/fixtures';
+import * as metricsUtils from '../../utils/metrics';
 
 describe('Metrics Endpoint', () => {
   let server: Awaited<ReturnType<typeof createTestServer>>;
@@ -105,6 +106,26 @@ describe('Metrics Endpoint', () => {
       expect(response2.statusCode).toBe(200);
       expect(response1.body).toBeTruthy();
       expect(response2.body).toBeTruthy();
+    });
+
+    it('should handle errors when generating metrics', async () => {
+      // Mock getMetricsAsText to throw an error
+      jest
+        .spyOn(metricsUtils, 'getMetricsAsText')
+        .mockRejectedValueOnce(new Error('Metrics generation failed'));
+
+      const response = await server.inject({
+        method: 'GET',
+        url: '/metrics',
+      });
+
+      expect(response.statusCode).toBe(500);
+      const body = JSON.parse(response.body);
+      expect(body).toHaveProperty('error');
+      expect(body.error).toBe('Failed to generate metrics');
+
+      // Restore original function
+      jest.restoreAllMocks();
     });
   });
 });
