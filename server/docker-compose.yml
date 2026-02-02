@@ -1,0 +1,33 @@
+version: '3.8'
+
+name: PlaybackSync
+
+services:
+  playbacksync:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: PlaybackSync
+    environment:
+      - PORT=8080
+      - LOG_LEVEL=info
+      - NODE_ENV=development
+      - ANON_LOGGING=true
+      - ROOM_TTL_SECONDS=86400
+      - DRIFT_CHECK_INTERVAL_MS=5000
+      - DRIFT_THRESHOLD_MS=500
+      - COOLDOWN_WINDOW_MS=3000
+      - CLIENT_TOMBSTONE_MS=30000
+      - RATE_LIMIT_EVENTS_PER_SEC=10
+      - SHARE_HOSTNAME=${SHARE_HOSTNAME:-}
+      - SYNC_HOSTNAME=${SYNC_HOSTNAME:-}
+      - SERVER_SECRET=${SERVER_SECRET:-}
+    ports:
+      - '8080:8080'
+    restart: unless-stopped
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://localhost:8080/healthz']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
