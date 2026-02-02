@@ -4,11 +4,12 @@
 
 import Fastify from 'fastify';
 import { getConfig } from './config';
+import { logger } from './utils/logger';
 
 async function startServer() {
   const config = getConfig();
   const server = Fastify({
-    logger: false, // Will be configured in Step 1.2
+    logger,
   });
 
   // Health check endpoint
@@ -18,21 +19,20 @@ async function startServer() {
 
   try {
     await server.listen({ port: config.port, host: '0.0.0.0' });
-    console.log(`PlaybackSync Server listening on port ${config.port}`);
   } catch (error) {
-    console.error('Error starting server:', error);
+    logger.error({ error }, 'Error starting server');
     process.exit(1);
   }
 
   // Graceful shutdown
   const shutdown = async (signal: string) => {
-    console.log(`Received ${signal}, shutting down gracefully...`);
+    logger.info({ signal }, 'Shutting down gracefully');
     try {
       await server.close();
-      console.log('Server closed');
+      logger.info('Server closed');
       process.exit(0);
     } catch (error) {
-      console.error('Error during shutdown:', error);
+      logger.error({ error }, 'Error during shutdown');
       process.exit(1);
     }
   };
