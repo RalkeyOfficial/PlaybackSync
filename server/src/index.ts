@@ -5,17 +5,26 @@
 import Fastify from 'fastify';
 import { getConfig } from './config';
 import { logger } from './utils/logger';
+import healthzPlugin from './routes/healthz';
+import metricsPlugin from './routes/metrics';
 
 async function startServer() {
   const config = getConfig();
   const server = Fastify({
     logger,
+    // Enable JSON schema validation
+    ajv: {
+      customOptions: {
+        removeAdditional: 'all',
+        coerceTypes: true,
+        useDefaults: true,
+      },
+    },
   });
 
-  // Health check endpoint
-  server.get('/healthz', async () => {
-    return { status: 'ok' };
-  });
+  // Register route plugins
+  await server.register(healthzPlugin);
+  await server.register(metricsPlugin);
 
   try {
     await server.listen({ port: config.port, host: '0.0.0.0' });
