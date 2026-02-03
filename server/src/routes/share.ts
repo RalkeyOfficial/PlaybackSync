@@ -151,7 +151,7 @@ const sharePlugin: FastifyPluginAsync = async fastify => {
       // If no Authorization header, return 401 with WWW-Authenticate header
       // This triggers the browser's Basic Auth prompt
       if (!credentials) {
-        return reply.code(401).header('WWW-Authenticate', 'Basic realm="Room Access"').send({
+        return reply.code(401).header('WWW-Authenticate', `Basic realm="Room ${roomIdString}"`).send({
           statusCode: 401,
           error: 'Unauthorized',
           message: 'Authentication required',
