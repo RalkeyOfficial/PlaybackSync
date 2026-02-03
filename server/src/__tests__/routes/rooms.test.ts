@@ -4,7 +4,9 @@
 
 import { createTestServer } from '../helpers/test-server';
 import { setupTestEnv, cleanupTestEnv } from '../helpers/fixtures';
-import { isValidUuid } from '../../types/ids';
+import { isValidUuid, toRoomId, toClientId } from '../../types/ids';
+import { clearAllRooms, getRoom } from '../../storage/rooms';
+import type { WebSocket } from 'ws';
 
 describe('Rooms API Endpoints', () => {
   let server: Awaited<ReturnType<typeof createTestServer>>;
@@ -494,6 +496,424 @@ describe('Rooms API Endpoints', () => {
       const roomAfter = roomsAfter.find((r: { id: string }) => r.id === roomId);
 
       expect(roomAfter).toBeUndefined();
+    });
+  });
+
+  describe('GET /api/rooms/:roomId', () => {
+    beforeEach(() => {
+      // Clear rooms before each test for isolation
+      clearAllRooms();
+    });
+
+    it('should return 200 with correct room details for existing room', async () => {
+      // Create a room first
+      const createResponse = await server.inject({
+        method: 'POST',
+        url: '/api/rooms',
+        payload: {
+          targetUrl: 'https://example.com/video',
+        },
+      });
+
+      const createBody = JSON.parse(createResponse.body);
+      const roomId = createBody.roomId;
+
+      // Get room details
+      const response = await server.inject({
+        method: 'GET',
+        url: `/api/rooms/${roomId}`,
+      });
+
+      expect(response.statusCode).toBe(200);
+      const body = JSON.parse(response.body);
+
+      expect(body).toHaveProperty('roomId');
+      expect(body).toHaveProperty('createdAt');
+      expect(body).toHaveProperty('expiresAt');
+      expect(body).toHaveProperty('targetUrl');
+      expect(body).toHaveProperty('state');
+      expect(body).toHaveProperty('connectedClients');
+      expect(body).toHaveProperty('recentEvents');
+      expect(body.roomId).toBe(roomId);
+      expect(body.targetUrl).toBe('https://example.com/video');
+    });
+
+    it('should return room details with correct state structure', async () => {
+      const createResponse = await server.inject({
+        method: 'POST',
+        url: '/api/rooms',
+        payload: {
+          targetUrl: 'https://example.com/video',
+        },
+      });
+
+      const createBody = JSON.parse(createResponse.body);
+      const roomId = createBody.roomId;
+
+      const response = await server.inject({
+        method: 'GET',
+        url: `/api/rooms/${roomId}`,
+      });
+
+      const body = JSON.parse(response.body);
+
+      expect(body.state).toHaveProperty('paused');
+      expect(body.state).toHaveProperty('time');
+      expect(body.state).toHaveProperty('provider');
+      expect(body.state).toHaveProperty('episode');
+      expect(body.state).toHaveProperty('eventId');
+      expect(body.state).toHaveProperty('last_explicit_event_ts');
+      expect(body.state).toHaveProperty('last_state_update_ts');
+      expect(typeof body.state.paused).toBe('boolean');
+      expect(typeof body.state.time).toBe('number');
+      expect(typeof body.state.provider).toBe('string');
+      expect(typeof body.state.episode).toBe('number');
+      expect(typeof body.state.eventId).toBe('number');
+      expect(typeof body.state.last_explicit_event_ts).toBe('number');
+      expect(typeof body.state.last_state_update_ts).toBe('number');
+    });
+
+    it('should return empty connectedClients array for room with no clients', async () => {
+      const createResponse = await server.inject({
+        method: 'POST',
+        url: '/api/rooms',
+        payload: {
+          targetUrl: 'https://example.com/video',
+        },
+      });
+
+      const createBody = JSON.parse(createResponse.body);
+      const roomId = createBody.roomId;
+
+      const response = await server.inject({
+        method: 'GET',
+        url: `/api/rooms/${roomId}`,
+      });
+
+      const body = JSON.parse(response.body);
+
+      expect(Array.isArray(body.connectedClients)).toBe(true);
+      expect(body.connectedClients.length).toBe(0);
+    });
+
+    it('should return empty recentEvents array for room with no events', async () => {
+      const createResponse = await server.inject({
+        method: 'POST',
+        url: '/api/rooms',
+        payload: {
+          targetUrl: 'https://example.com/video',
+        },
+      });
+
+      const createBody = JSON.parse(createResponse.body);
+      const roomId = createBody.roomId;
+
+      const response = await server.inject({
+        method: 'GET',
+        url: `/api/rooms/${roomId}`,
+      });
+
+      const body = JSON.parse(response.body);
+
+      expect(Array.isArray(body.recentEvents)).toBe(true);
+      expect(body.recentEvents.length).toBe(0);
+    });
+
+    it('should exclude passwordHash from response (security)', async () => {
+      const createResponse = await server.inject({
+        method: 'POST',
+        url: '/api/rooms',
+        payload: {
+          targetUrl: 'https://example.com/video',
+        },
+      });
+
+      const createBody = JSON.parse(createResponse.body);
+      const roomId = createBody.roomId;
+
+      const response = await server.inject({
+        method: 'GET',
+        url: `/api/rooms/${roomId}`,
+      });
+
+      const body = JSON.parse(response.body);
+
+      expect(body.passwordHash).toBeUndefined();
+      expect(body.password).toBeUndefined();
+    });
+
+    it('should return 404 for non-existent room', async () => {
+      const nonExistentRoomId = '123e4567-e89b-12d3-a456-426614174999';
+
+      const response = await server.inject({
+        method: 'GET',
+        url: `/api/rooms/${nonExistentRoomId}`,
+      });
+
+      expect(response.statusCode).toBe(404);
+    });
+
+    it('should return 404 for expired room', async () => {
+      // Create a room with very short TTL
+      const createResponse = await server.inject({
+        method: 'POST',
+        url: '/api/rooms',
+        payload: {
+          ttl: 1,
+          targetUrl: 'https://example.com/video',
+        },
+      });
+
+      const createBody = JSON.parse(createResponse.body);
+      const roomId = createBody.roomId;
+
+      // Wait for expiration
+      await new Promise(resolve => setTimeout(resolve, 1100));
+
+      const response = await server.inject({
+        method: 'GET',
+        url: `/api/rooms/${roomId}`,
+      });
+
+      expect(response.statusCode).toBe(404);
+    });
+
+    it('should return 400 for invalid roomId format (non-UUID)', async () => {
+      const invalidRoomId = 'not-a-valid-uuid';
+
+      const response = await server.inject({
+        method: 'GET',
+        url: `/api/rooms/${invalidRoomId}`,
+      });
+
+      expect(response.statusCode).toBe(400);
+    });
+
+    it('should return correct createdAt and expiresAt timestamps', async () => {
+      const ttl = 3600; // 1 hour
+      const createResponse = await server.inject({
+        method: 'POST',
+        url: '/api/rooms',
+        payload: {
+          ttl: ttl,
+          targetUrl: 'https://example.com/video',
+        },
+      });
+
+      const createBody = JSON.parse(createResponse.body);
+      const roomId = createBody.roomId;
+
+      const response = await server.inject({
+        method: 'GET',
+        url: `/api/rooms/${roomId}`,
+      });
+
+      const body = JSON.parse(response.body);
+
+      expect(typeof body.createdAt).toBe('number');
+      expect(typeof body.expiresAt).toBe('number');
+      expect(body.expiresAt).toBeGreaterThan(body.createdAt);
+      expect(body.expiresAt).toBe(body.createdAt + ttl * 1000);
+    });
+  });
+
+  describe('DELETE /api/rooms/:roomId', () => {
+    beforeEach(() => {
+      // Clear rooms before each test for isolation
+      clearAllRooms();
+    });
+
+    it('should return 200/204 on successful deletion', async () => {
+      const createResponse = await server.inject({
+        method: 'POST',
+        url: '/api/rooms',
+        payload: {
+          targetUrl: 'https://example.com/video',
+        },
+      });
+
+      const createBody = JSON.parse(createResponse.body);
+      const roomId = createBody.roomId;
+
+      const response = await server.inject({
+        method: 'DELETE',
+        url: `/api/rooms/${roomId}`,
+      });
+
+      // Accept either 200 or 204
+      expect([200, 204]).toContain(response.statusCode);
+    });
+
+    it('should remove room from storage (verify via GET /api/rooms)', async () => {
+      const createResponse = await server.inject({
+        method: 'POST',
+        url: '/api/rooms',
+        payload: {
+          targetUrl: 'https://example.com/video',
+        },
+      });
+
+      const createBody = JSON.parse(createResponse.body);
+      const roomId = createBody.roomId;
+
+      // Verify room exists before deletion
+      const listBeforeResponse = await server.inject({
+        method: 'GET',
+        url: '/api/rooms',
+      });
+
+      const roomsBefore = JSON.parse(listBeforeResponse.body);
+      const foundBefore = roomsBefore.find((r: { id: string }) => r.id === roomId);
+      expect(foundBefore).toBeDefined();
+
+      // Delete the room
+      const deleteResponse = await server.inject({
+        method: 'DELETE',
+        url: `/api/rooms/${roomId}`,
+      });
+
+      expect([200, 204]).toContain(deleteResponse.statusCode);
+
+      // Verify room no longer exists
+      const listAfterResponse = await server.inject({
+        method: 'GET',
+        url: '/api/rooms',
+      });
+
+      const roomsAfter = JSON.parse(listAfterResponse.body);
+      const foundAfter = roomsAfter.find((r: { id: string }) => r.id === roomId);
+      expect(foundAfter).toBeUndefined();
+    });
+
+    it('should return 404 for non-existent room', async () => {
+      const nonExistentRoomId = '123e4567-e89b-12d3-a456-426614174999';
+
+      const response = await server.inject({
+        method: 'DELETE',
+        url: `/api/rooms/${nonExistentRoomId}`,
+      });
+
+      expect(response.statusCode).toBe(404);
+    });
+
+    it('should return 404 for expired room', async () => {
+      // Create a room with very short TTL
+      const createResponse = await server.inject({
+        method: 'POST',
+        url: '/api/rooms',
+        payload: {
+          ttl: 1,
+          targetUrl: 'https://example.com/video',
+        },
+      });
+
+      const createBody = JSON.parse(createResponse.body);
+      const roomId = createBody.roomId;
+
+      // Wait for expiration
+      await new Promise(resolve => setTimeout(resolve, 1100));
+
+      const response = await server.inject({
+        method: 'DELETE',
+        url: `/api/rooms/${roomId}`,
+      });
+
+      expect(response.statusCode).toBe(404);
+    });
+
+    it('should return 400 for invalid roomId format (non-UUID)', async () => {
+      const invalidRoomId = 'not-a-valid-uuid';
+
+      const response = await server.inject({
+        method: 'DELETE',
+        url: `/api/rooms/${invalidRoomId}`,
+      });
+
+      expect(response.statusCode).toBe(400);
+    });
+
+    it('should allow deletion of room with no connected clients', async () => {
+      const createResponse = await server.inject({
+        method: 'POST',
+        url: '/api/rooms',
+        payload: {
+          targetUrl: 'https://example.com/video',
+        },
+      });
+
+      const createBody = JSON.parse(createResponse.body);
+      const roomId = createBody.roomId;
+
+      // Verify room has no clients
+      const room = getRoom(toRoomId(roomId));
+      expect(room?.connectedClients.size).toBe(0);
+
+      const response = await server.inject({
+        method: 'DELETE',
+        url: `/api/rooms/${roomId}`,
+      });
+
+      expect([200, 204]).toContain(response.statusCode);
+    });
+
+    it('should close WebSocket connections when room has connected clients', async () => {
+      // Create a room
+      const createResponse = await server.inject({
+        method: 'POST',
+        url: '/api/rooms',
+        payload: {
+          targetUrl: 'https://example.com/video',
+        },
+      });
+
+      const createBody = JSON.parse(createResponse.body);
+      const roomId = toRoomId(createBody.roomId);
+
+      // Get the room and add mock clients
+      const room = getRoom(roomId);
+      expect(room).toBeDefined();
+
+      if (room) {
+        // Create mock WebSocket objects
+        const mockWs1 = {
+          close: jest.fn(),
+          readyState: 1, // OPEN
+        } as unknown as WebSocket;
+
+        const mockWs2 = {
+          close: jest.fn(),
+          readyState: 1, // OPEN
+        } as unknown as WebSocket;
+
+        const clientId1 = toClientId('123e4567-e89b-12d3-a456-426614174001');
+        const clientId2 = toClientId('123e4567-e89b-12d3-a456-426614174002');
+
+        room.connectedClients.set(clientId1, {
+          clientId: clientId1,
+          conn: mockWs1,
+          lastSeen: Date.now(),
+        });
+
+        room.connectedClients.set(clientId2, {
+          clientId: clientId2,
+          conn: mockWs2,
+          lastSeen: Date.now(),
+        });
+
+        expect(room.connectedClients.size).toBe(2);
+
+        // Delete the room
+        const response = await server.inject({
+          method: 'DELETE',
+          url: `/api/rooms/${roomId}`,
+        });
+
+        expect([200, 204]).toContain(response.statusCode);
+
+        // Verify WebSocket close was called on both connections
+        expect(mockWs1.close).toHaveBeenCalled();
+        expect(mockWs2.close).toHaveBeenCalled();
+      }
     });
   });
 });

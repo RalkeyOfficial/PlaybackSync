@@ -79,6 +79,15 @@ export function clearAllRooms(): void {
 }
 
 /**
+ * Check if a room is expired
+ * @param room - Room object to check
+ * @returns True if room is expired, false otherwise
+ */
+export function isRoomExpired(room: Room): boolean {
+  return room.expiresAt < Date.now();
+}
+
+/**
  * List all active (non-expired) rooms
  * @returns Array of room summaries sorted by creation time (newest first)
  */
@@ -115,4 +124,36 @@ export function listActiveRooms(): Array<{
   activeRooms.sort((a, b) => b.createdAt - a.createdAt);
 
   return activeRooms;
+}
+
+/**
+ * Clean up expired rooms by closing connections and removing them from storage
+ * @param closeConnections - Function to close WebSocket connections for a room
+ * @returns Number of rooms cleaned up
+ */
+export function cleanupExpiredRooms(closeConnections: (room: Room) => void): number {
+  const now = Date.now();
+  let cleanedCount = 0;
+  const roomsToDelete: RoomId[] = [];
+
+  // First pass: identify expired rooms
+  for (const [roomId, room] of rooms.entries()) {
+    if (room.expiresAt < now) {
+      roomsToDelete.push(roomId);
+    }
+  }
+
+  // Second pass: close connections and delete rooms
+  for (const roomId of roomsToDelete) {
+    const room = rooms.get(roomId);
+    if (room) {
+      // Close all WebSocket connections
+      closeConnections(room);
+      // Delete room from storage
+      rooms.delete(roomId);
+      cleanedCount++;
+    }
+  }
+
+  return cleanedCount;
 }

@@ -7,8 +7,9 @@ import crypto from 'crypto';
 import { getConfig } from '../config';
 import { logger, maskId } from '../utils/logger';
 import { hashPassword } from '../utils/password';
-import { createRoom, listActiveRooms } from '../storage/rooms';
-import { toRoomId } from '../types/ids';
+import { createRoom, listActiveRooms, getRoom, deleteRoom, isRoomExpired } from '../storage/rooms';
+import { toRoomId, isValidUuid } from '../types/ids';
+import { closeRoomConnections, cleanupExpiredRoom } from '../utils/room-cleanup';
 
 /**
  * Generate a random alphanumeric password
@@ -124,6 +125,75 @@ const listRoomsResponseSchema = {
 } as const;
 
 /**
+ * Response schema for GET /api/rooms/:roomId
+ */
+const getRoomDetailsResponseSchema = {
+  type: 'object',
+  properties: {
+    roomId: { type: 'string' },
+    createdAt: { type: 'number' },
+    expiresAt: { type: 'number' },
+    targetUrl: { type: 'string' },
+    state: {
+      type: 'object',
+      properties: {
+        paused: { type: 'boolean' },
+        time: { type: 'number' },
+        provider: { type: 'string' },
+        episode: { type: 'number' },
+        eventId: { type: 'number' },
+        last_explicit_event_ts: { type: 'number' },
+        last_state_update_ts: { type: 'number' },
+      },
+      required: [
+        'paused',
+        'time',
+        'provider',
+        'episode',
+        'eventId',
+        'last_explicit_event_ts',
+        'last_state_update_ts',
+      ],
+    },
+    connectedClients: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          clientId: { type: 'string' },
+          lastSeen: { type: 'number' },
+          tombstonedUntil: { type: 'number' },
+        },
+        required: ['clientId', 'lastSeen'],
+      },
+    },
+    recentEvents: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          type: { type: 'string' },
+          value: { oneOf: [{ type: 'number' }, { type: 'string' }] },
+          clientId: { type: 'string' },
+          ts: { type: 'number' },
+          eventId: { type: 'number' },
+        },
+        required: ['type', 'ts', 'eventId'],
+      },
+    },
+  },
+  required: [
+    'roomId',
+    'createdAt',
+    'expiresAt',
+    'targetUrl',
+    'state',
+    'connectedClients',
+    'recentEvents',
+  ],
+} as const;
+
+/**
  * Rooms API plugin
  */
 const roomsPlugin: FastifyPluginAsync = async fastify => {
@@ -208,6 +278,192 @@ const roomsPlugin: FastifyPluginAsync = async fastify => {
         expiresAt: room.expiresAt,
         last_state: room.last_state,
       }));
+    }
+  );
+
+  /**
+   * GET /api/rooms/:roomId - Get room details
+   */
+  fastify.get<{ Params: { roomId: string } }>(
+    '/api/rooms/:roomId',
+    {
+      schema: {
+        params: {
+          type: 'object',
+          properties: {
+            roomId: {
+              type: 'string',
+              pattern: '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
+              description: 'UUID v4 format',
+            },
+          },
+          required: ['roomId'],
+        },
+        response: {
+          200: getRoomDetailsResponseSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const { roomId: roomIdString } = request.params;
+
+      // Validate UUID format
+      if (!isValidUuid(roomIdString)) {
+        return reply.code(400).send({
+          statusCode: 400,
+          error: 'Bad Request',
+          message: `Invalid UUID format for roomId: ${roomIdString}`,
+        });
+      }
+
+      // Convert to RoomId type
+      let roomId;
+      try {
+        roomId = toRoomId(roomIdString);
+      } catch (error) {
+        return reply.code(400).send({
+          statusCode: 400,
+          error: 'Bad Request',
+          message: `Invalid UUID format for roomId: ${roomIdString}`,
+        });
+      }
+
+      // Get room from storage
+      const room = getRoom(roomId);
+      if (!room) {
+        return reply.code(404).send({
+          statusCode: 404,
+          error: 'Not Found',
+          message: `Room not found: ${roomIdString}`,
+        });
+      }
+
+      // Check if room is expired - clean up in background and return 404
+      if (isRoomExpired(room)) {
+        // Clean up expired room in background (don't await)
+        setImmediate(() => {
+          cleanupExpiredRoom(roomId, room);
+        });
+
+        return reply.code(404).send({
+          statusCode: 404,
+          error: 'Not Found',
+          message: `Room not found: ${roomIdString}`,
+        });
+      }
+
+      // Transform connectedClients Map to array (exclude WebSocket conn object)
+      const connectedClients = Array.from(room.connectedClients.values()).map(client => ({
+        clientId: client.clientId as string,
+        lastSeen: client.lastSeen,
+        ...(client.tombstonedUntil !== undefined && { tombstonedUntil: client.tombstonedUntil }),
+      }));
+
+      // Return room details (exclude passwordHash)
+      return reply.code(200).send({
+        roomId: room.roomId as string,
+        createdAt: room.createdAt,
+        expiresAt: room.expiresAt,
+        targetUrl: room.targetUrl,
+        state: room.state,
+        connectedClients,
+        recentEvents: room.eventLog,
+      });
+    }
+  );
+
+  /**
+   * DELETE /api/rooms/:roomId - Delete room and close connections
+   */
+  fastify.delete<{ Params: { roomId: string } }>(
+    '/api/rooms/:roomId',
+    {
+      schema: {
+        params: {
+          type: 'object',
+          properties: {
+            roomId: {
+              type: 'string',
+              pattern: '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
+              description: 'UUID v4 format',
+            },
+          },
+          required: ['roomId'],
+        },
+      },
+    },
+    async (request, reply) => {
+      const { roomId: roomIdString } = request.params;
+
+      // Validate UUID format
+      if (!isValidUuid(roomIdString)) {
+        return reply.code(400).send({
+          statusCode: 400,
+          error: 'Bad Request',
+          message: `Invalid UUID format for roomId: ${roomIdString}`,
+        });
+      }
+
+      // Convert to RoomId type
+      let roomId;
+      try {
+        roomId = toRoomId(roomIdString);
+      } catch (error) {
+        return reply.code(400).send({
+          statusCode: 400,
+          error: 'Bad Request',
+          message: `Invalid UUID format for roomId: ${roomIdString}`,
+        });
+      }
+
+      // Get room from storage
+      const room = getRoom(roomId);
+      if (!room) {
+        return reply.code(404).send({
+          statusCode: 404,
+          error: 'Not Found',
+          message: `Room not found: ${roomIdString}`,
+        });
+      }
+
+      // Check if room is expired - clean up in background and return 404
+      if (isRoomExpired(room)) {
+        // Clean up expired room in background (don't await)
+        setImmediate(() => {
+          cleanupExpiredRoom(roomId, room);
+        });
+
+        return reply.code(404).send({
+          statusCode: 404,
+          error: 'Not Found',
+          message: `Room not found: ${roomIdString}`,
+        });
+      }
+
+      // Close all WebSocket connections
+      closeRoomConnections(room);
+
+      // Delete room from storage
+      const deleted = deleteRoom(roomId);
+      if (!deleted) {
+        // This shouldn't happen since we already checked room exists
+        return reply.code(404).send({
+          statusCode: 404,
+          error: 'Not Found',
+          message: `Room not found: ${roomIdString}`,
+        });
+      }
+
+      // Log room deletion with structured logging
+      logger.info(
+        {
+          roomId: maskId(roomId),
+        },
+        'room.deleted'
+      );
+
+      // Return 204 No Content on success
+      return reply.code(204).send();
     }
   );
 };
