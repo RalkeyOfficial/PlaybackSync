@@ -8,6 +8,7 @@ import { logger } from './utils/logger';
 import healthzPlugin from './routes/healthz';
 import metricsPlugin from './routes/metrics';
 import roomsPlugin from './routes/rooms';
+import sharePlugin from './routes/share';
 import { runCleanupTask } from './utils/room-cleanup';
 
 async function startServer() {
@@ -28,6 +29,7 @@ async function startServer() {
   await server.register(healthzPlugin);
   await server.register(metricsPlugin);
   await server.register(roomsPlugin);
+  await server.register(sharePlugin);
 
   try {
     await server.listen({ port: config.port, host: '0.0.0.0' });

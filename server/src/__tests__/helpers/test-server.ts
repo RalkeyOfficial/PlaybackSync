@@ -7,6 +7,7 @@ import pino from 'pino';
 import healthzPlugin from '../../routes/healthz';
 import metricsPlugin from '../../routes/metrics';
 import roomsPlugin from '../../routes/rooms';
+import sharePlugin from '../../routes/share';
 
 /**
  * Create a mock logger that captures log calls for testing
@@ -59,6 +60,7 @@ export async function createTestServer() {
   await server.register(healthzPlugin);
   await server.register(metricsPlugin);
   await server.register(roomsPlugin);
+  await server.register(sharePlugin);
 
   return server;
 }
@@ -82,6 +84,7 @@ export async function createTestServerWithLogger(logger: pino.Logger) {
   await server.register(healthzPlugin);
   await server.register(metricsPlugin);
   await server.register(roomsPlugin);
+  await server.register(sharePlugin);
 
   return server;
 }
