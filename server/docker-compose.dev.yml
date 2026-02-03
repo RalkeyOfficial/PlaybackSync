@@ -3,11 +3,11 @@ version: '3.8'
 name: PlaybackSync
 
 services:
-  playbacksync:
+  playbacksync-dev:
     build:
       context: .
-      dockerfile: Dockerfile
-    container_name: PlaybackSync
+      dockerfile: Dockerfile.dev
+    container_name: PlaybackSync-Dev
     environment:
       - PORT=8080
       - LOG_LEVEL=info
@@ -24,6 +24,11 @@ services:
       - SERVER_SECRET=${SERVER_SECRET:-}
     ports:
       - '8080:8080'
+    volumes:
+      - ./src:/app/src
+      - ./package.json:/app/package.json
+      - ./tsconfig.json:/app/tsconfig.json
+      - ./nodemon.json:/app/nodemon.json
     restart: unless-stopped
     healthcheck:
       test: ['CMD', 'curl', '-f', 'http://localhost:8080/healthz']

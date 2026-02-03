@@ -6,6 +6,7 @@ import Fastify from 'fastify';
 import pino from 'pino';
 import healthzPlugin from '../../routes/healthz';
 import metricsPlugin from '../../routes/metrics';
+import roomsPlugin from '../../routes/rooms';
 
 /**
  * Create a mock logger that captures log calls for testing
@@ -57,6 +58,7 @@ export async function createTestServer() {
   // Register route plugins
   await server.register(healthzPlugin);
   await server.register(metricsPlugin);
+  await server.register(roomsPlugin);
 
   return server;
 }
@@ -79,6 +81,7 @@ export async function createTestServerWithLogger(logger: pino.Logger) {
   // Register route plugins
   await server.register(healthzPlugin);
   await server.register(metricsPlugin);
+  await server.register(roomsPlugin);
 
   return server;
 }

@@ -77,6 +77,8 @@ export interface Room {
   createdAt: number;
   /** Room expiration timestamp (milliseconds) */
   expiresAt: number;
+  /** Target video URL for the room - required for sharing functionality */
+  targetUrl: string;
   /** Current playback state */
   state: PlaybackState;
   /** Content identity information */

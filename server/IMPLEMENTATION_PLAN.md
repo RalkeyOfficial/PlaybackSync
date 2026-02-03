@@ -198,8 +198,9 @@ This document outlines a step-by-step implementation plan for the PlaybackSync s
 **Tasks**:
 
 - Implement `GET /api/rooms/:roomId` endpoint
-  - Return room details (state, connected clients, recent events)
-  - Return 404 if room doesn't exist
+  - Return room details (state, connected clients, recent events, targetUrl)
+  - Return 404 if room doesn't exist or is expired
+  - This is an admin API endpoint (separate from public share endpoint)
 - Implement `DELETE /api/rooms/:roomId` endpoint
   - Close all WebSocket connections in room
   - Remove room from storage
@@ -213,12 +214,49 @@ This document outlines a step-by-step implementation plan for the PlaybackSync s
 - ✅ `DELETE /api/rooms/:roomId` removes room and closes connections
 - ✅ Expired rooms are cleaned up automatically
 - ✅ Invalid roomId returns appropriate error (400/404)
-- ✅ Room state includes all required fields
+- ✅ Room state includes all required fields including targetUrl
 
 **Acceptance Criteria**:
 
 - Complete CRUD operations for rooms via HTTP API
 - Room lifecycle management works correctly
+
+---
+
+### Step 2.5: Public Share Endpoint (Future)
+
+**Goal**: Implement public share endpoint for participants to join rooms
+
+**Tasks**:
+
+- Implement `GET /:roomId` endpoint (public, no `/api` prefix)
+  - Validate roomId format (UUID v4)
+  - Look up room by roomId
+  - Return 404 if room doesn't exist or is expired
+  - Return HTML page with password form (HTTP Basic Auth style, username field can be ignored)
+- Implement `POST /:roomId` endpoint for password submission
+  - Validate password against room's passwordHash
+  - On successful authentication, redirect to `targetUrl` with sync parameters:
+    - `?sync_url=wss://{SYNC_HOSTNAME}/{roomId}`
+    - `&sync_password={password}`
+  - Return 401/403 on invalid password
+  - Use `SYNC_HOSTNAME` environment variable for WebSocket URL construction
+- Note: This endpoint is separate from `GET /api/rooms/:roomId` admin endpoint
+- The `shareLink` returned from `POST /api/rooms` points to this endpoint
+
+**Verification**:
+
+- ✅ Share endpoint returns HTML page with password form
+- ✅ Share endpoint returns 404 for non-existent/expired rooms
+- ✅ Password form submission validates password correctly
+- ✅ Successful authentication redirects to targetUrl with sync parameters
+- ✅ Invalid password returns 401/403 error
+- ✅ Sync parameters are correctly formatted (sync_url, sync_password)
+
+**Acceptance Criteria**:
+
+- Public share endpoint functional for participant room joining
+- Share links work correctly and redirect to targetUrl with sync parameters
 
 ---
 

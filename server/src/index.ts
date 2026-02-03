@@ -7,6 +7,7 @@ import { getConfig } from './config';
 import { logger } from './utils/logger';
 import healthzPlugin from './routes/healthz';
 import metricsPlugin from './routes/metrics';
+import roomsPlugin from './routes/rooms';
 
 async function startServer() {
   const config = getConfig();
@@ -25,6 +26,7 @@ async function startServer() {
   // Register route plugins
   await server.register(healthzPlugin);
   await server.register(metricsPlugin);
+  await server.register(roomsPlugin);
 
   try {
     await server.listen({ port: config.port, host: '0.0.0.0' });
