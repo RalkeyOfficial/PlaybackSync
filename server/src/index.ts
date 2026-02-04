@@ -10,6 +10,7 @@ import metricsPlugin from './routes/metrics';
 import roomsPlugin from './routes/rooms';
 import sharePlugin from './routes/share';
 import { runCleanupTask } from './utils/room-cleanup';
+import { setupWebSocketServer } from './handlers/websocket';
 
 async function startServer() {
   const config = getConfig();
@@ -30,6 +31,9 @@ async function startServer() {
   await server.register(metricsPlugin);
   await server.register(roomsPlugin);
   await server.register(sharePlugin);
+
+  // Set up WebSocket server
+  setupWebSocketServer(server);
 
   try {
     await server.listen({ port: config.port, host: '0.0.0.0' });

@@ -10,6 +10,7 @@ import { hashPassword } from '../utils/password';
 import { createRoom, listActiveRooms, getRoom, deleteRoom, isRoomExpired } from '../storage/rooms';
 import { toRoomId, isValidUuid } from '../types/ids';
 import { closeRoomConnections, cleanupExpiredRoom } from '../utils/room-cleanup';
+import { closeConnectionsForRoom } from '../handlers/websocket';
 
 /**
  * Generate a random alphanumeric password
@@ -441,6 +442,9 @@ const roomsPlugin: FastifyPluginAsync = async fastify => {
       }
 
       // Close all WebSocket connections
+      // First close connections tracked by WebSocket handler (includes connections that haven't completed JOIN)
+      closeConnectionsForRoom(roomId);
+      // Then close connections tracked in room.connectedClients (for connections that completed JOIN)
       closeRoomConnections(room);
 
       // Delete room from storage

@@ -26,6 +26,8 @@ export interface Config {
   clientTombstoneMs: number;
   /** Maximum number of explicit events (play/pause/seek) allowed per second per connection (default: 10) */
   rateLimitEventsPerSec: number;
+  /** Connection timeout in milliseconds - connections must send JOIN within this time (default: 5000 = 5s) */
+  joinTimeoutMs: number;
   /** Hostname for share links (used in room creation responses) - optional */
   shareHostname?: string;
   /** WebSocket hostname (used for client connection parameters) - optional */
@@ -54,6 +56,7 @@ export function getConfig(): Config {
     cooldownWindowMs: parseInt(process.env.COOLDOWN_WINDOW_MS || '3000', 10),
     clientTombstoneMs: parseInt(process.env.CLIENT_TOMBSTONE_MS || '30000', 10),
     rateLimitEventsPerSec: parseInt(process.env.RATE_LIMIT_EVENTS_PER_SEC || '10', 10),
+    joinTimeoutMs: parseInt(process.env.JOIN_TIMEOUT_MS || '5000', 10),
     shareHostname: process.env.SHARE_HOSTNAME,
     syncHostname: process.env.SYNC_HOSTNAME,
     serverSecret,

@@ -1,0 +1,41 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "title": "STATE Message Schema",
+  "description": "Schema for STATE message sent by server as authoritative playback state broadcast",
+  "required": ["type", "paused", "time", "server_ts", "eventId"],
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "STATE"
+    },
+    "paused": {
+      "type": "boolean",
+      "description": "Whether playback is paused"
+    },
+    "time": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Current playback time (seconds)"
+    },
+    "provider": {
+      "type": "string",
+      "description": "Provider identifier (optional)"
+    },
+    "episode": {
+      "type": "number",
+      "description": "Episode number or identifier (optional)"
+    },
+    "server_ts": {
+      "type": "number",
+      "description": "Server timestamp (monotonic or epoch ms)"
+    },
+    "eventId": {
+      "type": "number",
+      "integer": true,
+      "minimum": 0,
+      "description": "Event ID for ordering"
+    }
+  },
+  "additionalProperties": false
+}

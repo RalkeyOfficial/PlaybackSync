@@ -1,0 +1,38 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "title": "COMMAND Message Schema",
+  "description": "Schema for COMMAND message sent by server as server-initiated action",
+  "required": ["type", "cmd"],
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "COMMAND"
+    },
+    "cmd": {
+      "type": "string",
+      "enum": ["seek", "play", "pause"],
+      "description": "Command type"
+    },
+    "value": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Optional value (required for seek commands, in seconds)"
+    },
+    "server_ts": {
+      "type": "number",
+      "description": "Server timestamp (optional)"
+    }
+  },
+  "additionalProperties": false,
+  "if": {
+    "properties": {
+      "cmd": {
+        "const": "seek"
+      }
+    }
+  },
+  "then": {
+    "required": ["value"]
+  }
+}
