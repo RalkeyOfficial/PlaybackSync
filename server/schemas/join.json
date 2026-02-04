@@ -2,17 +2,12 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "type": "object",
   "title": "JOIN Message Schema",
-  "description": "Schema for JOIN message sent by clients to join a room",
-  "required": ["type", "roomId", "password", "clientId"],
+  "description": "Schema for JOIN message sent by clients to join a room. roomId is extracted from the WebSocket URL path (/:roomId). clientId is generated server-side and returned in ROOM_STATE.",
+  "required": ["type", "password"],
   "properties": {
     "type": {
       "type": "string",
       "const": "JOIN"
-    },
-    "roomId": {
-      "type": "string",
-      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
-      "description": "Room identifier (UUID v4)"
     },
     "password": {
       "type": "string",
@@ -22,7 +17,7 @@
     "clientId": {
       "type": "string",
       "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
-      "description": "Client identifier (UUID v4)"
+      "description": "Optional: Previous client identifier for reconnection (received from previous ROOM_STATE)"
     },
     "lastKnownTime": {
       "type": "number",

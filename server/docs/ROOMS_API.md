@@ -719,7 +719,7 @@ The share endpoint is designed to work with browser extensions that:
 2. Extract these parameters from the URL
 3. Strip them from the URL (to keep URLs clean)
 4. Connect to the WebSocket server using the extracted credentials
-5. Send a `JOIN` message with `roomId` and `password` to authenticate
+5. Send a `JOIN` message with `password` to authenticate (roomId is extracted from the WebSocket URL path)
 
 #### Notes
 

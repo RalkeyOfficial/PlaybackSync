@@ -20,11 +20,14 @@ The WebSocket server is integrated with Fastify using the `ws` library:
 
 ### Connection Lifecycle
 
-1. **Connection Establishment**: Client initiates WebSocket connection via HTTP upgrade
-2. **JOIN Timeout**: Connection must send a `JOIN` message within the configured timeout (default: 5 seconds)
-3. **Authentication**: `JOIN` message is validated and authenticated (room ID and password)
-4. **Active State**: Connection is active and can send/receive messages
-5. **Disconnection**: Connection is closed (client disconnect, timeout, error, or room deletion)
+1. **Connection Establishment**: Client initiates WebSocket connection via HTTP upgrade to `wss://host/{roomId}`
+2. **Room ID Extraction**: Server extracts `roomId` from the WebSocket URL path
+3. **JOIN Timeout**: Connection must send a `JOIN` message within the configured timeout (default: 5 seconds)
+4. **Authentication**: `JOIN` message is validated and authenticated (password verification)
+5. **Client ID Generation**: Server generates a unique `clientId` for the client (or reattaches if reconnection)
+6. **State Sync**: Server sends `ROOM_STATE` message with current room state and assigned `clientId`
+7. **Active State**: Connection is active and can send/receive messages
+8. **Disconnection**: Connection is closed (client disconnect, timeout, error, or room deletion)
 
 ## Connection Handling
 
@@ -38,9 +41,11 @@ handleConnection(ws: ExtendedWebSocket, req: { url?: string })
 
 The handler performs the following:
 
-1. **Logs connection**: Structured log entry with request URL
-2. **Sets JOIN timeout**: Timer that closes connection if no `JOIN` message received
-3. **Registers event handlers**: Sets up handlers for `message`, `close`, and `error` events
+1. **Extracts roomId**: Parses `roomId` from the WebSocket URL path (`/{roomId}`)
+2. **Validates roomId**: Ensures `roomId` is a valid UUID v4 format
+3. **Logs connection**: Structured log entry with request URL and roomId
+4. **Sets JOIN timeout**: Timer that closes connection if no `JOIN` message received
+5. **Registers event handlers**: Sets up handlers for `message`, `close`, and `error` events
 
 ### Extended WebSocket Interface
 

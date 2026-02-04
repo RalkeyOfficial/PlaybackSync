@@ -24,6 +24,12 @@ Messages are categorized by direction:
 
 Sent when a client wants to join a room. This is the first message that must be sent after establishing a WebSocket connection.
 
+**Important Notes**:
+
+- `roomId` is **not** included in the JOIN message - it is extracted from the WebSocket URL path (`wss://host/{roomId}`)
+- `clientId` is **generated server-side** and returned in the `ROOM_STATE` response
+- `clientId` can be optionally provided for reconnection scenarios (to reattach to a previous session)
+
 **Schema**: `schemas/join.json`
 
 **TypeScript Interface**:
@@ -31,9 +37,8 @@ Sent when a client wants to join a room. This is the first message that must be 
 ```typescript
 interface JoinMessage {
   type: 'JOIN';
-  roomId: string; // UUID v4 format
   password: string; // Room password (plaintext)
-  clientId: string; // UUID v4 format
+  clientId?: string; // Optional: Previous client identifier for reconnection (UUID v4 format)
   lastKnownTime?: number; // Optional: Last known playback time (seconds)
 }
 ```
@@ -41,34 +46,41 @@ interface JoinMessage {
 **Required Fields**:
 
 - `type`: Must be `"JOIN"`
-- `roomId`: Room identifier (UUID v4 format)
 - `password`: Room password (plaintext, validated against hash)
-- `clientId`: Client identifier (UUID v4 format)
 
 **Optional Fields**:
 
+- `clientId`: Previous client identifier for reconnection (received from previous `ROOM_STATE`). If provided, must match UUID v4 pattern
 - `lastKnownTime`: Last known playback time in seconds (for drift detection)
 
 **Validation Rules**:
 
-- `roomId` must match UUID v4 pattern: `^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`
-- `clientId` must match UUID v4 pattern
 - `password` must be non-empty string
+- `clientId` must match UUID v4 pattern if provided: `^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`
 - `lastKnownTime` must be >= 0 if provided
 
-**Example**:
+**Example (First Connection)**:
 
 ```json
 {
   "type": "JOIN",
-  "roomId": "123e4567-e89b-12d3-a456-426614174000",
+  "password": "test-password-123",
+  "lastKnownTime": 12.345
+}
+```
+
+**Example (Reconnection)**:
+
+```json
+{
+  "type": "JOIN",
   "password": "test-password-123",
   "clientId": "123e4567-e89b-12d3-a456-426614174001",
   "lastKnownTime": 12.345
 }
 ```
 
-**Response**: Server sends `ROOM_STATE` or `ERROR` message
+**Response**: Server sends `ROOM_STATE` (with server-generated `clientId`) or `ERROR` message
 
 ---
 
@@ -299,13 +311,14 @@ interface StateMessage {
 
 ### ROOM_STATE
 
-Sent to clients on JOIN/REJOIN with full room state.
+Sent to clients on JOIN/REJOIN with full room state. Includes the server-generated `clientId` that clients should use for reconnection.
 
 **TypeScript Interface**:
 
 ```typescript
 interface RoomStateMessage {
   type: 'ROOM_STATE';
+  clientId: string; // Server-generated client identifier (UUID v4) - use for reconnection
   paused: boolean;
   time: number;
   episodeId?: string | number;
@@ -319,6 +332,7 @@ interface RoomStateMessage {
 **Required Fields**:
 
 - `type`: Must be `"ROOM_STATE"`
+- `clientId`: Server-generated client identifier (UUID v4 format). Clients should store this and include it in subsequent JOIN messages for reconnection
 - `paused`: Playback state (boolean)
 - `time`: Current playback time (seconds)
 - `lastEventId`: Last event ID (integer)
@@ -335,6 +349,7 @@ interface RoomStateMessage {
 ```json
 {
   "type": "ROOM_STATE",
+  "clientId": "123e4567-e89b-12d3-a456-426614174001",
   "paused": false,
   "time": 123.456,
   "episodeId": 5,
@@ -344,6 +359,8 @@ interface RoomStateMessage {
   "serverTime": 1670000000000
 }
 ```
+
+**Reconnection**: To reconnect with the same client identity, include the `clientId` from a previous `ROOM_STATE` in your `JOIN` message. This allows the server to reattach your connection if you disconnect and reconnect within the tombstone window (default: 30 seconds).
 
 ---
 

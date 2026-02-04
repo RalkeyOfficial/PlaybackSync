@@ -12,6 +12,15 @@ alwaysApply: false
 - Reject invalid messages immediately with `ERROR` response
 - Never trust client timestamps - use server `server_ts` for authoritative state
 
+## Error Messages to Clients
+
+- **Never mention "expired" in error messages sent to clients**
+- Rooms either exist or they don't exist from the user's perspective
+- Use "Room not found" instead of "Room expired" or "Room not found or expired"
+- Server-side logs can mention expiration for debugging, but client-facing messages must not
+- Example: `sendError(ws, 'ROOM_NOT_FOUND', 'Room not found')` ✅
+- Example: `sendError(ws, 'ROOM_NOT_FOUND', 'Room expired')` ❌
+
 ## Message Flow
 
 ```typescript

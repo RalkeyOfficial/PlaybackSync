@@ -1,4 +1,4 @@
-import type { RoomId, ClientId } from './ids';
+import type { ClientId } from './ids';
 
 /**
  * Base message interface with common fields
@@ -11,15 +11,15 @@ interface BaseMessage {
 /**
  * JOIN message - Client → Server
  * Sent when a client wants to join a room
+ * roomId is extracted from the WebSocket URL path (`/:roomId`)
+ * clientId is generated server-side (or provided for reconnection)
  */
 export interface JoinMessage extends BaseMessage {
   type: 'JOIN';
-  /** Room identifier */
-  roomId: RoomId | string;
   /** Room password (plaintext, will be hashed server-side) */
   password: string;
-  /** Client identifier (UUID v4) */
-  clientId: ClientId | string;
+  /** Optional: Previous client identifier for reconnection (received from previous ROOM_STATE) */
+  clientId?: ClientId | string;
   /** Last known playback time from client (seconds) */
   lastKnownTime?: number;
 }
@@ -92,6 +92,8 @@ export interface StateMessage extends BaseMessage {
  */
 export interface RoomStateMessage extends BaseMessage {
   type: 'ROOM_STATE';
+  /** Client identifier assigned by server (UUID v4) - use this for reconnection */
+  clientId: ClientId | string;
   /** Playback state */
   paused: boolean;
   /** Current playback time (seconds) */

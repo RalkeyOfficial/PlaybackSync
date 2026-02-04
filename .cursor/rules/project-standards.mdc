@@ -26,6 +26,9 @@ alwaysApply: true
 - Send `ERROR` messages to clients for recoverable issues
 - Log errors with structured context: `logger.error('event', { roomId, clientId, error })`
 - Never expose internal errors to clients - use friendly error codes
+- **Never mention "expired" in error messages sent to clients** - rooms either exist or they don't exist from the user's perspective
+  - Use "Room not found" instead of "Room expired" or "Room not found or expired"
+  - Server-side logs can mention expiration for debugging, but client-facing messages must not
 
 ## State Management
 
