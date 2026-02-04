@@ -365,6 +365,12 @@ This document outlines a step-by-step implementation plan for the PlaybackSync s
 
 **Goal**: Implement explicit control event processing
 
+EVENT messages are intent, not authoritative state.
+STATE messages are always authoritative, even for the originating client.
+
+Clients must not suppress or ignore STATE messages they “caused”.
+Client-side reconciliation must be idempotent (no double-apply).
+
 **Tasks**:
 
 - Implement EVENT message handler
@@ -378,6 +384,12 @@ This document outlines a step-by-step implementation plan for the PlaybackSync s
 - Handle play, pause, and seek event types
 - Implement rate limiting (token bucket or rate-limiter-flexible)
 - Add rate limit error responses
+
+**Authoritative State Rules**
+
+- Server derives authoritative time
+- Client-reported time is input, not truth
+- Server timestamps and eventId govern ordering
 
 **Verification**:
 
@@ -413,6 +425,12 @@ This document outlines a step-by-step implementation plan for the PlaybackSync s
 - Send CONTENT_MISMATCH advisory when needed
 - Update room state with episode metadata
 
+**semantics clarification**
+
+- Episode changes are hard resets
+- All previous playback state is invalidated
+- Drift logic is explicitly reset / suppressed
+
 **Verification**:
 
 - ✅ Episode change request updates room state
@@ -432,6 +450,10 @@ This document outlines a step-by-step implementation plan for the PlaybackSync s
 ### Step 4.3: State Broadcasting and Message Routing
 
 **Goal**: Implement robust message routing and broadcasting
+
+Explicit ordering guarantees using eventId.
+Client rule: ignore STATE with lower eventId.
+Server rule: serialize state updates per room.
 
 **Tasks**:
 
@@ -480,6 +502,13 @@ This document outlines a step-by-step implementation plan for the PlaybackSync s
   - If any client exceeds DRIFT_THRESHOLD_MS, broadcast STATE with expected_time
 - Handle TIME_REPORT messages from clients
 - Add metrics for reconciliation runs
+
+**Non-Interference Rules**
+
+- Drift reconciliation must never:
+  - Trigger after explicit play/pause/seek
+  - Change paused state
+  - Override user intent
 
 **Verification**:
 
