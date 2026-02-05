@@ -108,8 +108,8 @@ export function listActiveRooms(): Array<{
   }> = [];
 
   for (const [roomId, room] of rooms.entries()) {
-    // Filter expired rooms
-    if (room.expiresAt >= now) {
+    // Filter expired rooms (do not include rooms where the expired timestamp is equal to now)
+    if (room.expiresAt > now) {
       activeRooms.push({
         id: roomId,
         createdAt: room.createdAt,

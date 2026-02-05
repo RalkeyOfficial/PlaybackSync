@@ -2,7 +2,7 @@
  * Configuration module for environment variables
  */
 
-export type LogLevel = 'error' | 'warn' | 'info' | 'debug';
+export type LogLevel = 'error' | 'warn' | 'info' | 'debug' | 'silent';
 export type NodeEnv = 'development' | 'production';
 
 export interface Config {

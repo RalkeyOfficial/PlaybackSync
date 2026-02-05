@@ -8,7 +8,7 @@
 export const TEST_CONFIG = {
   SERVER_SECRET: 'test-secret-key-for-testing-only',
   PORT: '8080',
-  LOG_LEVEL: 'info',
+  LOG_LEVEL: 'silent',
   NODE_ENV: 'test',
 } as const;
 
