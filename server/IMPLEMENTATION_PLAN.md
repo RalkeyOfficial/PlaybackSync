@@ -467,6 +467,30 @@ Server rule: serialize state updates per room.
 - Create broadcast utility (handle closed connections gracefully)
 - Add message queuing for slow clients (optional)
 
+**eventId Increment Rules**
+
+- `eventId` is incremented only when processing an explicit control event:
+  - PLAY
+  - PAUSE
+  - SEEK
+  - EPISODE_CHANGE
+- The following actions MUST NOT increment eventId:
+  - JOIN reconciliation
+  - Drift reconciliation
+  - TIME_REPORT handling
+  - Server-initiated corrective STATE messages
+- Corrective STATE messages sent during reconciliation MUST reuse the current lastEventId.
+- Clients MUST treat STATE messages with the same eventId as authoritative updates, not duplicates.
+
+**Server Time Source**
+
+- All server timestamps (serverTime, lastServerUpdateTs) MUST be derived from a monotonic time source.
+- Wall-clock time MUST NOT be used for:
+  - drift calculation
+  - ordering
+  - reconciliation decisions
+- Server timestamps are for protocol correctness only and MUST NOT be exposed for UI display.
+
 **Verification**:
 
 - ✅ STATE messages include all required fields
@@ -503,12 +527,35 @@ Server rule: serialize state updates per room.
 - Handle TIME_REPORT messages from clients
 - Add metrics for reconciliation runs
 
+**TIME_REPORT Acceptance Rules**
+
+- Clients MAY send TIME_REPORT only after:
+  - successful JOIN
+  - receipt of at least one authoritative STATE
+- Server MUST ignore TIME_REPORT messages:
+  - received before JOIN completion
+  - received during JOIN reconciliation window
+  - received during COOLDOWN_WINDOW_MS after a corrective seek
+- Server MUST NOT update authoritative room state directly from TIME_REPORT data.
+- TIME_REPORT data may be used only for:
+  - drift detection
+  - per-client correction decisions
+
 **Non-Interference Rules**
 
 - Drift reconciliation must never:
   - Trigger after explicit play/pause/seek
   - Change paused state
   - Override user intent
+
+**note**
+
+- Drift reconciliation MUST NOT run:
+  - before first JOIN reconciliation completes
+  - on clients that have not yet sent TIME_REPORT at least once
+
+JOIN reconciliation is considered a “soft correction”.
+Drift reconciliation is considered a “maintenance correction”.
 
 **Verification**:
 
