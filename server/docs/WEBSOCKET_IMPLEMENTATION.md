@@ -167,6 +167,7 @@ ws.on('message', (data: Buffer) => {
 
 - `JOIN` messages are handled by `handleJoinMessage()`
 - `EVENT` messages are handled by `handleEventMessage()`
+- `EPISODE_CHANGE_REQUEST` messages are handled by `handleEpisodeChangeRequest()`
 - Other message types are logged and will be handled in future phases
 
 **Error Handling**:
@@ -469,12 +470,136 @@ const config = getConfig();
 - **JSON Parsing**: Native `JSON.parse()` for message parsing
 - **Async Processing**: Non-blocking event handlers
 
+## EPISODE_CHANGE_REQUEST Message Handling
+
+### Overview
+
+The `EPISODE_CHANGE_REQUEST` message handler processes episode change requests from clients. Episode changes are treated as **hard resets** that invalidate all previous playback state. The server updates room content identity, resets playback state, and broadcasts authoritative `EPISODE_CHANGE` messages to all clients.
+
+### Handler Function
+
+```typescript
+handleEpisodeChangeRequest(ws: ExtendedWebSocket, message: unknown, roomId: RoomId, connectionsByRoom: ConnectionsByRoom)
+```
+
+### Processing Flow
+
+1. **Authentication Check**: Verifies client has completed JOIN (has `clientId`)
+2. **Message Validation**: Validates EPISODE_CHANGE_REQUEST message against JSON Schema
+3. **Room Validation**: Ensures room exists and is not expired
+4. **Derived Content Key Computation**: Computes `derivedContentKey` from URL + provider + episode using SHA-256 hash
+5. **State Reset**: Resets playback state (hard reset):
+   - `paused = true`
+   - `time = 0`
+6. **Event ID Increment**: Increments `eventId` for ordering
+7. **Timestamp Updates**: Updates `last_explicit_event_ts` and `last_state_update_ts`
+8. **Content Identity Update**: Updates `room.contentIdentity` with new episode metadata:
+   - `episodeId`: Episode ID or number
+   - `providerId`: Provider identifier
+   - `derivedContentKey`: Computed hash
+   - `pageUrl`: Normalized page URL
+9. **Legacy State Update**: Updates `room.state.provider` and `room.state.episode` for backward compatibility
+10. **Event Logging**: Appends episode change event to room's event log
+11. **Broadcasting**: Broadcasts `EPISODE_CHANGE` message to all connected clients
+12. **State Broadcasting**: Also broadcasts `STATE` message to ensure all clients have updated playback state
+13. **Logging**: Logs episode change processing with structured logging
+
+### Derived Content Key Computation
+
+The `derivedContentKey` is computed using SHA-256 hash:
+
+```typescript
+function computeDerivedContentKey(pageUrl: string, providerId: string, episodeId: string | number): string
+```
+
+**Computation Process**:
+
+1. **URL Normalization**: Extracts pathname from URL (removes query params and hash)
+2. **Key String Construction**: Creates string: `${providerId}:${normalizedUrl}:${episodeId}`
+3. **Hash Computation**: Computes SHA-256 hash of the key string
+4. **Error Handling**: Falls back to full URL if URL parsing fails
+
+**Purpose**:
+
+- Prevents silent desync when clients think they're watching the same content but aren't
+- Allows lightweight validation without hard-coding provider-specific schemas
+- Provides opaque content identity that clients can compare for equality
+
+### State Reset Semantics
+
+Episode changes are **hard resets**:
+
+- **Playback State**: Always reset to `paused = true`, `time = 0`
+- **Previous State Invalidated**: All previous playback state is invalidated
+- **Drift Logic Suppressed**: Drift reconciliation logic is explicitly reset/suppressed
+- **Event ID Incremented**: New event ID ensures proper ordering
+
+**Important**: Episode changes reset playback state even if the room was already paused at time 0. This ensures all clients start from a clean state when an episode changes.
+
+### Content Identity Update
+
+When processing an episode change:
+
+1. **Content Identity Object**: Creates/updates `room.contentIdentity` with:
+   - `episodeId`: From request (string or number)
+   - `providerId`: From request
+   - `derivedContentKey`: Computed hash
+   - `pageUrl`: From request
+
+2. **Legacy State Fields**: Updates `room.state.provider` and `room.state.episode` for backward compatibility with older clients
+
+3. **ROOM_STATE Inclusion**: Content identity is included in `ROOM_STATE` messages sent to clients on JOIN
+
+### Episode Change Broadcasting
+
+After processing an episode change, the server broadcasts:
+
+1. **EPISODE_CHANGE Message**: Contains:
+   - `eventId`: Updated event ID for ordering
+   - `episodeId`: New episode ID
+   - `providerId`: Provider identifier
+   - `derivedContentKey`: Computed content key
+   - `serverTime`: Server timestamp
+
+2. **STATE Message**: Also broadcasts `STATE` message to ensure all clients have updated playback state (`paused = true`, `time = 0`)
+
+**Broadcasting Behavior**:
+
+- **All Clients**: All connected clients receive both messages, including the sender
+- **Closed Connections**: Gracefully handles closed connections (no errors thrown)
+- **Event Ordering**: Both messages include the same `eventId` for ordering
+
+### Error Responses
+
+The EPISODE_CHANGE_REQUEST handler can send the following error responses:
+
+- `NOT_AUTHENTICATED`: EPISODE_CHANGE_REQUEST received before JOIN message
+- `INVALID_MESSAGE`: Message validation failed (schema errors)
+- `ROOM_NOT_FOUND`: Room doesn't exist or is expired
+
+### Multiple Episode Changes
+
+The handler correctly processes multiple consecutive episode changes:
+
+- Each change increments `eventId` sequentially
+- Each change resets playback state
+- Each change updates content identity
+- Each change broadcasts to all clients
+
+### Related Functions
+
+- `computeDerivedContentKey()`: Computes SHA-256 hash from URL + provider + episode
+- `broadcastEpisodeChange()`: Broadcasts EPISODE_CHANGE message to all clients
+- `broadcastState()`: Broadcasts STATE message to all clients
+- `addEventToLog()`: Adds event to room's event log
+
 ## Testing
 
 Unit tests for WebSocket implementation are located in:
 
 - `src/__tests__/websocket/server-setup.test.ts` - Connection handling and JOIN message tests
 - `src/__tests__/websocket/event-handler.test.ts` - EVENT message handling tests
+- `src/__tests__/websocket/episode-change-handler.test.ts` - EPISODE_CHANGE_REQUEST message handling tests
 
 Tests cover:
 
@@ -488,6 +613,11 @@ Tests cover:
 - Rate limiting behavior
 - State updates and broadcasting
 - Event logging
+- Episode change request processing
+- Derived content key computation
+- Episode change broadcasting
+- Content identity updates
+- State reset semantics
 
 ## Related Documentation
 

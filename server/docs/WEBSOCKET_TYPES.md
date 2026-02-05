@@ -157,7 +157,7 @@ Seek event:
 
 ### EPISODE_CHANGE_REQUEST
 
-Sent by clients to request changing the episode being watched.
+Sent by clients to request changing the episode being watched. Episode changes are treated as **hard resets** that invalidate all previous playback state.
 
 **Schema**: `schemas/episode-change-request.json`
 
@@ -200,7 +200,36 @@ interface EpisodeChangeRequestMessage {
 }
 ```
 
-**Response**: Server broadcasts `EPISODE_CHANGE` message to all clients
+**Example with String Episode ID**:
+
+```json
+{
+  "type": "EPISODE_CHANGE_REQUEST",
+  "episodeId": "episode-5",
+  "providerId": "netflix",
+  "pageUrl": "https://netflix.com/watch/12345",
+  "client_ts": 1670000000000
+}
+```
+
+**Server Processing**:
+
+1. Validates message schema
+2. Verifies client is authenticated (must have completed JOIN)
+3. Computes `derivedContentKey` from URL + provider + episode (SHA-256 hash)
+4. Increments `eventId` for ordering
+5. Resets playback state: `paused = true`, `time = 0`
+6. Updates room content identity with new episode metadata
+7. Broadcasts `EPISODE_CHANGE` message to all clients
+8. Broadcasts `STATE` message to ensure all clients have updated playback state
+
+**Response**: Server broadcasts `EPISODE_CHANGE` message to all clients, followed by a `STATE` message
+
+**Error Responses**:
+
+- `NOT_AUTHENTICATED`: Message received before JOIN authentication
+- `INVALID_MESSAGE`: Message validation failed (schema errors)
+- `ROOM_NOT_FOUND`: Room doesn't exist or is expired
 
 ---
 
@@ -427,7 +456,7 @@ Seek command:
 
 ### EPISODE_CHANGE
 
-Authoritative episode change broadcast sent to all clients.
+Authoritative episode change broadcast sent to all clients in a room. This message is sent after processing an `EPISODE_CHANGE_REQUEST` and indicates that the room's content identity has changed.
 
 **TypeScript Interface**:
 
@@ -445,11 +474,23 @@ interface EpisodeChangeMessage {
 **Required Fields**:
 
 - `type`: Must be `"EPISODE_CHANGE"`
-- `eventId`: Event ID for ordering (integer)
-- `episodeId`: Episode ID (string or number)
-- `providerId`: Provider identifier
-- `derivedContentKey`: Derived content key
-- `server_ts`: Server timestamp (monotonic or epoch ms)
+- `eventId`: Event ID for ordering (integer) - matches the updated room state eventId
+- `episodeId`: Episode ID (string or number) - the new episode being watched
+- `providerId`: Provider identifier - the streaming provider
+- `derivedContentKey`: Derived content key - SHA-256 hash computed from URL + provider + episode
+- `server_ts`: Server timestamp (monotonic or epoch ms) - when the episode change was processed
+
+**Derived Content Key**:
+
+The `derivedContentKey` is computed server-side using SHA-256 hash of the format:
+```
+SHA256(providerId:normalizedUrl:episodeId)
+```
+
+Where:
+- `providerId`: Provider identifier from the request
+- `normalizedUrl`: URL pathname (query params and hash removed)
+- `episodeId`: Episode ID from the request
 
 **Example**:
 
@@ -459,10 +500,38 @@ interface EpisodeChangeMessage {
   "eventId": 43,
   "episodeId": 6,
   "providerId": "netflix",
-  "derivedContentKey": "netflix:12345:ep6",
+  "derivedContentKey": "37d23e8195997b2fc5fd295840776e6ac6baae6f015c3f025c5d136ae6c28186",
   "server_ts": 1670000001000
 }
 ```
+
+**Example with String Episode ID**:
+
+```json
+{
+  "type": "EPISODE_CHANGE",
+  "eventId": 44,
+  "episodeId": "episode-7",
+  "providerId": "hulu",
+  "derivedContentKey": "a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0u1v2w3x4y5z6a7b8c9d0e1f2",
+  "server_ts": 1670000002000
+}
+```
+
+**When Sent**:
+
+- After processing an `EPISODE_CHANGE_REQUEST` message
+- Broadcast to all connected clients in the room (including the sender)
+- Always followed by a `STATE` message with updated playback state (`paused = true`, `time = 0`)
+
+**Client Behavior**:
+
+Clients should:
+1. Compare `derivedContentKey` with their local derivation
+2. If match: Load episode if not already loaded, seek to 0, pause
+3. If mismatch: Enter "out-of-sync content" state, surface UI warning, refuse to apply play/seek events
+
+**Important**: Episode changes reset playback state. All clients should pause and seek to 0 when receiving this message.
 
 ---
 
