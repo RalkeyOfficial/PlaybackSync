@@ -1,5 +1,5 @@
 /**
- * Unit tests for JSON Schema Validation Setup (Step 3.2)
+ * Unit tests for JSON Schema Validation Setup
  *
  * Tests verify:
  * - All message schemas defined and valid
@@ -18,7 +18,7 @@ import {
   type MessageSchemaType,
 } from '../../utils/validation';
 
-describe('JSON Schema Validation Setup (Step 3.2)', () => {
+describe('JSON Schema Validation Setup', () => {
   beforeEach(() => {
     setupTestEnv();
   });
@@ -29,7 +29,7 @@ describe('JSON Schema Validation Setup (Step 3.2)', () => {
 
   describe('Schema Loading and Initialization', () => {
     it('should load all required message schemas', () => {
-      // This test verifies that all schemas from Step 3.2 are available:
+      // This test verifies that all schemas are available:
       // - JOIN schema
       // - EVENT schema
       // - EPISODE_CHANGE_REQUEST schema
@@ -71,7 +71,6 @@ describe('JSON Schema Validation Setup (Step 3.2)', () => {
   describe('JOIN Message Validation', () => {
     const validJoinMessage = {
       type: 'JOIN',
-      roomId: '123e4567-e89b-12d3-a456-426614174000',
       password: 'test-password-123',
       clientId: '123e4567-e89b-12d3-a456-426614174001',
       lastKnownTime: 12.345,
@@ -86,7 +85,6 @@ describe('JSON Schema Validation Setup (Step 3.2)', () => {
     it('should validate JOIN message with optional lastKnownTime', () => {
       const joinWithoutTime = {
         type: 'JOIN',
-        roomId: '123e4567-e89b-12d3-a456-426614174000',
         password: 'test-password',
         clientId: '123e4567-e89b-12d3-a456-426614174001',
       };
@@ -95,9 +93,10 @@ describe('JSON Schema Validation Setup (Step 3.2)', () => {
       expect(result.valid).toBe(true);
     });
 
-    it('should reject JOIN message missing required field: roomId', () => {
+    it('should reject JOIN message with additional property: roomId', () => {
       const invalidJoin = {
         type: 'JOIN',
+        roomId: '123e4567-e89b-12d3-a456-426614174000',
         password: 'test-password',
         clientId: '123e4567-e89b-12d3-a456-426614174001',
       };
@@ -108,14 +107,13 @@ describe('JSON Schema Validation Setup (Step 3.2)', () => {
       expect(result.errors).not.toBeNull();
       if (result.errors) {
         const errorMessages = result.errors.map(e => e.message || '').join(' ');
-        expect(errorMessages).toMatch(/roomId/i);
+        expect(errorMessages).toMatch(/additional properties|must NOT/i);
       }
     });
 
     it('should reject JOIN message missing required field: password', () => {
       const invalidJoin = {
         type: 'JOIN',
-        roomId: '123e4567-e89b-12d3-a456-426614174000',
         clientId: '123e4567-e89b-12d3-a456-426614174001',
       };
 
@@ -128,7 +126,7 @@ describe('JSON Schema Validation Setup (Step 3.2)', () => {
       }
     });
 
-    it('should reject JOIN message with invalid UUID format for roomId', () => {
+    it('should reject JOIN message with additional property: roomId (invalid format)', () => {
       const invalidJoin = {
         type: 'JOIN',
         roomId: 'not-a-uuid',
@@ -141,14 +139,13 @@ describe('JSON Schema Validation Setup (Step 3.2)', () => {
       expect(result.errors).not.toBeNull();
       if (result.errors) {
         const errorMessages = result.errors.map(e => e.message || '').join(' ');
-        expect(errorMessages).toMatch(/roomId|pattern/i);
+        expect(errorMessages).toMatch(/additional properties|must NOT/i);
       }
     });
 
     it('should reject JOIN message with invalid UUID format for clientId', () => {
       const invalidJoin = {
         type: 'JOIN',
-        roomId: '123e4567-e89b-12d3-a456-426614174000',
         password: 'test-password',
         clientId: 'invalid-client-id',
       };
@@ -165,7 +162,6 @@ describe('JSON Schema Validation Setup (Step 3.2)', () => {
     it('should reject JOIN message with invalid type', () => {
       const invalidJoin = {
         type: 'INVALID_TYPE',
-        roomId: '123e4567-e89b-12d3-a456-426614174000',
         password: 'test-password',
         clientId: '123e4567-e89b-12d3-a456-426614174001',
       };
@@ -705,7 +701,7 @@ describe('JSON Schema Validation Setup (Step 3.2)', () => {
         const formattedError = formatValidationError(result.errors);
         expect(formattedError).toBeDefined();
         expect(typeof formattedError).toBe('string');
-        expect(formattedError).toMatch(/roomId/i); // Should mention missing field
+        expect(formattedError).toMatch(/password/i); // Should mention missing required field
       }
     });
 

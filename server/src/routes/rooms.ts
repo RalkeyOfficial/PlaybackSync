@@ -7,10 +7,11 @@ import crypto from 'crypto';
 import { getConfig } from '../config';
 import { logger, maskId } from '../utils/logger';
 import { hashPassword } from '../utils/password';
-import { createRoom, listActiveRooms, getRoom, deleteRoom, isRoomExpired } from '../storage/rooms';
-import { toRoomId, isValidUuid } from '../types/ids';
-import { closeRoomConnections, cleanupExpiredRoom } from '../utils/room-cleanup';
+import { createRoom, listActiveRooms, deleteRoom } from '../storage/rooms';
+import { toRoomId } from '../types/ids';
+import { closeRoomConnections } from '../utils/room-cleanup';
 import { closeConnectionsForRoom } from '../handlers/websocket';
+import { roomValidationPreHandler } from '../utils/room-validation';
 
 /**
  * Generate a random alphanumeric password
@@ -304,54 +305,11 @@ const roomsPlugin: FastifyPluginAsync = async fastify => {
           200: getRoomDetailsResponseSchema,
         },
       },
+      preHandler: roomValidationPreHandler,
     },
     async (request, reply) => {
-      const { roomId: roomIdString } = request.params;
-
-      // Validate UUID format
-      if (!isValidUuid(roomIdString)) {
-        return reply.code(400).send({
-          statusCode: 400,
-          error: 'Bad Request',
-          message: `Invalid UUID format for roomId: ${roomIdString}`,
-        });
-      }
-
-      // Convert to RoomId type
-      let roomId;
-      try {
-        roomId = toRoomId(roomIdString);
-      } catch (error) {
-        return reply.code(400).send({
-          statusCode: 400,
-          error: 'Bad Request',
-          message: `Invalid UUID format for roomId: ${roomIdString}`,
-        });
-      }
-
-      // Get room from storage
-      const room = getRoom(roomId);
-      if (!room) {
-        return reply.code(404).send({
-          statusCode: 404,
-          error: 'Not Found',
-          message: `Room not found: ${roomIdString}`,
-        });
-      }
-
-      // Check if room is expired - clean up in background and return 404
-      if (isRoomExpired(room)) {
-        // Clean up expired room in background (don't await)
-        setImmediate(() => {
-          cleanupExpiredRoom(roomId, room);
-        });
-
-        return reply.code(404).send({
-          statusCode: 404,
-          error: 'Not Found',
-          message: `Room not found: ${roomIdString}`,
-        });
-      }
+      // Room is validated and attached to request by preHandler
+      const room = request.room!;
 
       // Transform connectedClients Map to array (exclude WebSocket conn object)
       const connectedClients = Array.from(room.connectedClients.values()).map(client => ({
@@ -392,54 +350,13 @@ const roomsPlugin: FastifyPluginAsync = async fastify => {
           required: ['roomId'],
         },
       },
+      preHandler: roomValidationPreHandler,
     },
     async (request, reply) => {
+      // Room is validated and attached to request by preHandler
+      const room = request.room!;
       const { roomId: roomIdString } = request.params;
-
-      // Validate UUID format
-      if (!isValidUuid(roomIdString)) {
-        return reply.code(400).send({
-          statusCode: 400,
-          error: 'Bad Request',
-          message: `Invalid UUID format for roomId: ${roomIdString}`,
-        });
-      }
-
-      // Convert to RoomId type
-      let roomId;
-      try {
-        roomId = toRoomId(roomIdString);
-      } catch (error) {
-        return reply.code(400).send({
-          statusCode: 400,
-          error: 'Bad Request',
-          message: `Invalid UUID format for roomId: ${roomIdString}`,
-        });
-      }
-
-      // Get room from storage
-      const room = getRoom(roomId);
-      if (!room) {
-        return reply.code(404).send({
-          statusCode: 404,
-          error: 'Not Found',
-          message: `Room not found: ${roomIdString}`,
-        });
-      }
-
-      // Check if room is expired - clean up in background and return 404
-      if (isRoomExpired(room)) {
-        // Clean up expired room in background (don't await)
-        setImmediate(() => {
-          cleanupExpiredRoom(roomId, room);
-        });
-
-        return reply.code(404).send({
-          statusCode: 404,
-          error: 'Not Found',
-          message: `Room not found: ${roomIdString}`,
-        });
-      }
+      const roomId = toRoomId(roomIdString);
 
       // Close all WebSocket connections
       // First close connections tracked by WebSocket handler (includes connections that haven't completed JOIN)

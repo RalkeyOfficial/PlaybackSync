@@ -25,9 +25,12 @@ The WebSocket server is integrated with Fastify using the `ws` library:
 3. **JOIN Timeout**: Connection must send a `JOIN` message within the configured timeout (default: 5 seconds)
 4. **Authentication**: `JOIN` message is validated and authenticated (password verification)
 5. **Client ID Generation**: Server generates a unique `clientId` for the client (or reattaches if reconnection)
-6. **State Sync**: Server sends `ROOM_STATE` message with current room state and assigned `clientId`
-7. **Active State**: Connection is active and can send/receive messages
-8. **Disconnection**: Connection is closed (client disconnect, timeout, error, or room deletion)
+6. **Rate Limiter Initialization**: Rate limiter state is created and stored on the connection for EVENT message rate limiting
+7. **State Sync**: Server sends `ROOM_STATE` message with current room state and assigned `clientId`
+8. **Active State**: Connection is active and can send/receive messages:
+   - ✅ Clients can send `EVENT` messages (play, pause, seek)
+   - ✅ Server broadcasts `STATE` messages after processing events
+9. **Disconnection**: Connection is closed (client disconnect, timeout, error, or room deletion)
 
 ## Connection Handling
 
@@ -56,8 +59,16 @@ interface ExtendedWebSocket extends WebSocket {
   roomId?: RoomId; // Room ID (set after successful JOIN)
   clientId?: ClientId; // Client ID (set after successful JOIN)
   joinTimeout?: NodeJS.Timeout; // Timeout timer for JOIN message
+  rateLimiterState?: RateLimiterState; // Rate limiter state for EVENT message rate limiting
 }
 ```
+
+**Metadata Fields**:
+
+- `roomId`: Set when connection is established (extracted from URL)
+- `clientId`: Set after successful JOIN authentication
+- `joinTimeout`: Timer that closes connection if no JOIN message received
+- `rateLimiterState`: Token bucket state for rate limiting EVENT messages (initialized during JOIN)
 
 ### Connection Tracking
 
@@ -152,11 +163,18 @@ ws.on('message', (data: Buffer) => {
 });
 ```
 
+**Message Routing**:
+
+- `JOIN` messages are handled by `handleJoinMessage()`
+- `EVENT` messages are handled by `handleEventMessage()`
+- Other message types are logged and will be handled in future phases
+
 **Error Handling**:
 
 - Invalid JSON: Connection closed with code `1003`
 - Validation errors: `ERROR` message sent to client
 - Processing errors: Logged and connection may be closed
+- Rate limit exceeded: `ERROR` message with code `RATE_LIMITED` sent to client
 
 ### Close Handler
 
@@ -305,13 +323,108 @@ All WebSocket events are logged using structured logging (pino):
 - `reason`: Close reason
 - `error`: Error object
 
+## EVENT Message Handling
+
+### Overview
+
+The `EVENT` message handler processes explicit playback control events (play, pause, seek) from clients. These events represent user intent, not authoritative state. The server updates room state and broadcasts authoritative `STATE` messages to all clients in the room.
+
+### Handler Function
+
+```typescript
+handleEventMessage(ws: ExtendedWebSocket, message: unknown, roomId: RoomId)
+```
+
+### Processing Flow
+
+1. **Authentication Check**: Verifies client has completed JOIN (has `clientId`)
+2. **Message Validation**: Validates EVENT message against JSON Schema
+3. **Room Validation**: Ensures room exists and is not expired
+4. **Rate Limiting**: Checks per-connection rate limit (token bucket algorithm)
+5. **State Update**: Updates room state based on event type:
+   - `play`: Sets `paused = false`
+   - `pause`: Sets `paused = true`
+   - `seek`: Updates `time` to the provided value
+6. **Event Logging**: Appends event to room's event log (ring buffer, max 100 events)
+7. **State Broadcasting**: Broadcasts `STATE` message to all connected clients
+8. **Logging**: Logs event processing with structured logging
+
+### Rate Limiting
+
+Rate limiting is implemented using a token bucket algorithm:
+
+- **Per-Connection**: Each WebSocket connection has its own rate limiter state
+- **Token Bucket**: Tokens refill at a configurable rate (default: 10 events/second)
+- **Initialization**: Rate limiter state is created during JOIN and stored on the WebSocket connection
+- **Check**: Before processing an EVENT, the rate limiter checks if a token is available
+- **Exceeded**: If rate limit is exceeded, an `ERROR` message with code `RATE_LIMITED` is sent and the event is not processed
+
+**Rate Limiter Implementation**:
+
+```typescript
+class RateLimiter {
+  check(state: RateLimiterState): boolean
+  createState(): RateLimiterState
+}
+```
+
+The rate limiter state is stored on the `ExtendedWebSocket` interface:
+
+```typescript
+interface ExtendedWebSocket extends WebSocket {
+  rateLimiterState?: RateLimiterState;
+}
+```
+
+### State Updates
+
+When processing an EVENT message, the server:
+
+1. **Increments `eventId`**: Each event gets a unique, incrementing event ID
+2. **Updates Timestamps**:
+   - `last_explicit_event_ts`: Set to current server time
+   - `last_state_update_ts`: Set to current server time
+3. **Updates Playback State**:
+   - For `play`: `paused = false`
+   - For `pause`: `paused = true`
+   - For `seek`: `time = eventMessage.value`
+
+### Event Logging
+
+Events are logged to a ring buffer per room:
+
+- **Maximum Size**: 100 events (configurable via `MAX_EVENT_LOG_SIZE`)
+- **Event Structure**: Includes event type, clientId, timestamp, eventId, and optional value
+- **Ring Buffer**: When the log reaches maximum size, oldest events are removed
+
+### State Broadcasting
+
+After processing an EVENT, the server broadcasts a `STATE` message to all connected clients in the room:
+
+- **Authoritative State**: The `STATE` message contains the server's authoritative playback state
+- **All Clients**: All clients receive the broadcast, including the client that sent the EVENT
+- **Event ID**: The `STATE` message includes the updated `eventId` for ordering
+- **Server Timestamp**: Includes `server_ts` for synchronization
+
+**Important**: Clients must not suppress or ignore `STATE` messages they "caused". The server's `STATE` message is always authoritative, even for the originating client.
+
+### Error Responses
+
+The EVENT handler can send the following error responses:
+
+- `NOT_AUTHENTICATED`: EVENT received before JOIN message
+- `INVALID_MESSAGE`: Message validation failed (schema errors)
+- `RATE_LIMITED`: Rate limit exceeded for this connection
+- `ROOM_NOT_FOUND`: Room doesn't exist or is expired
+
 ## Configuration
 
 ### Environment Variables
 
-| Variable          | Default | Description                                          |
-| ----------------- | ------- | ---------------------------------------------------- |
-| `JOIN_TIMEOUT_MS` | `5000`  | Timeout in milliseconds for JOIN message (5 seconds) |
+| Variable                      | Default | Description                                                        |
+| ----------------------------- | ------- | ------------------------------------------------------------------ |
+| `JOIN_TIMEOUT_MS`             | `5000`  | Timeout in milliseconds for JOIN message (5 seconds)               |
+| `RATE_LIMIT_EVENTS_PER_SEC`   | `10`    | Maximum number of EVENT messages allowed per second per connection |
 
 ### Configuration Access
 
@@ -340,7 +453,7 @@ const config = getConfig();
 
 - **TLS**: Use WSS (WebSocket Secure) in production
 - **Origin Validation**: Consider validating Origin header
-- **Rate Limiting**: Implement rate limiting for message processing
+- **Rate Limiting**: Token bucket rate limiter per connection for EVENT messages
 
 ## Performance
 
@@ -360,7 +473,8 @@ const config = getConfig();
 
 Unit tests for WebSocket implementation are located in:
 
-- `src/__tests__/websocket/server-setup.test.ts`
+- `src/__tests__/websocket/server-setup.test.ts` - Connection handling and JOIN message tests
+- `src/__tests__/websocket/event-handler.test.ts` - EVENT message handling tests
 
 Tests cover:
 
@@ -370,6 +484,10 @@ Tests cover:
 - Connection close handling
 - Error handling
 - Multiple concurrent connections
+- EVENT message processing (play, pause, seek)
+- Rate limiting behavior
+- State updates and broadcasting
+- Event logging
 
 ## Related Documentation
 

@@ -534,7 +534,8 @@ interface ErrorMessage {
 **Common Error Codes**:
 
 - `AUTH_FAILED`: Authentication failed (invalid room ID or password)
-- `INVALID_MESSAGE`: Message validation failed
+- `NOT_AUTHENTICATED`: Message received before JOIN authentication
+- `INVALID_MESSAGE`: Message validation failed (schema validation errors)
 - `RATE_LIMITED`: Rate limit exceeded
 - `ROOM_NOT_FOUND`: Room doesn't exist or is expired
 - `PROCESSING_FAILED`: Error processing message

@@ -109,7 +109,7 @@ function createJoinMessage(
   return message;
 }
 
-describe('JOIN Message Handling (Step 3.3)', () => {
+describe('JOIN Message Handling', () => {
   beforeEach(() => {
     setupTestEnv();
     clearAllRooms();

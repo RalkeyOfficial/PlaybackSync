@@ -1,6 +1,5 @@
 /**
  * Tests for the public share endpoint GET /:roomId
- * Based on Step 2.5 of IMPLEMENTATION_PLAN.md
  * Uses HTTP Basic Authentication - browser shows login prompt automatically
  */
 
@@ -248,7 +247,11 @@ describe('Public Share Endpoint', () => {
         expect(location).toContain('https://example.com/video');
         expect(location).toContain('sync_url=');
         expect(location).toContain('sync_password=');
-        expect(location).toContain(`wss://sync.example.com/${roomId}`);
+        // URL is encoded in query parameters, so decode it for checking
+        if (location) {
+          const decodedLocation = decodeURIComponent(location);
+          expect(decodedLocation).toContain(`wss://sync.example.com/${roomId}`);
+        }
       } finally {
         await testServer.close();
         if (originalSyncHostname) {

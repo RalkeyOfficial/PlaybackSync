@@ -11,17 +11,30 @@ import { logger, maskId } from '../utils/logger';
 import { getConfig } from '../config';
 import type { RoomId, ClientId } from '../types/ids';
 import { toRoomId, toClientId, isValidUuid } from '../types/ids';
-import { getRoom, isRoomExpired } from '../storage/rooms';
+import { getRoom } from '../storage/rooms';
 import { verifyPassword } from '../utils/password';
 import { validateMessage, formatValidationError } from '../utils/validation';
-import type { JoinMessage, RoomStateMessage, ErrorMessage } from '../types/messages';
+import { validateRoomForConnection, validateRoomForWebSocket } from '../utils/room-validation';
+import type {
+  JoinMessage,
+  RoomStateMessage,
+  ErrorMessage,
+  EventMessage,
+  StateMessage,
+} from '../types/messages';
 import type { Room } from '../types/room';
+import { RateLimiter, type RateLimiterState } from '../utils/rate-limiter';
 
 /**
  * Map to track WebSocket connections by roomId
  * Key: roomId, Value: Set of ExtendedWebSocket connections
  */
 const connectionsByRoom = new Map<RoomId, Set<ExtendedWebSocket>>();
+
+/**
+ * Maximum number of events to keep in event log (ring buffer size)
+ */
+const MAX_EVENT_LOG_SIZE = 100;
 
 /**
  * Send an ERROR message to a WebSocket client
@@ -156,27 +169,9 @@ function handleJoinMessage(ws: ExtendedWebSocket, message: unknown, roomId: Room
   const joinMessage = message as JoinMessage;
 
   // Room existence already verified in handleConnection, but verify again in case room was deleted
-  const room = getRoom(roomId);
+  const room = validateRoomForWebSocket(roomId, ws);
   if (!room) {
-    logger.warn(
-      {
-        roomId: maskId(roomId),
-      },
-      'JOIN failed: room not found (room may have been deleted)'
-    );
-    sendError(ws, 'ROOM_NOT_FOUND', 'Room not found');
-    ws.close(1008, 'Room not found');
-    return;
-  }
-
-  if (isRoomExpired(room)) {
-    logger.warn(
-      {
-        roomId: maskId(roomId),
-      },
-      'JOIN failed: room not found'
-    );
-    sendError(ws, 'ROOM_NOT_FOUND', 'Room not found');
+    // Error already sent by validateRoomForWebSocket
     ws.close(1008, 'Room not found');
     return;
   }
@@ -269,6 +264,10 @@ function handleJoinMessage(ws: ExtendedWebSocket, message: unknown, roomId: Room
   ws.roomId = roomId;
   ws.clientId = clientId;
 
+  // Initialize rate limiter for this connection
+  const rateLimiter = new RateLimiter(config.rateLimitEventsPerSec);
+  ws.rateLimiterState = rateLimiter.createState();
+
   // Track connection by roomId
   if (!connectionsByRoom.has(roomId)) {
     connectionsByRoom.set(roomId, new Set());
@@ -277,6 +276,180 @@ function handleJoinMessage(ws: ExtendedWebSocket, message: unknown, roomId: Room
 
   // Send current STATE to joining client (includes clientId)
   sendRoomState(ws, room, clientId);
+}
+
+/**
+ * Broadcast STATE message to all connected clients in a room
+ */
+function broadcastState(room: Room): void {
+  const now = Date.now();
+  const stateMessage: StateMessage = {
+    type: 'STATE',
+    paused: room.state.paused,
+    time: room.state.time,
+    server_ts: now,
+    eventId: room.state.eventId,
+  };
+
+  // Add optional fields if they exist
+  if (room.state.provider) {
+    stateMessage.provider = room.state.provider;
+  }
+  if (room.state.episode) {
+    stateMessage.episode = room.state.episode;
+  }
+
+  // Broadcast to all connected clients
+  const roomConnections = connectionsByRoom.get(room.roomId);
+  if (!roomConnections) {
+    return;
+  }
+
+  for (const ws of roomConnections) {
+    try {
+      if (ws.readyState === WebSocket.OPEN && ws.clientId) {
+        ws.send(JSON.stringify(stateMessage));
+      }
+    } catch (error) {
+      logger.warn(
+        {
+          error,
+          roomId: maskId(room.roomId),
+          clientId: ws.clientId ? maskId(ws.clientId) : undefined,
+        },
+        'Failed to send STATE message to client'
+      );
+    }
+  }
+}
+
+/**
+ * Add event to event log (ring buffer)
+ */
+function addEventToLog(room: Room, eventType: string, value: number | string | undefined, clientId: ClientId): void {
+  const event: Room['eventLog'][0] = {
+    type: eventType,
+    clientId,
+    ts: Date.now(),
+    eventId: room.state.eventId,
+  };
+
+  if (value !== undefined) {
+    event.value = value;
+  }
+
+  room.eventLog.push(event);
+
+  // Maintain ring buffer size
+  if (room.eventLog.length > MAX_EVENT_LOG_SIZE) {
+    room.eventLog.shift(); // Remove oldest event
+  }
+}
+
+/**
+ * Handle EVENT message - process play/pause/seek events
+ */
+function handleEventMessage(ws: ExtendedWebSocket, message: unknown, roomId: RoomId): void {
+  const eventConfig = getConfig();
+
+  // Verify client is authenticated (has clientId)
+  if (!ws.clientId) {
+    logger.warn(
+      {
+        roomId: maskId(roomId),
+      },
+      'EVENT message received before JOIN'
+    );
+    sendError(ws, 'NOT_AUTHENTICATED', 'Must join room before sending events');
+    return;
+  }
+
+  // Validate EVENT message schema
+  const validation = validateMessage(message, 'EVENT');
+  if (!validation.valid) {
+    logger.warn(
+      {
+        roomId: maskId(roomId),
+        clientId: maskId(ws.clientId),
+        errors: validation.errors,
+      },
+      'EVENT message validation failed'
+    );
+    sendError(
+      ws,
+      'INVALID_MESSAGE',
+      `Message validation failed: ${formatValidationError(validation.errors || [])}`
+    );
+    return;
+  }
+
+  const eventMessage = message as EventMessage;
+
+  // Validate room exists and is not expired
+  const room = validateRoomForWebSocket(roomId, ws);
+  if (!room) {
+    // Error already sent by validateRoomForWebSocket
+    return;
+  }
+
+  // Check rate limit
+  if (!ws.rateLimiterState) {
+    // Initialize rate limiter if not already done
+    const rateLimiter = new RateLimiter(eventConfig.rateLimitEventsPerSec);
+    ws.rateLimiterState = rateLimiter.createState();
+  }
+
+  const rateLimiter = new RateLimiter(eventConfig.rateLimitEventsPerSec);
+  if (!rateLimiter.check(ws.rateLimiterState)) {
+    logger.warn(
+      {
+        roomId: maskId(roomId),
+        clientId: maskId(ws.clientId),
+        event: eventMessage.event,
+      },
+      'Rate limit exceeded for EVENT message'
+    );
+    sendError(ws, 'RATE_LIMITED', 'Rate limit exceeded');
+    return;
+  }
+
+  // Process event
+  const now = Date.now();
+  room.state.eventId += 1;
+  room.state.last_explicit_event_ts = now;
+  room.state.last_state_update_ts = now;
+
+  // Update state based on event type
+  switch (eventMessage.event) {
+    case 'play':
+      room.state.paused = false;
+      break;
+    case 'pause':
+      room.state.paused = true;
+      break;
+    case 'seek':
+      if (eventMessage.value !== undefined) {
+        room.state.time = eventMessage.value;
+      }
+      break;
+  }
+
+  // Add event to log
+  addEventToLog(room, eventMessage.event, eventMessage.value, ws.clientId);
+
+  // Broadcast STATE to all clients
+  broadcastState(room);
+
+  logger.info(
+    {
+      roomId: maskId(roomId),
+      clientId: maskId(ws.clientId),
+      event: eventMessage.event,
+      value: eventMessage.value,
+      eventId: room.state.eventId,
+    },
+    'Event processed and state broadcast'
+  );
 }
 
 /**
@@ -289,6 +462,8 @@ export interface ExtendedWebSocket extends WebSocket {
   clientId?: ClientId;
   /** Timeout timer for JOIN message */
   joinTimeout?: NodeJS.Timeout;
+  /** Rate limiter state for this connection */
+  rateLimiterState?: RateLimiterState;
 }
 
 /**
@@ -311,16 +486,9 @@ export function handleConnection(ws: ExtendedWebSocket, req: { url?: string }): 
   }
 
   // Verify room exists and is not expired before accepting connection
-  const room = getRoom(roomId);
+  const room = validateRoomForConnection(roomId, ws);
   if (!room) {
-    logger.warn({ roomId: maskId(roomId) }, 'WebSocket connection rejected: room not found');
-    ws.close(1008, 'Room not found');
-    return;
-  }
-
-  if (isRoomExpired(room)) {
-    logger.warn({ roomId: maskId(roomId) }, 'WebSocket connection rejected: room expired');
-    ws.close(1008, 'Room not found');
+    // Connection already closed by validateRoomForConnection
     return;
   }
 
@@ -340,18 +508,20 @@ export function handleConnection(ws: ExtendedWebSocket, req: { url?: string }): 
   // Set up message event handler
   ws.on('message', (data: Buffer) => {
     try {
-      // Clear JOIN timeout if message received (will be validated as JOIN later)
-      if (ws.joinTimeout) {
-        clearTimeout(ws.joinTimeout);
-        ws.joinTimeout = undefined;
-      }
-
       const messageStr = data.toString('utf-8');
       const message = JSON.parse(messageStr);
 
       // Handle JOIN message
       if (message.type === 'JOIN') {
+        // Clear JOIN timeout only when JOIN message is received
+        if (ws.joinTimeout) {
+          clearTimeout(ws.joinTimeout);
+          ws.joinTimeout = undefined;
+        }
         handleJoinMessage(ws, message, roomId);
+      } else if (message.type === 'EVENT') {
+        // Handle EVENT message (play/pause/seek)
+        handleEventMessage(ws, message, roomId);
       } else {
         // Other message types will be handled in later steps
         logger.debug({ messageType: message.type, roomId: maskId(roomId) }, 'Message received');

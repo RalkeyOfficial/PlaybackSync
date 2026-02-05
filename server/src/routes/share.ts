@@ -7,9 +7,8 @@ import { FastifyPluginAsync } from 'fastify';
 import { getConfig } from '../config';
 import { logger, maskId } from '../utils/logger';
 import { verifyPassword } from '../utils/password';
-import { getRoom, isRoomExpired } from '../storage/rooms';
-import { toRoomId, isValidUuid } from '../types/ids';
-import { cleanupExpiredRoom } from '../utils/room-cleanup';
+import { toRoomId } from '../types/ids';
+import { roomValidationPreHandler } from '../utils/room-validation';
 
 /**
  * Parse HTTP Basic Authentication header
@@ -95,54 +94,13 @@ const sharePlugin: FastifyPluginAsync = async fastify => {
           required: ['roomId'],
         },
       },
+      preHandler: roomValidationPreHandler,
     },
     async (request, reply) => {
+      // Room is validated and attached to request by preHandler
+      const room = request.room!;
       const { roomId: roomIdString } = request.params;
-
-      // Validate UUID format
-      if (!isValidUuid(roomIdString)) {
-        return reply.code(400).send({
-          statusCode: 400,
-          error: 'Bad Request',
-          message: `Invalid UUID format for roomId: ${roomIdString}`,
-        });
-      }
-
-      // Convert to RoomId type
-      let roomId;
-      try {
-        roomId = toRoomId(roomIdString);
-      } catch (error) {
-        return reply.code(400).send({
-          statusCode: 400,
-          error: 'Bad Request',
-          message: `Invalid UUID format for roomId: ${roomIdString}`,
-        });
-      }
-
-      // Get room from storage
-      const room = getRoom(roomId);
-      if (!room) {
-        return reply.code(404).send({
-          statusCode: 404,
-          error: 'Not Found',
-          message: `Room not found: ${roomIdString}`,
-        });
-      }
-
-      // Check if room is expired - clean up in background and return 404
-      if (isRoomExpired(room)) {
-        // Clean up expired room in background (don't await)
-        setImmediate(() => {
-          cleanupExpiredRoom(roomId, room);
-        });
-
-        return reply.code(404).send({
-          statusCode: 404,
-          error: 'Not Found',
-          message: `Room not found: ${roomIdString}`,
-        });
-      }
+      const roomId = toRoomId(roomIdString);
 
       // Check for Authorization header
       const authHeader = request.headers.authorization;

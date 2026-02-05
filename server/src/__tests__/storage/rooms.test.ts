@@ -165,7 +165,7 @@ describe('Room Storage', () => {
       expect(foundRoom?.last_state.episode).toBe(room.state.episode);
     });
 
-    it('should filter expired rooms', () => {
+    it('should filter expired rooms', async () => {
       // Create an active room
       const activeRoomId = toRoomId('123e4567-e89b-12d3-a456-426614174004');
       createRoom(activeRoomId, testPasswordHash, testTtlSeconds, testTargetUrl);
@@ -174,26 +174,19 @@ describe('Room Storage', () => {
       const expiredRoomId = toRoomId('123e4567-e89b-12d3-a456-426614174003');
       createRoom(expiredRoomId, testPasswordHash, 0, testTargetUrl);
 
+      // Add a small delay to ensure expiresAt < now (since TTL=0 means expiresAt = createdAt)
+      await new Promise(resolve => setTimeout(resolve, 1));
+
       const rooms = listActiveRooms();
 
       // Active room should appear
       const activeFound = rooms.find(r => r.id === activeRoomId);
       expect(activeFound).toBeDefined();
 
-      // Room with TTL 0 has expiresAt = createdAt, which is in the past
+      // Room with TTL 0 has expiresAt = createdAt, which should be < now after delay
       // So it should be filtered out (expiresAt < now check)
-      // However, there's a potential race condition if createdAt equals now exactly
-      // In practice, createdAt will be slightly in the past, so expiresAt < now
       const expiredFound = rooms.find(r => r.id === expiredRoomId);
-      // Verify the expired room is not in the list (or verify expiration logic)
-      const expiredRoom = getRoom(expiredRoomId);
-      if (expiredRoom) {
-        // If expiresAt < now, room should be filtered
-        const now = Date.now();
-        if (expiredRoom.expiresAt < now) {
-          expect(expiredFound).toBeUndefined();
-        }
-      }
+      expect(expiredFound).toBeUndefined();
     });
 
     it('should return rooms sorted by createdAt (newest first)', async () => {
