@@ -169,7 +169,7 @@ interface EpisodeChangeRequestMessage {
   episodeId: string | number;
   providerId: string;
   pageUrl: string;
-  clientTime: number;
+  client_ts: number;
 }
 ```
 
@@ -179,14 +179,14 @@ interface EpisodeChangeRequestMessage {
 - `episodeId`: Episode ID or episode number (string or number)
 - `providerId`: Provider identifier (non-empty string)
 - `pageUrl`: Page URL (non-empty string)
-- `clientTime`: Client timestamp
+- `client_ts`: Client timestamp (monotonic or epoch ms)
 
 **Validation Rules**:
 
 - `episodeId` can be string or number
 - `providerId` must be non-empty string
 - `pageUrl` must be non-empty string
-- `clientTime` must be a number
+- `client_ts` must be a number
 
 **Example**:
 
@@ -196,7 +196,7 @@ interface EpisodeChangeRequestMessage {
   "episodeId": 5,
   "providerId": "netflix",
   "pageUrl": "https://netflix.com/watch/12345",
-  "clientTime": 1670000000000
+  "client_ts": 1670000000000
 }
 ```
 
@@ -325,7 +325,7 @@ interface RoomStateMessage {
   providerId?: string;
   derivedContentKey?: string;
   lastEventId: number;
-  serverTime: number;
+  server_ts: number;
 }
 ```
 
@@ -336,7 +336,7 @@ interface RoomStateMessage {
 - `paused`: Playback state (boolean)
 - `time`: Current playback time (seconds)
 - `lastEventId`: Last event ID (integer)
-- `serverTime`: Server timestamp
+- `server_ts`: Server timestamp (monotonic or epoch ms)
 
 **Optional Fields**:
 
@@ -356,7 +356,7 @@ interface RoomStateMessage {
   "providerId": "netflix",
   "derivedContentKey": "netflix:12345:ep5",
   "lastEventId": 42,
-  "serverTime": 1670000000000
+  "server_ts": 1670000000000
 }
 ```
 
@@ -438,7 +438,7 @@ interface EpisodeChangeMessage {
   episodeId: string | number;
   providerId: string;
   derivedContentKey: string;
-  serverTime: number;
+  server_ts: number;
 }
 ```
 
@@ -449,7 +449,7 @@ interface EpisodeChangeMessage {
 - `episodeId`: Episode ID (string or number)
 - `providerId`: Provider identifier
 - `derivedContentKey`: Derived content key
-- `serverTime`: Server timestamp
+- `server_ts`: Server timestamp (monotonic or epoch ms)
 
 **Example**:
 
@@ -460,7 +460,7 @@ interface EpisodeChangeMessage {
   "episodeId": 6,
   "providerId": "netflix",
   "derivedContentKey": "netflix:12345:ep6",
-  "serverTime": 1670000001000
+  "server_ts": 1670000001000
 }
 ```
 
@@ -687,13 +687,13 @@ Example validation error response:
 
 ## Timestamps
 
-### Client Timestamps (`client_ts`, `clientTime`)
+### Client Timestamps (`client_ts`)
 
 - **Format**: Number (monotonic or epoch milliseconds)
 - **Purpose**: Used for ordering events and drift detection
 - **Validation**: Must be a number
 
-### Server Timestamps (`server_ts`, `serverTime`)
+### Server Timestamps (`server_ts`)
 
 - **Format**: Number (monotonic or epoch milliseconds)
 - **Purpose**: Authoritative timestamp for state synchronization

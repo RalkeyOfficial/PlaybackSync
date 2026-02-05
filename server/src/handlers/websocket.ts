@@ -6,8 +6,8 @@
 import { WebSocketServer, WebSocket } from 'ws';
 import type { IncomingMessage } from 'http';
 import type { Duplex } from 'stream';
-import { randomUUID } from 'crypto';
-import { logger, maskId } from '../utils/logger';
+import { randomUUID, createHash } from 'crypto';
+import { logger } from '../utils/logger';
 import { getConfig } from '../config';
 import type { RoomId, ClientId } from '../types/ids';
 import { toRoomId, toClientId, isValidUuid } from '../types/ids';
@@ -21,6 +21,8 @@ import type {
   ErrorMessage,
   EventMessage,
   StateMessage,
+  EpisodeChangeRequestMessage,
+  EpisodeChangeMessage,
 } from '../types/messages';
 import type { Room } from '../types/room';
 import { RateLimiter, type RateLimiterState } from '../utils/rate-limiter';
@@ -56,7 +58,7 @@ function sendError(ws: ExtendedWebSocket, code: string, message: string): void {
       {
         error,
         roomId: ws.roomId,
-        clientId: ws.clientId ? maskId(ws.clientId) : undefined,
+        clientId: ws.clientId || undefined,
         code,
       },
       'Failed to send ERROR message to client'
@@ -107,7 +109,7 @@ function sendRoomState(ws: ExtendedWebSocket, room: Room, clientId: ClientId): v
     paused: room.state.paused,
     time: room.state.time,
     lastEventId: room.state.eventId,
-    serverTime: Date.now(),
+    server_ts: Date.now(),
   };
 
   // Add optional fields if they exist
@@ -134,7 +136,7 @@ function sendRoomState(ws: ExtendedWebSocket, room: Room, clientId: ClientId): v
       {
         error,
         roomId: ws.roomId,
-        clientId: ws.clientId ? maskId(ws.clientId) : undefined,
+        clientId: ws.clientId || undefined,
       },
       'Failed to send ROOM_STATE message to client'
     );
@@ -152,7 +154,7 @@ function handleJoinMessage(ws: ExtendedWebSocket, message: unknown, roomId: Room
   if (!validation.valid) {
     logger.warn(
       {
-        roomId: maskId(roomId),
+        roomId: roomId,
         errors: validation.errors,
       },
       'JOIN message validation failed'
@@ -185,8 +187,8 @@ function handleJoinMessage(ws: ExtendedWebSocket, message: unknown, roomId: Room
     } catch (error) {
       logger.warn(
         {
-          roomId: maskId(roomId),
-          clientId: maskId(joinMessage.clientId),
+          roomId: roomId,
+          clientId: joinMessage.clientId,
         },
         'JOIN failed: invalid clientId format'
       );
@@ -208,8 +210,8 @@ function handleJoinMessage(ws: ExtendedWebSocket, message: unknown, roomId: Room
   if (!passwordValid) {
     logger.warn(
       {
-        roomId: maskId(roomId),
-        clientId: maskId(clientId),
+        roomId: roomId,
+        clientId: clientId,
       },
       'JOIN failed: authentication failed'
     );
@@ -233,8 +235,8 @@ function handleJoinMessage(ws: ExtendedWebSocket, message: unknown, roomId: Room
       existingClient.tombstonedUntil = undefined; // Clear tombstone
       logger.info(
         {
-          roomId: maskId(roomId),
-          clientId: maskId(clientId),
+          roomId: roomId,
+          clientId: clientId,
         },
         'Client reconnected with valid tombstone'
       );
@@ -253,8 +255,8 @@ function handleJoinMessage(ws: ExtendedWebSocket, message: unknown, roomId: Room
     });
     logger.info(
       {
-        roomId: maskId(roomId),
-        clientId: maskId(clientId),
+        roomId: roomId,
+        clientId: clientId,
       },
       'Client joined room'
     );
@@ -314,8 +316,8 @@ function broadcastState(room: Room): void {
       logger.warn(
         {
           error,
-          roomId: maskId(room.roomId),
-          clientId: ws.clientId ? maskId(ws.clientId) : undefined,
+          roomId: room.roomId,
+          clientId: ws.clientId || undefined,
         },
         'Failed to send STATE message to client'
       );
@@ -347,6 +349,168 @@ function addEventToLog(room: Room, eventType: string, value: number | string | u
 }
 
 /**
+ * Compute derivedContentKey from URL + provider + episode
+ * Uses SHA-256 hash of normalized URL path + providerId + episodeId
+ */
+function computeDerivedContentKey(
+  pageUrl: string,
+  providerId: string,
+  episodeId: string | number
+): string {
+  try {
+    // Normalize URL (remove query params and hash for consistency)
+    const normalizedUrl = new URL(pageUrl).pathname;
+    const keyString = `${providerId}:${normalizedUrl}:${episodeId}`;
+    return createHash('sha256').update(keyString).digest('hex');
+  } catch (error) {
+    // If URL parsing fails, use the full URL as-is
+    logger.warn({ error, pageUrl }, 'Failed to parse URL for derivedContentKey, using full URL');
+    const keyString = `${providerId}:${pageUrl}:${episodeId}`;
+    return createHash('sha256').update(keyString).digest('hex');
+  }
+}
+
+/**
+ * Broadcast EPISODE_CHANGE message to all connected clients in a room
+ */
+function broadcastEpisodeChange(room: Room): void {
+  if (!room.contentIdentity) {
+    logger.warn({ roomId: room.roomId }, 'Cannot broadcast EPISODE_CHANGE: no contentIdentity');
+    return;
+  }
+
+  const now = Date.now();
+  const episodeChangeMessage: EpisodeChangeMessage = {
+    type: 'EPISODE_CHANGE',
+    eventId: room.state.eventId,
+    episodeId: room.contentIdentity.episodeId,
+    providerId: room.contentIdentity.providerId,
+    derivedContentKey: room.contentIdentity.derivedContentKey,
+    server_ts: now,
+  };
+
+  // Broadcast to all connected clients
+  const roomConnections = connectionsByRoom.get(room.roomId);
+  if (!roomConnections) {
+    return;
+  }
+
+  for (const ws of roomConnections) {
+    try {
+      if (ws.readyState === WebSocket.OPEN && ws.clientId) {
+        ws.send(JSON.stringify(episodeChangeMessage));
+      }
+    } catch (error) {
+      logger.warn(
+        {
+          error,
+          roomId: room.roomId,
+          clientId: ws.clientId || undefined,
+        },
+        'Failed to send EPISODE_CHANGE message to client'
+      );
+    }
+  }
+}
+
+/**
+ * Handle EPISODE_CHANGE_REQUEST message - process episode change events
+ */
+function handleEpisodeChangeRequest(ws: ExtendedWebSocket, message: unknown, roomId: RoomId): void {
+  // Verify client is authenticated (has clientId)
+  if (!ws.clientId) {
+    logger.warn(
+      {
+        roomId: roomId,
+      },
+      'EPISODE_CHANGE_REQUEST message received before JOIN'
+    );
+    sendError(ws, 'NOT_AUTHENTICATED', 'Must join room before sending episode change requests');
+    return;
+  }
+
+  // Validate EPISODE_CHANGE_REQUEST message schema
+  const validation = validateMessage(message, 'EPISODE_CHANGE_REQUEST');
+  if (!validation.valid) {
+    logger.warn(
+      {
+        roomId: roomId,
+        clientId: ws.clientId,
+        errors: validation.errors,
+      },
+      'EPISODE_CHANGE_REQUEST message validation failed'
+    );
+    sendError(
+      ws,
+      'INVALID_MESSAGE',
+      `Message validation failed: ${formatValidationError(validation.errors || [])}`
+    );
+    return;
+  }
+
+  const episodeChangeRequest = message as EpisodeChangeRequestMessage;
+
+  // Validate room exists and is not expired
+  const room = validateRoomForWebSocket(roomId, ws);
+  if (!room) {
+    // Error already sent by validateRoomForWebSocket
+    return;
+  }
+
+  // Derive derivedContentKey from URL + provider + episode
+  const derivedContentKey = computeDerivedContentKey(
+    episodeChangeRequest.pageUrl,
+    episodeChangeRequest.providerId,
+    episodeChangeRequest.episodeId
+  );
+
+  // Process episode change
+  const now = Date.now();
+  room.state.eventId += 1;
+  room.state.last_explicit_event_ts = now;
+  room.state.last_state_update_ts = now;
+
+  // Reset playback state (hard reset)
+  room.state.paused = true;
+  room.state.time = 0;
+
+  // Update room state with new episode info
+  room.contentIdentity = {
+    episodeId: episodeChangeRequest.episodeId,
+    providerId: episodeChangeRequest.providerId,
+    derivedContentKey,
+    pageUrl: episodeChangeRequest.pageUrl,
+  };
+
+  // Update legacy state fields for backward compatibility
+  room.state.provider = episodeChangeRequest.providerId;
+  room.state.episode =
+    typeof episodeChangeRequest.episodeId === 'number'
+      ? episodeChangeRequest.episodeId
+      : parseInt(episodeChangeRequest.episodeId, 10) || 0;
+
+  // Add event to log
+  addEventToLog(room, 'episode_change', episodeChangeRequest.episodeId, ws.clientId);
+
+  // Broadcast EPISODE_CHANGE to all clients
+  broadcastEpisodeChange(room);
+
+  // Also broadcast STATE to ensure all clients have updated playback state
+  broadcastState(room);
+
+  logger.info(
+    {
+      roomId: roomId,
+      clientId: ws.clientId,
+      episodeId: episodeChangeRequest.episodeId,
+      providerId: episodeChangeRequest.providerId,
+      eventId: room.state.eventId,
+    },
+    'Episode change processed and broadcast'
+  );
+}
+
+/**
  * Handle EVENT message - process play/pause/seek events
  */
 function handleEventMessage(ws: ExtendedWebSocket, message: unknown, roomId: RoomId): void {
@@ -356,7 +520,7 @@ function handleEventMessage(ws: ExtendedWebSocket, message: unknown, roomId: Roo
   if (!ws.clientId) {
     logger.warn(
       {
-        roomId: maskId(roomId),
+        roomId: roomId,
       },
       'EVENT message received before JOIN'
     );
@@ -369,8 +533,8 @@ function handleEventMessage(ws: ExtendedWebSocket, message: unknown, roomId: Roo
   if (!validation.valid) {
     logger.warn(
       {
-        roomId: maskId(roomId),
-        clientId: maskId(ws.clientId),
+        roomId: roomId,
+        clientId: ws.clientId,
         errors: validation.errors,
       },
       'EVENT message validation failed'
@@ -403,8 +567,8 @@ function handleEventMessage(ws: ExtendedWebSocket, message: unknown, roomId: Roo
   if (!rateLimiter.check(ws.rateLimiterState)) {
     logger.warn(
       {
-        roomId: maskId(roomId),
-        clientId: maskId(ws.clientId),
+        roomId: roomId,
+        clientId: ws.clientId,
         event: eventMessage.event,
       },
       'Rate limit exceeded for EVENT message'
@@ -442,8 +606,8 @@ function handleEventMessage(ws: ExtendedWebSocket, message: unknown, roomId: Roo
 
   logger.info(
     {
-      roomId: maskId(roomId),
-      clientId: maskId(ws.clientId),
+      roomId: roomId,
+      clientId: ws.clientId,
       event: eventMessage.event,
       value: eventMessage.value,
       eventId: room.state.eventId,
@@ -495,12 +659,12 @@ export function handleConnection(ws: ExtendedWebSocket, req: { url?: string }): 
   // Store roomId on connection for later use
   ws.roomId = roomId;
 
-  logger.info({ url: req.url, roomId: maskId(roomId) }, 'WebSocket connection established');
+  logger.info({ url: req.url, roomId: roomId }, 'WebSocket connection established');
 
   // Set up connection timeout - close if no JOIN received within timeout
   ws.joinTimeout = setTimeout(() => {
     if (ws.readyState === WebSocket.OPEN) {
-      logger.warn({ roomId: maskId(roomId) }, 'WebSocket connection closed due to JOIN timeout');
+      logger.warn({ roomId: roomId }, 'WebSocket connection closed due to JOIN timeout');
       ws.close(1008, 'JOIN timeout - no JOIN message received');
     }
   }, config.joinTimeoutMs);
@@ -522,13 +686,16 @@ export function handleConnection(ws: ExtendedWebSocket, req: { url?: string }): 
       } else if (message.type === 'EVENT') {
         // Handle EVENT message (play/pause/seek)
         handleEventMessage(ws, message, roomId);
+      } else if (message.type === 'EPISODE_CHANGE_REQUEST') {
+        // Handle EPISODE_CHANGE_REQUEST message
+        handleEpisodeChangeRequest(ws, message, roomId);
       } else {
         // Other message types will be handled in later steps
-        logger.debug({ messageType: message.type, roomId: maskId(roomId) }, 'Message received');
+        logger.debug({ messageType: message.type, roomId }, 'Message received');
       }
     } catch (error) {
       logger.error(
-        { error, roomId: ws.roomId ? maskId(ws.roomId) : undefined },
+        { error, roomId: ws.roomId || undefined },
         'Error processing WebSocket message'
       );
       if (ws.readyState === WebSocket.OPEN) {
@@ -545,7 +712,7 @@ export function handleConnection(ws: ExtendedWebSocket, req: { url?: string }): 
         code,
         reason: reasonStr,
         roomId: ws.roomId,
-        clientId: ws.clientId ? maskId(ws.clientId) : undefined,
+        clientId: ws.clientId || undefined,
       },
       'WebSocket connection closed'
     );
@@ -582,8 +749,8 @@ export function handleConnection(ws: ExtendedWebSocket, req: { url?: string }): 
           // The tombstone allows reconnection with same clientId
           logger.info(
             {
-              roomId: maskId(ws.roomId),
-              clientId: maskId(ws.clientId),
+              roomId: ws.roomId,
+              clientId: ws.clientId,
               tombstonedUntil: client.tombstonedUntil,
             },
             'Client disconnected, tombstone created'
@@ -599,7 +766,7 @@ export function handleConnection(ws: ExtendedWebSocket, req: { url?: string }): 
       {
         error,
         roomId: ws.roomId,
-        clientId: ws.clientId ? maskId(ws.clientId) : undefined,
+        clientId: ws.clientId || undefined,
       },
       'WebSocket connection error'
     );
@@ -653,7 +820,7 @@ export function closeConnectionsForRoom(roomId: RoomId): void {
     return;
   }
 
-  logger.info({ roomId: maskId(roomId) }, 'Closing WebSocket connections for room');
+  logger.info({ roomId }, 'Closing WebSocket connections for room');
 
   // Close all connections for this room
   for (const ws of roomConnections) {
@@ -664,8 +831,8 @@ export function closeConnectionsForRoom(roomId: RoomId): void {
     } catch (error) {
       logger.warn(
         {
-          roomId: maskId(roomId),
-          clientId: ws.clientId ? maskId(ws.clientId) : undefined,
+          roomId: roomId,
+          clientId: ws.clientId || undefined,
           error,
         },
         'Failed to close WebSocket connection during room deletion'

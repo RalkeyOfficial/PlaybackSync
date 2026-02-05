@@ -5,7 +5,7 @@
 import { FastifyPluginAsync } from 'fastify';
 import crypto from 'crypto';
 import { getConfig } from '../config';
-import { logger, maskId } from '../utils/logger';
+import { logger } from '../utils/logger';
 import { hashPassword } from '../utils/password';
 import { createRoom, listActiveRooms, deleteRoom } from '../storage/rooms';
 import { toRoomId } from '../types/ids';
@@ -241,7 +241,7 @@ const roomsPlugin: FastifyPluginAsync = async fastify => {
       // Log room creation with structured logging
       logger.info(
         {
-          roomId: maskId(roomId),
+          roomId,
           ttl: ttlSeconds,
           targetUrl,
         },
@@ -378,7 +378,7 @@ const roomsPlugin: FastifyPluginAsync = async fastify => {
       // Log room deletion with structured logging
       logger.info(
         {
-          roomId: maskId(roomId),
+          roomId: roomId,
         },
         'room.deleted'
       );

@@ -3,7 +3,7 @@
   "type": "object",
   "title": "EPISODE_CHANGE_REQUEST Message Schema",
   "description": "Schema for EPISODE_CHANGE_REQUEST message sent by clients to request episode change",
-  "required": ["type", "episodeId", "providerId", "pageUrl", "clientTime"],
+  "required": ["type", "episodeId", "providerId", "pageUrl", "client_ts"],
   "properties": {
     "type": {
       "type": "string",
@@ -30,9 +30,9 @@
       "minLength": 1,
       "description": "Page URL"
     },
-    "clientTime": {
+    "client_ts": {
       "type": "number",
-      "description": "Client timestamp"
+      "description": "Client timestamp (monotonic or epoch ms)"
     }
   },
   "additionalProperties": false

@@ -50,8 +50,8 @@ export interface EpisodeChangeRequestMessage extends BaseMessage {
   providerId: string;
   /** Page URL */
   pageUrl: string;
-  /** Client timestamp */
-  clientTime: number;
+  /** Client timestamp (monotonic or epoch ms) */
+  client_ts: number;
 }
 
 /**
@@ -106,8 +106,8 @@ export interface RoomStateMessage extends BaseMessage {
   derivedContentKey?: string;
   /** Last event ID */
   lastEventId: number;
-  /** Server timestamp */
-  serverTime: number;
+  /** Server timestamp (monotonic or epoch ms) */
+  server_ts: number;
 }
 
 /**
@@ -138,8 +138,8 @@ export interface EpisodeChangeMessage extends BaseMessage {
   providerId: string;
   /** Derived content key */
   derivedContentKey: string;
-  /** Server timestamp */
-  serverTime: number;
+  /** Server timestamp (monotonic or epoch ms) */
+  server_ts: number;
 }
 
 /**

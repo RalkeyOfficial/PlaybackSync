@@ -287,7 +287,7 @@ describe('JSON Schema Validation Setup', () => {
       episodeId: 5,
       providerId: 'test-provider',
       pageUrl: 'https://example.com/video/episode/5',
-      clientTime: 1670000000000,
+      client_ts: 1670000000000,
     };
 
     it('should validate valid EPISODE_CHANGE_REQUEST message', () => {
@@ -302,7 +302,7 @@ describe('JSON Schema Validation Setup', () => {
         episodeId: 'episode-5',
         providerId: 'test-provider',
         pageUrl: 'https://example.com/video/episode/5',
-        clientTime: 1670000000000,
+        client_ts: 1670000000000,
       };
 
       const result = validateMessage(requestWithStringEpisode, 'EPISODE_CHANGE_REQUEST');
@@ -315,7 +315,7 @@ describe('JSON Schema Validation Setup', () => {
         type: 'EPISODE_CHANGE_REQUEST',
         providerId: 'test-provider',
         pageUrl: 'https://example.com/video/episode/5',
-        clientTime: 1670000000000,
+        client_ts: 1670000000000,
       };
 
       const result = validateMessage(invalidRequest, 'EPISODE_CHANGE_REQUEST');
@@ -332,7 +332,7 @@ describe('JSON Schema Validation Setup', () => {
         type: 'EPISODE_CHANGE_REQUEST',
         episodeId: 5,
         pageUrl: 'https://example.com/video/episode/5',
-        clientTime: 1670000000000,
+        client_ts: 1670000000000,
       };
 
       const result = validateMessage(invalidRequest, 'EPISODE_CHANGE_REQUEST');
@@ -349,7 +349,7 @@ describe('JSON Schema Validation Setup', () => {
         type: 'EPISODE_CHANGE_REQUEST',
         episodeId: 5,
         providerId: 'test-provider',
-        clientTime: 1670000000000,
+        client_ts: 1670000000000,
       };
 
       const result = validateMessage(invalidRequest, 'EPISODE_CHANGE_REQUEST');
@@ -361,7 +361,7 @@ describe('JSON Schema Validation Setup', () => {
       }
     });
 
-    it('should reject EPISODE_CHANGE_REQUEST missing required field: clientTime', () => {
+    it('should reject EPISODE_CHANGE_REQUEST missing required field: client_ts', () => {
       const invalidRequest = {
         type: 'EPISODE_CHANGE_REQUEST',
         episodeId: 5,
@@ -374,7 +374,7 @@ describe('JSON Schema Validation Setup', () => {
       expect(result.errors).not.toBeNull();
       if (result.errors) {
         const errorMessages = result.errors.map(e => e.message || '').join(' ');
-        expect(errorMessages).toMatch(/clientTime/i);
+        expect(errorMessages).toMatch(/client_ts/i);
       }
     });
   });

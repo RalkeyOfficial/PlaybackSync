@@ -5,7 +5,7 @@
 
 import { FastifyPluginAsync } from 'fastify';
 import { getConfig } from '../config';
-import { logger, maskId } from '../utils/logger';
+import { logger } from '../utils/logger';
 import { verifyPassword } from '../utils/password';
 import { toRoomId } from '../types/ids';
 import { roomValidationPreHandler } from '../utils/room-validation';
@@ -127,7 +127,7 @@ const sharePlugin: FastifyPluginAsync = async fastify => {
         // Log failed authentication attempt
         logger.warn(
           {
-            roomId: maskId(roomId),
+            roomId,
           },
           'share.auth_failed'
         );
@@ -150,7 +150,7 @@ const sharePlugin: FastifyPluginAsync = async fastify => {
       // Log successful authentication
       logger.info(
         {
-          roomId: maskId(roomId),
+          roomId,
           targetUrl: room.targetUrl,
         },
         'share.auth_success'

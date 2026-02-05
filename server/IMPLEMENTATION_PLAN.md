@@ -44,7 +44,7 @@ This document outlines a step-by-step implementation plan for the PlaybackSync s
 - Configure pino logger with environment-based log levels
 - Set up pino-pretty for development
 - Create logging utility module with helper functions
-- Implement anonymization helpers (maskId, redactIP)
+- Implement anonymization helpers (redactIP)
 - Add structured logging to server startup/shutdown
 - Configure log format based on NODE_ENV (pretty in dev, JSON in prod)
 

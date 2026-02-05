@@ -3,7 +3,7 @@
  */
 
 import type { Room } from '../types/room';
-import { logger, maskId } from './logger';
+import { logger } from './logger';
 import { deleteRoom, cleanupExpiredRooms } from '../storage/rooms';
 import type { RoomId } from '../types/ids';
 
@@ -22,8 +22,8 @@ export function closeRoomConnections(room: Room): void {
       // Log warning but continue cleanup
       logger.warn(
         {
-          roomId: maskId(room.roomId),
-          clientId: maskId(client.clientId),
+          roomId: room.roomId,
+          clientId: client.clientId,
           error,
         },
         'Failed to close WebSocket connection during room cleanup'
@@ -43,9 +43,9 @@ export function cleanupExpiredRoom(roomId: RoomId, room: Room): void {
     closeRoomConnections(room);
     // Delete room from storage
     deleteRoom(roomId);
-    logger.debug({ roomId: maskId(roomId) }, 'Expired room cleaned up');
+    logger.debug({ roomId }, 'Expired room cleaned up');
   } catch (error) {
-    logger.error({ roomId: maskId(roomId), error }, 'Error cleaning up expired room');
+    logger.error({ roomId, error }, 'Error cleaning up expired room');
   }
 }
 

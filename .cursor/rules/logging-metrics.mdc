@@ -10,7 +10,7 @@ alwaysApply: false
 
 ```typescript
 // ✅ GOOD - structured with context
-logger.info({ roomId, clientId: maskId(clientId), event: 'join' }, 'Client joined room');
+logger.info({ roomId, clientId, event: 'join' }, 'Client joined room');
 
 // ❌ BAD - string interpolation
 logger.info(`Client ${clientId} joined room ${roomId}`);
@@ -27,7 +27,6 @@ logger.info(`Client ${clientId} joined room ${roomId}`);
 - Never log passwords (plaintext or hash)
 - Mask clientId in logs if `ANON_LOGGING=true`
 - Redact IP addresses in production logs
-- Use helper function: `maskId(id)` for sensitive identifiers
 
 ## Prometheus Metrics
 

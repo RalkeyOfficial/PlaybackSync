@@ -8,7 +8,7 @@ import type { RoomId } from '../types/ids';
 import type { Room } from '../types/room';
 import { getRoom, isRoomExpired } from '../storage/rooms';
 import { cleanupExpiredRoom } from './room-cleanup';
-import { logger, maskId } from './logger';
+import { logger } from './logger';
 import { toRoomId, isValidUuid } from '../types/ids';
 import { WebSocket } from 'ws';
 import type { ExtendedWebSocket } from '../handlers/websocket';
@@ -34,7 +34,7 @@ function sendError(ws: ExtendedWebSocket, code: string, message: string): void {
       {
         error,
         roomId: ws.roomId,
-        clientId: ws.clientId ? maskId(ws.clientId) : undefined,
+        clientId: ws.clientId || undefined,
         code,
       },
       'Failed to send ERROR message to client'
@@ -52,13 +52,13 @@ function sendError(ws: ExtendedWebSocket, code: string, message: string): void {
 export function validateRoomForConnection(roomId: RoomId, ws: ExtendedWebSocket): Room | null {
   const room = getRoom(roomId);
   if (!room) {
-    logger.warn({ roomId: maskId(roomId) }, 'WebSocket connection rejected: room not found');
+    logger.warn({ roomId }, 'WebSocket connection rejected: room not found');
     ws.close(1008, 'Room not found');
     return null;
   }
 
   if (isRoomExpired(room)) {
-    logger.warn({ roomId: maskId(roomId) }, 'WebSocket connection rejected: room expired');
+    logger.warn({ roomId }, 'WebSocket connection rejected: room expired');
     // Clean up expired room in background (don't await)
     setImmediate(() => {
       cleanupExpiredRoom(roomId, room);
@@ -80,13 +80,13 @@ export function validateRoomForConnection(roomId: RoomId, ws: ExtendedWebSocket)
 export function validateRoomForWebSocket(roomId: RoomId, ws: ExtendedWebSocket): Room | null {
   const room = getRoom(roomId);
   if (!room) {
-    logger.warn({ roomId: maskId(roomId) }, 'Room not found');
+    logger.warn({ roomId }, 'Room not found');
     sendError(ws, 'ROOM_NOT_FOUND', 'Room not found');
     return null;
   }
 
   if (isRoomExpired(room)) {
-    logger.warn({ roomId: maskId(roomId) }, 'Room not found');
+    logger.warn({ roomId }, 'Room not found');
     // Clean up expired room in background (don't await)
     setImmediate(() => {
       cleanupExpiredRoom(roomId, room);
