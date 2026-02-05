@@ -67,6 +67,20 @@ export interface TimeReportMessage extends BaseMessage {
 }
 
 /**
+ * HEARTBEAT message - Client → Server
+ * Regular status update from client for drift detection and buffering detection
+ */
+export interface HeartbeatMessage extends BaseMessage {
+  type: 'HEARTBEAT';
+  /** Current playback position reported by client (seconds) */
+  currentPos: number;
+  /** Current player state */
+  playerState: 'playing' | 'paused' | 'buffering';
+  /** Optional clock sample for clock synchronization (client timestamp) */
+  clockSample?: number;
+}
+
+/**
  * STATE message - Server → Client
  * Authoritative playback state broadcast
  */
@@ -181,13 +195,28 @@ export interface ServerShutdownMessage extends BaseMessage {
 }
 
 /**
+ * SYNC_ADJUST message - Server → Client
+ * Server-driven corrective action for drift reconciliation
+ */
+export interface SyncAdjustMessage extends BaseMessage {
+  type: 'SYNC_ADJUST';
+  /** Server timestamp (monotonic or epoch ms) */
+  serverTime: number;
+  /** Target playback position to sync to (seconds) */
+  targetPos: number;
+  /** Sync adjustment mode: 'nudge-rate' for small corrections, 'seek' for large corrections */
+  mode: 'nudge-rate' | 'seek';
+}
+
+/**
  * Union type of all client-to-server messages
  */
 export type ClientToServerMessage =
   | JoinMessage
   | EventMessage
   | EpisodeChangeRequestMessage
-  | TimeReportMessage;
+  | TimeReportMessage
+  | HeartbeatMessage;
 
 /**
  * Union type of all server-to-client messages
@@ -199,7 +228,8 @@ export type ServerToClientMessage =
   | EpisodeChangeMessage
   | ContentMismatchMessage
   | ErrorMessage
-  | ServerShutdownMessage;
+  | ServerShutdownMessage
+  | SyncAdjustMessage;
 
 /**
  * Union type of all WebSocket messages

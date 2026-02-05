@@ -15,6 +15,7 @@ import { extractRoomIdFromUrl } from '../utils/connection-helpers';
 import { handleJoinMessage } from './join';
 import { handleEventMessage } from './event';
 import { handleEpisodeChangeRequest } from './episode-change';
+import { handleHeartbeatMessage } from './heartbeat';
 import type { RateLimiterState } from '../utils/rate-limiter';
 
 /**
@@ -35,7 +36,7 @@ export interface ExtendedWebSocket extends WebSocket {
  * Map to track WebSocket connections by roomId
  * Key: roomId, Value: Set of ExtendedWebSocket connections
  */
-const connectionsByRoom = new Map<RoomId, Set<ExtendedWebSocket>>();
+export const connectionsByRoom = new Map<RoomId, Set<ExtendedWebSocket>>();
 
 /**
  * Handle WebSocket connection upgrade
@@ -96,6 +97,9 @@ export function handleConnection(ws: ExtendedWebSocket, req: { url?: string }): 
       } else if (message.type === 'EPISODE_CHANGE_REQUEST') {
         // Handle EPISODE_CHANGE_REQUEST message
         handleEpisodeChangeRequest(ws, message, roomId, connectionsByRoom);
+      } else if (message.type === 'HEARTBEAT') {
+        // Handle HEARTBEAT message for drift detection
+        handleHeartbeatMessage(ws, message, roomId, connectionsByRoom);
       } else {
         // Other message types will be handled in later steps
         logger.debug({ messageType: message.type, roomId }, 'Message received');

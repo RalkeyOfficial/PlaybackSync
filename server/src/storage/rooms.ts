@@ -62,6 +62,15 @@ export function getRoom(roomId: RoomId): Room | undefined {
 }
 
 /**
+ * Get all rooms (including expired ones)
+ * Useful for periodic tasks that need to iterate over all rooms
+ * @returns Array of all Room objects
+ */
+export function getAllRooms(): Room[] {
+  return Array.from(rooms.values());
+}
+
+/**
  * Delete a room from storage
  * @param roomId - Room identifier
  * @returns True if room was deleted, false if room didn't exist

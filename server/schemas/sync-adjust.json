@@ -1,0 +1,28 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "title": "SYNC_ADJUST Message Schema",
+  "description": "Schema for SYNC_ADJUST message sent by server for drift correction",
+  "required": ["type", "serverTime", "targetPos", "mode"],
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "SYNC_ADJUST"
+    },
+    "serverTime": {
+      "type": "number",
+      "description": "Server timestamp (monotonic or epoch ms)"
+    },
+    "targetPos": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Target playback position to sync to (seconds)"
+    },
+    "mode": {
+      "type": "string",
+      "enum": ["nudge-rate", "seek"],
+      "description": "Sync adjustment mode: 'nudge-rate' for small corrections, 'seek' for large corrections"
+    }
+  },
+  "additionalProperties": false
+}

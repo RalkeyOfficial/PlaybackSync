@@ -552,7 +552,6 @@ Server rule: serialize state updates per room.
 
 - Drift reconciliation MUST NOT run:
   - before first JOIN reconciliation completes
-  - on clients that have not yet sent TIME_REPORT at least once
 
 JOIN reconciliation is considered a “soft correction”.
 Drift reconciliation is considered a “maintenance correction”.

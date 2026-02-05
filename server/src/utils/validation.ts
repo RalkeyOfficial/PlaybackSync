@@ -15,6 +15,8 @@ export type MessageSchemaType =
   | 'EVENT'
   | 'EPISODE_CHANGE_REQUEST'
   | 'TIME_REPORT'
+  | 'HEARTBEAT'
+  | 'SYNC_ADJUST'
   | 'STATE'
   | 'COMMAND'
   | 'ERROR';
@@ -49,6 +51,8 @@ function loadSchemasInternal(): SchemaMap {
     EVENT: 'event.json',
     EPISODE_CHANGE_REQUEST: 'episode-change-request.json',
     TIME_REPORT: 'time-report.json',
+    HEARTBEAT: 'heartbeat.json',
+    SYNC_ADJUST: 'sync-adjust.json',
     STATE: 'state.json',
     COMMAND: 'command.json',
     ERROR: 'error.json',

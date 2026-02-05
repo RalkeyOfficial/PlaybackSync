@@ -16,10 +16,12 @@ export interface Config {
   anonLogging: boolean;
   /** Room expiration time in seconds - rooms are deleted after this duration (default: 86400 = 24h) */
   roomTtlSeconds: number;
-  /** Interval in milliseconds between automatic drift reconciliation checks (default: 5000 = 5s) */
-  driftCheckIntervalMs: number;
   /** Maximum acceptable time drift in milliseconds before triggering correction (default: 500 = 0.5s) */
   driftThresholdMs: number;
+  /** Threshold in milliseconds under which nudge-rate correction is preferred (default: 200 = 0.2s) */
+  nudgeThresholdMs: number;
+  /** Threshold in milliseconds above which seek correction is preferred (default: 500 = 0.5s) */
+  seekThresholdMs: number;
   /** Cooldown window in milliseconds after explicit events - reconciliation is suspended during this period (default: 3000 = 3s) */
   cooldownWindowMs: number;
   /** Tombstone duration in milliseconds - allows clients to reconnect with same clientId within this window (default: 30000 = 30s) */
@@ -51,8 +53,9 @@ export function getConfig(): Config {
     nodeEnv: (process.env.NODE_ENV as NodeEnv) || 'development',
     anonLogging: process.env.ANON_LOGGING !== 'false',
     roomTtlSeconds: parseInt(process.env.ROOM_TTL_SECONDS || '86400', 10),
-    driftCheckIntervalMs: parseInt(process.env.DRIFT_CHECK_INTERVAL_MS || '5000', 10),
     driftThresholdMs: parseInt(process.env.DRIFT_THRESHOLD_MS || '500', 10),
+    nudgeThresholdMs: parseInt(process.env.NUDGE_THRESHOLD_MS || '200', 10),
+    seekThresholdMs: parseInt(process.env.SEEK_THRESHOLD_MS || '500', 10),
     cooldownWindowMs: parseInt(process.env.COOLDOWN_WINDOW_MS || '3000', 10),
     clientTombstoneMs: parseInt(process.env.CLIENT_TOMBSTONE_MS || '30000', 10),
     rateLimitEventsPerSec: parseInt(process.env.RATE_LIMIT_EVENTS_PER_SEC || '10', 10),
