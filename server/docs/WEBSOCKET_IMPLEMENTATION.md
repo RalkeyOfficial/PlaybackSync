@@ -1,8 +1,10 @@
 # WebSocket Implementation Documentation
 
-This document describes the WebSocket server implementation for PlaybackSync, including connection handling, message processing, and lifecycle management.
+This document describes how the WebSocket server works - how connections are established, how messages flow through the system, and how the server manages client connections. Think of this as the "how it works" guide.
 
-For detailed information about WebSocket message types and their schemas, see [WebSocket Types Documentation](./WEBSOCKET_TYPES.md).
+For detailed information about specific message types and their formats, see [WebSocket Types Documentation](./WEBSOCKET_TYPES.md).
+
+For detailed information about how individual message handlers work, see [WebSocket Handlers Documentation](./WEBSOCKET_HANDLERS.md).
 
 ## Overview
 
@@ -20,17 +22,23 @@ The WebSocket server is integrated with Fastify using the `ws` library:
 
 ### Connection Lifecycle
 
-1. **Connection Establishment**: Client initiates WebSocket connection via HTTP upgrade to `wss://host/{roomId}`
-2. **Room ID Extraction**: Server extracts `roomId` from the WebSocket URL path
-3. **JOIN Timeout**: Connection must send a `JOIN` message within the configured timeout (default: 5 seconds)
-4. **Authentication**: `JOIN` message is validated and authenticated (password verification)
-5. **Client ID Generation**: Server generates a unique `clientId` for the client (or reattaches if reconnection)
-6. **Rate Limiter Initialization**: Rate limiter state is created and stored on the connection for EVENT message rate limiting
-7. **State Sync**: Server sends `ROOM_STATE` message with current room state and assigned `clientId`
-8. **Active State**: Connection is active and can send/receive messages:
-   - ✅ Clients can send `EVENT` messages (play, pause, seek)
-   - ✅ Server broadcasts `STATE` messages after processing events
-9. **Disconnection**: Connection is closed (client disconnect, timeout, error, or room deletion)
+Here's what happens when a client connects:
+
+1. **Connection Request**: Client initiates WebSocket connection via HTTP upgrade to `wss://host/{roomId}`
+2. **Room ID Extraction**: Server extracts `roomId` from the WebSocket URL path (`/{roomId}`)
+3. **Room Validation**: Server checks if the room exists and is not expired **before** accepting the connection. If invalid, connection is rejected immediately.
+4. **Connection Accepted**: If room is valid, connection is accepted and `roomId` is stored on the connection
+5. **JOIN Timeout Started**: Server starts a timer (default: 5 seconds). If no `JOIN` message arrives within this time, the connection is closed.
+6. **JOIN Message**: Client must send a `JOIN` message with the room password
+7. **Authentication**: Server validates the password and checks connection limits
+8. **Client Registration**: Server generates or reattaches a `clientId` for the client (handles reconnection with tombstone pattern)
+9. **Rate Limiter Setup**: Rate limiter state is created and stored on the connection for EVENT message rate limiting
+10. **State Sync**: Server sends `ROOM_STATE` message with current room state, assigned `clientId`, and optionally `recentEvents` for reconnections
+11. **Active State**: Connection is now active and can send/receive messages:
+    - ✅ Clients can send `EVENT`, `EPISODE_CHANGE_REQUEST`, and `HEARTBEAT` messages
+    - ✅ Server broadcasts `STATE` messages after processing events
+    - ✅ Server sends `SYNC_ADJUST` messages for drift correction
+12. **Disconnection**: Connection is closed (client disconnect, timeout, error, or room deletion). If client was registered, a tombstone is created for reconnection window.
 
 ## Connection Handling
 
@@ -45,10 +53,12 @@ handleConnection(ws: ExtendedWebSocket, req: { url?: string })
 The handler performs the following:
 
 1. **Extracts roomId**: Parses `roomId` from the WebSocket URL path (`/{roomId}`)
-2. **Validates roomId**: Ensures `roomId` is a valid UUID v4 format
-3. **Logs connection**: Structured log entry with request URL and roomId
-4. **Sets JOIN timeout**: Timer that closes connection if no `JOIN` message received
-5. **Registers event handlers**: Sets up handlers for `message`, `close`, and `error` events
+2. **Validates roomId**: Ensures `roomId` is a valid UUID v4 format. If invalid, connection is rejected.
+3. **Validates room exists**: Checks if the room exists and is not expired **before** accepting the connection. If room is invalid, connection is closed immediately.
+4. **Stores roomId**: If room is valid, `roomId` is stored on the connection object
+5. **Logs connection**: Structured log entry with request URL and roomId
+6. **Sets JOIN timeout**: Timer that closes connection if no `JOIN` message received within timeout period
+7. **Registers event handlers**: Sets up handlers for `message`, `close`, and `error` events
 
 ### Extended WebSocket Interface
 
@@ -83,11 +93,14 @@ Connections are tracked in memory:
 
 ### Message Flow
 
-1. **Receive**: Raw message arrives as `Buffer`
-2. **Parse**: Convert to UTF-8 string and parse JSON
-3. **Validate**: Validate message against JSON Schema using `ajv`
-4. **Process**: Handle message based on type
-5. **Respond**: Send response messages (if needed)
+When a message arrives from a client, here's what happens:
+
+1. **Size Check**: Message size is validated against `maxMessageSizeBytes` limit. If exceeded, connection is closed.
+2. **Parse**: Convert raw `Buffer` to UTF-8 string and parse JSON
+3. **Route**: Extract `type` field and route to appropriate handler based on message type
+4. **Validate**: Handler validates message against JSON Schema using `ajv` before processing
+5. **Process**: Handler processes the message and updates room state if needed
+6. **Respond**: Handler sends response messages (if needed) - either to the sender or broadcast to all clients
 
 ### Message Validation
 
@@ -106,24 +119,22 @@ For details on message schemas and types, see [WebSocket Types Documentation](./
 
 ### Message Types
 
-The server handles the following message types:
+The server currently handles the following message types:
 
-**Client → Server**:
+**Client → Server** (handled):
 
-- `JOIN` - Client authentication and room joining
+- `JOIN` - Client authentication and room joining (required first message)
 - `EVENT` - Playback control events (play, pause, seek)
 - `EPISODE_CHANGE_REQUEST` - Request to change episode
-- `TIME_REPORT` - Drift reconciliation time reports
+- `HEARTBEAT` - Regular status updates for drift detection
 
-**Server → Client**:
+**Server → Client** (sent):
 
-- `STATE` - Authoritative playback state broadcast
-- `COMMAND` - Server-initiated commands
-- `ERROR` - Error responses
-- `ROOM_STATE` - Full room state on join/rejoin
-- `EPISODE_CHANGE` - Episode change broadcast
-- `CONTENT_MISMATCH` - Content identity mismatch advisory
-- `SERVER_SHUTDOWN` - Server shutdown notification
+- `ROOM_STATE` - Full room state sent on join/rejoin (includes `clientId` and optionally `recentEvents`)
+- `STATE` - Authoritative playback state broadcast (sent after events)
+- `EPISODE_CHANGE` - Episode change broadcast (sent after episode change requests)
+- `SYNC_ADJUST` - Drift correction message (sent to specific client when drift detected)
+- `ERROR` - Error responses for various failure scenarios
 
 For complete message type definitions, see [WebSocket Types Documentation](./WEBSOCKET_TYPES.md).
 
@@ -135,7 +146,8 @@ Connections must send a `JOIN` message within the configured timeout:
 
 - **Default**: 5 seconds (configurable via `JOIN_TIMEOUT_MS` environment variable)
 - **Behavior**: Connection is closed with code `1008` if timeout expires
-- **Clearing**: Timeout is cleared when any message is received (before validation)
+- **Clearing**: Timeout is cleared **only** when a `JOIN` message is received. Other message types do not clear the timeout.
+- **Purpose**: Ensures clients authenticate quickly and prevents unauthenticated connections from staying open
 
 ### Timeout Configuration
 
@@ -165,17 +177,22 @@ ws.on('message', (data: Buffer) => {
 
 **Message Routing**:
 
-- `JOIN` messages are handled by `handleJoinMessage()`
-- `EVENT` messages are handled by `handleEventMessage()`
-- `EPISODE_CHANGE_REQUEST` messages are handled by `handleEpisodeChangeRequest()`
-- Other message types are logged and will be handled in future phases
+Messages are routed to handlers based on the `type` field:
+
+- `JOIN` → `handleJoinMessage()` - Authentication and room joining
+- `EVENT` → `handleEventMessage()` - Playback control events (play/pause/seek)
+- `EPISODE_CHANGE_REQUEST` → `handleEpisodeChangeRequest()` - Episode change requests
+- `HEARTBEAT` → `handleHeartbeatMessage()` - Status updates for drift detection
+- Other message types → Logged as unhandled (not processed)
 
 **Error Handling**:
 
-- Invalid JSON: Connection closed with code `1003`
-- Validation errors: `ERROR` message sent to client
-- Processing errors: Logged and connection may be closed
-- Rate limit exceeded: `ERROR` message with code `RATE_LIMITED` sent to client
+- **Invalid JSON**: Connection closed with code `1003` ("Invalid message format")
+- **Message too large**: Connection closed with code `1009` if exceeds `maxMessageSizeBytes`
+- **Validation errors**: `ERROR` message sent to client with `INVALID_MESSAGE` code
+- **Processing errors**: Logged with structured context, connection may be closed depending on severity
+- **Rate limit exceeded**: `ERROR` message with code `RATE_LIMITED` sent to client (for EVENT messages)
+- **Not authenticated**: `ERROR` message with code `NOT_AUTHENTICATED` sent to client (for messages requiring JOIN)
 
 ### Close Handler
 
@@ -324,99 +341,17 @@ All WebSocket events are logged using structured logging (pino):
 - `reason`: Close reason
 - `error`: Error object
 
-## EVENT Message Handling
+## Message Handlers
 
-### Overview
+The server has handlers for each message type that process incoming messages and update room state accordingly. Each handler:
 
-The `EVENT` message handler processes explicit playback control events (play, pause, seek) from clients. These events represent user intent, not authoritative state. The server updates room state and broadcasts authoritative `STATE` messages to all clients in the room.
+1. Validates the message against its JSON Schema
+2. Checks authentication (client must have completed JOIN)
+3. Validates room exists and is not expired
+4. Processes the message and updates room state if needed
+5. Sends response messages (either to sender or broadcast to all clients)
 
-### Handler Function
-
-```typescript
-handleEventMessage(ws: ExtendedWebSocket, message: unknown, roomId: RoomId)
-```
-
-### Processing Flow
-
-1. **Authentication Check**: Verifies client has completed JOIN (has `clientId`)
-2. **Message Validation**: Validates EVENT message against JSON Schema
-3. **Room Validation**: Ensures room exists and is not expired
-4. **Rate Limiting**: Checks per-connection rate limit (token bucket algorithm)
-5. **State Update**: Updates room state based on event type:
-   - `play`: Sets `paused = false`
-   - `pause`: Sets `paused = true`
-   - `seek`: Updates `time` to the provided value
-6. **Event Logging**: Appends event to room's event log (ring buffer, max 100 events)
-7. **State Broadcasting**: Broadcasts `STATE` message to all connected clients
-8. **Logging**: Logs event processing with structured logging
-
-### Rate Limiting
-
-Rate limiting is implemented using a token bucket algorithm:
-
-- **Per-Connection**: Each WebSocket connection has its own rate limiter state
-- **Token Bucket**: Tokens refill at a configurable rate (default: 10 events/second)
-- **Initialization**: Rate limiter state is created during JOIN and stored on the WebSocket connection
-- **Check**: Before processing an EVENT, the rate limiter checks if a token is available
-- **Exceeded**: If rate limit is exceeded, an `ERROR` message with code `RATE_LIMITED` is sent and the event is not processed
-
-**Rate Limiter Implementation**:
-
-```typescript
-class RateLimiter {
-  check(state: RateLimiterState): boolean
-  createState(): RateLimiterState
-}
-```
-
-The rate limiter state is stored on the `ExtendedWebSocket` interface:
-
-```typescript
-interface ExtendedWebSocket extends WebSocket {
-  rateLimiterState?: RateLimiterState;
-}
-```
-
-### State Updates
-
-When processing an EVENT message, the server:
-
-1. **Increments `eventId`**: Each event gets a unique, incrementing event ID
-2. **Updates Timestamps**:
-   - `last_explicit_event_ts`: Set to current server time
-   - `last_state_update_ts`: Set to current server time
-3. **Updates Playback State**:
-   - For `play`: `paused = false`
-   - For `pause`: `paused = true`
-   - For `seek`: `time = eventMessage.value`
-
-### Event Logging
-
-Events are logged to a ring buffer per room:
-
-- **Maximum Size**: 100 events (configurable via `MAX_EVENT_LOG_SIZE`)
-- **Event Structure**: Includes event type, clientId, timestamp, eventId, and optional value
-- **Ring Buffer**: When the log reaches maximum size, oldest events are removed
-
-### State Broadcasting
-
-After processing an EVENT, the server broadcasts a `STATE` message to all connected clients in the room:
-
-- **Authoritative State**: The `STATE` message contains the server's authoritative playback state
-- **All Clients**: All clients receive the broadcast, including the client that sent the EVENT
-- **Event ID**: The `STATE` message includes the updated `eventId` for ordering
-- **Server Timestamp**: Includes `server_ts` for synchronization
-
-**Important**: Clients must not suppress or ignore `STATE` messages they "caused". The server's `STATE` message is always authoritative, even for the originating client.
-
-### Error Responses
-
-The EVENT handler can send the following error responses:
-
-- `NOT_AUTHENTICATED`: EVENT received before JOIN message
-- `INVALID_MESSAGE`: Message validation failed (schema errors)
-- `RATE_LIMITED`: Rate limit exceeded for this connection
-- `ROOM_NOT_FOUND`: Room doesn't exist or is expired
+For detailed documentation on how each handler works, see [WebSocket Handlers Documentation](./WEBSOCKET_HANDLERS.md).
 
 ## Configuration
 
@@ -426,6 +361,10 @@ The EVENT handler can send the following error responses:
 | ----------------------------- | ------- | ------------------------------------------------------------------ |
 | `JOIN_TIMEOUT_MS`             | `5000`  | Timeout in milliseconds for JOIN message (5 seconds)               |
 | `RATE_LIMIT_EVENTS_PER_SEC`   | `10`    | Maximum number of EVENT messages allowed per second per connection |
+| `MAX_MESSAGE_SIZE_BYTES`      | `65536` | Maximum message size in bytes (64KB default)                      |
+| `MAX_CONNECTIONS_PER_ROOM`    | `100`   | Maximum number of concurrent connections per room                  |
+| `CLIENT_TOMBSTONE_MS`         | `30000` | Reconnection window in milliseconds (30 seconds default)          |
+| `MAX_BROADCAST_RATE_PER_SEC`  | `50`    | Maximum broadcast rate per room (prevents DoS)                    |
 
 ### Configuration Access
 
@@ -455,6 +394,9 @@ const config = getConfig();
 - **TLS**: Use WSS (WebSocket Secure) in production
 - **Origin Validation**: Consider validating Origin header
 - **Rate Limiting**: Token bucket rate limiter per connection for EVENT messages
+- **Message Size Limits**: Messages exceeding `MAX_MESSAGE_SIZE_BYTES` are rejected
+- **Connection Limits**: Maximum connections per room enforced (`MAX_CONNECTIONS_PER_ROOM`)
+- **Password Authentication**: HMAC-SHA256 hash comparison for room passwords
 
 ## Performance
 
@@ -470,156 +412,31 @@ const config = getConfig();
 - **JSON Parsing**: Native `JSON.parse()` for message parsing
 - **Async Processing**: Non-blocking event handlers
 
-## EPISODE_CHANGE_REQUEST Message Handling
-
-### Overview
-
-The `EPISODE_CHANGE_REQUEST` message handler processes episode change requests from clients. Episode changes are treated as **hard resets** that invalidate all previous playback state. The server updates room content identity, resets playback state, and broadcasts authoritative `EPISODE_CHANGE` messages to all clients.
-
-### Handler Function
-
-```typescript
-handleEpisodeChangeRequest(ws: ExtendedWebSocket, message: unknown, roomId: RoomId, connectionsByRoom: ConnectionsByRoom)
-```
-
-### Processing Flow
-
-1. **Authentication Check**: Verifies client has completed JOIN (has `clientId`)
-2. **Message Validation**: Validates EPISODE_CHANGE_REQUEST message against JSON Schema
-3. **Room Validation**: Ensures room exists and is not expired
-4. **Derived Content Key Computation**: Computes `derivedContentKey` from URL + provider + episode using SHA-256 hash
-5. **State Reset**: Resets playback state (hard reset):
-   - `paused = true`
-   - `time = 0`
-6. **Event ID Increment**: Increments `eventId` for ordering
-7. **Timestamp Updates**: Updates `last_explicit_event_ts` and `last_state_update_ts`
-8. **Content Identity Update**: Updates `room.contentIdentity` with new episode metadata:
-   - `episodeId`: Episode ID or number
-   - `providerId`: Provider identifier
-   - `derivedContentKey`: Computed hash
-   - `pageUrl`: Normalized page URL
-9. **Legacy State Update**: Updates `room.state.provider` and `room.state.episode` for backward compatibility
-10. **Event Logging**: Appends episode change event to room's event log
-11. **Broadcasting**: Broadcasts `EPISODE_CHANGE` message to all connected clients
-12. **State Broadcasting**: Also broadcasts `STATE` message to ensure all clients have updated playback state
-13. **Logging**: Logs episode change processing with structured logging
-
-### Derived Content Key Computation
-
-The `derivedContentKey` is computed using SHA-256 hash:
-
-```typescript
-function computeDerivedContentKey(pageUrl: string, providerId: string, episodeId: string | number): string
-```
-
-**Computation Process**:
-
-1. **URL Normalization**: Extracts pathname from URL (removes query params and hash)
-2. **Key String Construction**: Creates string: `${providerId}:${normalizedUrl}:${episodeId}`
-3. **Hash Computation**: Computes SHA-256 hash of the key string
-4. **Error Handling**: Falls back to full URL if URL parsing fails
-
-**Purpose**:
-
-- Prevents silent desync when clients think they're watching the same content but aren't
-- Allows lightweight validation without hard-coding provider-specific schemas
-- Provides opaque content identity that clients can compare for equality
-
-### State Reset Semantics
-
-Episode changes are **hard resets**:
-
-- **Playback State**: Always reset to `paused = true`, `time = 0`
-- **Previous State Invalidated**: All previous playback state is invalidated
-- **Drift Logic Suppressed**: Drift reconciliation logic is explicitly reset/suppressed
-- **Event ID Incremented**: New event ID ensures proper ordering
-
-**Important**: Episode changes reset playback state even if the room was already paused at time 0. This ensures all clients start from a clean state when an episode changes.
-
-### Content Identity Update
-
-When processing an episode change:
-
-1. **Content Identity Object**: Creates/updates `room.contentIdentity` with:
-   - `episodeId`: From request (string or number)
-   - `providerId`: From request
-   - `derivedContentKey`: Computed hash
-   - `pageUrl`: From request
-
-2. **Legacy State Fields**: Updates `room.state.provider` and `room.state.episode` for backward compatibility with older clients
-
-3. **ROOM_STATE Inclusion**: Content identity is included in `ROOM_STATE` messages sent to clients on JOIN
-
-### Episode Change Broadcasting
-
-After processing an episode change, the server broadcasts:
-
-1. **EPISODE_CHANGE Message**: Contains:
-   - `eventId`: Updated event ID for ordering
-   - `episodeId`: New episode ID
-   - `providerId`: Provider identifier
-   - `derivedContentKey`: Computed content key
-   - `serverTime`: Server timestamp
-
-2. **STATE Message**: Also broadcasts `STATE` message to ensure all clients have updated playback state (`paused = true`, `time = 0`)
-
-**Broadcasting Behavior**:
-
-- **All Clients**: All connected clients receive both messages, including the sender
-- **Closed Connections**: Gracefully handles closed connections (no errors thrown)
-- **Event Ordering**: Both messages include the same `eventId` for ordering
-
-### Error Responses
-
-The EPISODE_CHANGE_REQUEST handler can send the following error responses:
-
-- `NOT_AUTHENTICATED`: EPISODE_CHANGE_REQUEST received before JOIN message
-- `INVALID_MESSAGE`: Message validation failed (schema errors)
-- `ROOM_NOT_FOUND`: Room doesn't exist or is expired
-
-### Multiple Episode Changes
-
-The handler correctly processes multiple consecutive episode changes:
-
-- Each change increments `eventId` sequentially
-- Each change resets playback state
-- Each change updates content identity
-- Each change broadcasts to all clients
-
-### Related Functions
-
-- `computeDerivedContentKey()`: Computes SHA-256 hash from URL + provider + episode
-- `broadcastEpisodeChange()`: Broadcasts EPISODE_CHANGE message to all clients
-- `broadcastState()`: Broadcasts STATE message to all clients
-- `addEventToLog()`: Adds event to room's event log
-
 ## Testing
 
 Unit tests for WebSocket implementation are located in:
 
 - `src/__tests__/websocket/server-setup.test.ts` - Connection handling and JOIN message tests
-- `src/__tests__/websocket/event-handler.test.ts` - EVENT message handling tests
-- `src/__tests__/websocket/episode-change-handler.test.ts` - EPISODE_CHANGE_REQUEST message handling tests
+- `src/__tests__/websocket/join-handler.test.ts` - JOIN message handler tests
+- `src/__tests__/websocket/event-handler.test.ts` - EVENT message handler tests
+- `src/__tests__/websocket/episode-change-handler.test.ts` - EPISODE_CHANGE_REQUEST message handler tests
+- `src/__tests__/websocket/drift-reconciliation.test.ts` - HEARTBEAT and drift detection tests
 
 Tests cover:
 
-- Connection acceptance
+- Connection acceptance and room validation
 - JOIN timeout behavior
 - Connection metadata storage
-- Connection close handling
+- Connection close handling and tombstone creation
 - Error handling
 - Multiple concurrent connections
-- EVENT message processing (play, pause, seek)
+- Message validation and routing
 - Rate limiting behavior
-- State updates and broadcasting
-- Event logging
-- Episode change request processing
-- Derived content key computation
-- Episode change broadcasting
-- Content identity updates
-- State reset semantics
+- Broadcasting behavior
+- Reconnection logic
 
 ## Related Documentation
 
-- [WebSocket Types Documentation](./WEBSOCKET_TYPES.md) - Complete message type definitions
+- [WebSocket Types Documentation](./WEBSOCKET_TYPES.md) - Complete message type definitions and schemas
+- [WebSocket Handlers Documentation](./WEBSOCKET_HANDLERS.md) - Detailed handler implementation documentation
 - [Rooms API Documentation](./ROOMS_API.md) - HTTP API for room management

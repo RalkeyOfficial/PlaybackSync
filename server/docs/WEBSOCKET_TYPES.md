@@ -233,44 +233,89 @@ interface EpisodeChangeRequestMessage {
 
 ---
 
-### TIME_REPORT
+### HEARTBEAT
 
-Sent by clients in response to drift reconciliation requests from the server.
+Sent by clients at regular intervals to report their current playback status. The server uses these messages to detect when clients drift out of sync and automatically corrects them.
 
-**Schema**: `schemas/time-report.json`
+Think of heartbeats like a "check-in" message - clients send them periodically to let the server know where they are in the video and what state their player is in. If the server notices a client is drifting behind or ahead, it sends a `SYNC_ADJUST` message to bring them back in sync.
+
+**Schema**: `schemas/heartbeat.json`
 
 **TypeScript Interface**:
 
 ```typescript
-interface TimeReportMessage {
-  type: 'TIME_REPORT';
-  current_time: number; // Current playback time (seconds)
-  client_ts: number; // Client timestamp
+interface HeartbeatMessage {
+  type: 'HEARTBEAT';
+  currentPos: number; // Current playback position reported by client (seconds)
+  playerState: 'playing' | 'paused' | 'buffering'; // Current player state
+  clockSample?: number; // Optional clock sample for clock synchronization (client timestamp)
 }
 ```
 
 **Required Fields**:
 
-- `type`: Must be `"TIME_REPORT"`
-- `current_time`: Current playback time in seconds (>= 0)
-- `client_ts`: Client timestamp
+- `type`: Must be `"HEARTBEAT"`
+- `currentPos`: Current playback position in seconds (>= 0)
+- `playerState`: Current player state - must be one of `"playing"`, `"paused"`, or `"buffering"`
+
+**Optional Fields**:
+
+- `clockSample`: Optional clock sample for clock synchronization (client timestamp)
 
 **Validation Rules**:
 
-- `current_time` must be >= 0
-- `client_ts` must be a number
+- `currentPos` must be >= 0
+- `playerState` must be one of: `"playing"`, `"paused"`, `"buffering"`
+- `clockSample` must be a number if provided
 
-**Example**:
+**Example (Playing)**:
 
 ```json
 {
-  "type": "TIME_REPORT",
-  "current_time": 123.456,
-  "client_ts": 1670000000000
+  "type": "HEARTBEAT",
+  "currentPos": 123.456,
+  "playerState": "playing",
+  "clockSample": 1670000000000
 }
 ```
 
-**Response**: Server uses this for drift reconciliation calculations
+**Example (Paused)**:
+
+```json
+{
+  "type": "HEARTBEAT",
+  "currentPos": 123.456,
+  "playerState": "paused"
+}
+```
+
+**Example (Buffering)**:
+
+```json
+{
+  "type": "HEARTBEAT",
+  "currentPos": 123.456,
+  "playerState": "buffering"
+}
+```
+
+**Server Processing**:
+
+1. Updates the client's `lastSeen` timestamp
+2. Skips drift reconciliation if within a cooldown window after an explicit event (like play/pause/seek)
+3. Calculates the expected playback time based on room state
+4. Compares expected time with reported `currentPos` to detect drift
+5. If drift exceeds threshold, sends `SYNC_ADJUST` message to correct it
+
+**Drift Reconciliation**: The server uses HEARTBEAT messages for drift detection and reconciliation. Clients send HEARTBEAT messages periodically, and the server automatically detects when clients drift out of sync and sends SYNC_ADJUST messages to correct them. The server does not request TIME_REPORT messages - all drift reconciliation is handled through HEARTBEAT messages.
+
+**Response**: Server may send `SYNC_ADJUST` message if drift is detected, or no response if client is in sync
+
+**Error Responses**:
+
+- `NOT_AUTHENTICATED`: HEARTBEAT received before JOIN authentication
+- `INVALID_MESSAGE`: Message validation failed (schema errors)
+- `ROOM_NOT_FOUND`: Room doesn't exist or is expired
 
 ---
 
@@ -332,9 +377,9 @@ interface StateMessage {
 
 **When Sent**:
 
-- After every explicit event (EVENT, EPISODE_CHANGE)
-- During drift reconciliation
+- After every explicit event (EVENT, EPISODE_CHANGE_REQUEST)
 - On client JOIN (as part of ROOM_STATE)
+- Not sent during drift reconciliation (drift correction uses SYNC_ADJUST instead)
 
 ---
 
@@ -355,6 +400,13 @@ interface RoomStateMessage {
   derivedContentKey?: string;
   lastEventId: number;
   server_ts: number;
+  recentEvents?: Array<{
+    type: string; // Event type (e.g., 'play', 'pause', 'seek', 'episode_change')
+    value?: number | string; // Optional event value (e.g., seek position in seconds)
+    clientId?: string; // Client ID that triggered the event
+    ts: number; // Timestamp when event occurred (milliseconds)
+    eventId: number; // Event ID for ordering
+  }>;
 }
 ```
 
@@ -372,8 +424,9 @@ interface RoomStateMessage {
 - `episodeId`: Episode ID (string or number)
 - `providerId`: Provider identifier
 - `derivedContentKey`: Derived content key for content identity
+- `recentEvents`: Array of events that occurred since the client's last known `eventId` (only included for reconnections with valid tombstone)
 
-**Example**:
+**Example (First Connection)**:
 
 ```json
 {
@@ -389,68 +442,46 @@ interface RoomStateMessage {
 }
 ```
 
+**Example (Reconnection with Event Replay)**:
+
+```json
+{
+  "type": "ROOM_STATE",
+  "clientId": "123e4567-e89b-12d3-a456-426614174001",
+  "paused": false,
+  "time": 125.789,
+  "episodeId": 5,
+  "providerId": "netflix",
+  "derivedContentKey": "netflix:12345:ep5",
+  "lastEventId": 45,
+  "server_ts": 1670000001000,
+  "recentEvents": [
+    {
+      "type": "seek",
+      "value": 120.0,
+      "clientId": "456e7890-e89b-12d3-a456-426614174002",
+      "ts": 1670000000500,
+      "eventId": 43
+    },
+    {
+      "type": "play",
+      "clientId": "456e7890-e89b-12d3-a456-426614174002",
+      "ts": 1670000000600,
+      "eventId": 44
+    },
+    {
+      "type": "pause",
+      "clientId": "789e0123-e89b-12d3-a456-426614174003",
+      "ts": 1670000000800,
+      "eventId": 45
+    }
+  ]
+}
+```
+
 **Reconnection**: To reconnect with the same client identity, include the `clientId` from a previous `ROOM_STATE` in your `JOIN` message. This allows the server to reattach your connection if you disconnect and reconnect within the tombstone window (default: 30 seconds).
 
----
-
-### COMMAND
-
-Server-initiated action command sent to clients.
-
-**Schema**: `schemas/command.json`
-
-**TypeScript Interface**:
-
-```typescript
-interface CommandMessage {
-  type: 'COMMAND';
-  cmd: 'seek' | 'play' | 'pause';
-  value?: number; // Required for 'seek' commands (seconds)
-  server_ts?: number; // Optional server timestamp
-}
-```
-
-**Required Fields**:
-
-- `type`: Must be `"COMMAND"`
-- `cmd`: Command type (`"seek"`, `"play"`, or `"pause"`)
-
-**Conditional Fields**:
-
-- `value`: Required when `cmd` is `"seek"`, must be >= 0 (seconds)
-
-**Optional Fields**:
-
-- `server_ts`: Server timestamp
-
-**Validation Rules**:
-
-- `cmd` must be one of: `"seek"`, `"play"`, `"pause"`
-- `value` is required if `cmd === "seek"`
-- `value` must be >= 0 if provided
-
-**Examples**:
-
-Play command:
-
-```json
-{
-  "type": "COMMAND",
-  "cmd": "play",
-  "server_ts": 1670000000000
-}
-```
-
-Seek command:
-
-```json
-{
-  "type": "COMMAND",
-  "cmd": "seek",
-  "value": 123.456,
-  "server_ts": 1670000000000
-}
-```
+**Event Replay**: For reconnections with a valid tombstone, the server includes a `recentEvents` array containing events that occurred since the client's last known `eventId`. This allows clients to replay missed events and catch up to the current state.
 
 ---
 
@@ -535,41 +566,78 @@ Clients should:
 
 ---
 
-### CONTENT_MISMATCH
+### SYNC_ADJUST
 
-Advisory message sent when content identity doesn't match.
+Sent by the server to a specific client when drift is detected. This message tells the client how to correct their playback position to stay in sync with the room.
+
+When clients send `HEARTBEAT` messages, the server compares their reported position with where they should be. If there's a significant difference (drift), the server sends this message to correct it. For small drifts, the server uses "nudge-rate" mode which slightly adjusts playback speed. For large drifts, it uses "seek" mode which jumps directly to the correct position.
+
+**Schema**: `schemas/sync-adjust.json`
 
 **TypeScript Interface**:
 
 ```typescript
-interface ContentMismatchMessage {
-  type: 'CONTENT_MISMATCH';
-  expectedContentKey: string;
-  reportedContentKey?: string;
-  server_ts: number;
+interface SyncAdjustMessage {
+  type: 'SYNC_ADJUST';
+  serverTime: number; // Server timestamp (monotonic or epoch ms)
+  targetPos: number; // Target playback position to sync to (seconds)
+  mode: 'nudge-rate' | 'seek'; // Sync adjustment mode
 }
 ```
 
 **Required Fields**:
 
-- `type`: Must be `"CONTENT_MISMATCH"`
-- `expectedContentKey`: Expected derived content key
-- `server_ts`: Server timestamp
+- `type`: Must be `"SYNC_ADJUST"`
+- `serverTime`: Server timestamp (monotonic or epoch milliseconds)
+- `targetPos`: Target playback position to sync to in seconds (>= 0)
+- `mode`: Sync adjustment mode - either `"nudge-rate"` for small corrections or `"seek"` for large corrections
 
-**Optional Fields**:
+**Validation Rules**:
 
-- `reportedContentKey`: Client-reported content key
+- `targetPos` must be >= 0
+- `mode` must be one of: `"nudge-rate"`, `"seek"`
+- `serverTime` must be a number
 
-**Example**:
+**Sync Modes**:
+
+- **`nudge-rate`**: For small drifts (typically < 2 seconds). The client should slightly adjust playback rate to gradually catch up or slow down to the target position. This provides smooth correction without noticeable jumps.
+- **`seek`**: For large drifts (typically >= 2 seconds). The client should immediately seek to the `targetPos`. This provides instant correction when the drift is too large for gradual adjustment.
+
+**Example (Nudge Rate Mode)**:
 
 ```json
 {
-  "type": "CONTENT_MISMATCH",
-  "expectedContentKey": "netflix:12345:ep5",
-  "reportedContentKey": "netflix:12345:ep6",
-  "server_ts": 1670000000000
+  "type": "SYNC_ADJUST",
+  "serverTime": 1670000000000,
+  "targetPos": 125.5,
+  "mode": "nudge-rate"
 }
 ```
+
+**Example (Seek Mode)**:
+
+```json
+{
+  "type": "SYNC_ADJUST",
+  "serverTime": 1670000000000,
+  "targetPos": 130.0,
+  "mode": "seek"
+}
+```
+
+**When Sent**:
+
+- After processing a `HEARTBEAT` message that shows significant drift
+- Only sent to the specific client that sent the HEARTBEAT (not broadcast to all clients)
+- Not sent during cooldown periods after explicit events (play/pause/seek)
+
+**Client Behavior**:
+
+Clients should:
+1. Receive `SYNC_ADJUST` message
+2. If `mode === "nudge-rate"`: Gradually adjust playback rate to reach `targetPos`
+3. If `mode === "seek"`: Immediately seek to `targetPos`
+4. Continue normal playback after correction
 
 ---
 
@@ -651,37 +719,6 @@ Rate limited:
 
 ---
 
-### SERVER_SHUTDOWN
-
-Notification sent to clients when server is shutting down.
-
-**TypeScript Interface**:
-
-```typescript
-interface ServerShutdownMessage {
-  type: 'SERVER_SHUTDOWN';
-  server_ts: number;
-}
-```
-
-**Required Fields**:
-
-- `type`: Must be `"SERVER_SHUTDOWN"`
-- `server_ts`: Server timestamp
-
-**Example**:
-
-```json
-{
-  "type": "SERVER_SHUTDOWN",
-  "server_ts": 1670000000000
-}
-```
-
-**When Sent**: During graceful server shutdown
-
----
-
 ## Type Unions
 
 ### ClientToServerMessage
@@ -693,7 +730,7 @@ type ClientToServerMessage =
   | JoinMessage
   | EventMessage
   | EpisodeChangeRequestMessage
-  | TimeReportMessage;
+  | HeartbeatMessage;
 ```
 
 ### ServerToClientMessage
@@ -704,11 +741,9 @@ Union type of all server-to-client messages:
 type ServerToClientMessage =
   | StateMessage
   | RoomStateMessage
-  | CommandMessage
+  | SyncAdjustMessage
   | EpisodeChangeMessage
-  | ContentMismatchMessage
-  | ErrorMessage
-  | ServerShutdownMessage;
+  | ErrorMessage;
 ```
 
 ### WebSocketMessage
