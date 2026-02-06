@@ -106,19 +106,45 @@ export function handleConnection(ws: ExtendedWebSocket, req: { url?: string }): 
           clearTimeout(ws.joinTimeout);
           ws.joinTimeout = undefined;
         }
+        logger.debug({ roomId, messageType: 'JOIN' }, 'Routing JOIN message to handler');
         handleJoinMessage(ws, message, roomId, connectionsByRoom);
       } else if (message.type === 'EVENT') {
         // Handle EVENT message (play/pause/seek)
+        logger.debug(
+          {
+            roomId,
+            messageType: 'EVENT',
+            event: message.event,
+            clientId: ws.clientId || undefined,
+          },
+          'Routing EVENT message to handler'
+        );
         handleEventMessage(ws, message, roomId, connectionsByRoom);
       } else if (message.type === 'EPISODE_CHANGE_REQUEST') {
         // Handle EPISODE_CHANGE_REQUEST message
+        logger.debug(
+          {
+            roomId,
+            messageType: 'EPISODE_CHANGE_REQUEST',
+            clientId: ws.clientId || undefined,
+          },
+          'Routing EPISODE_CHANGE_REQUEST message to handler'
+        );
         handleEpisodeChangeRequest(ws, message, roomId, connectionsByRoom);
       } else if (message.type === 'HEARTBEAT') {
         // Handle HEARTBEAT message for drift detection
+        logger.debug(
+          {
+            roomId,
+            messageType: 'HEARTBEAT',
+            clientId: ws.clientId || undefined,
+          },
+          'Routing HEARTBEAT message to handler'
+        );
         handleHeartbeatMessage(ws, message, roomId, connectionsByRoom);
       } else {
         // Other message types will be handled in later steps
-        logger.debug({ messageType: message.type, roomId }, 'Message received');
+        logger.debug({ messageType: message.type, roomId }, 'Unhandled message type received');
       }
     } catch (error) {
       logger.error({ error, roomId: ws.roomId || undefined }, 'Error processing WebSocket message');

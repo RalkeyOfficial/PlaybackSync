@@ -138,6 +138,7 @@ export async function roomValidationPreHandler(
   // Get room from storage
   const room = getRoom(roomId);
   if (!room) {
+    logger.debug({ roomId }, 'HTTP request: room not found');
     reply.code(404).send({
       statusCode: 404,
       error: 'Not Found',
@@ -148,6 +149,7 @@ export async function roomValidationPreHandler(
 
   // Check if room is expired - clean up in background and return 404
   if (isRoomExpired(room)) {
+    logger.debug({ roomId }, 'HTTP request: room expired');
     // Clean up expired room in background (don't await)
     setImmediate(() => {
       cleanupExpiredRoom(roomId, room);
@@ -160,6 +162,15 @@ export async function roomValidationPreHandler(
     });
     return;
   }
+
+  logger.debug(
+    {
+      roomId,
+      participantCount: room.connectedClients.size,
+      eventId: room.state.eventId,
+    },
+    'HTTP request: room validated successfully'
+  );
 
   // Attach room to request for use in route handler
   (request as FastifyRequest & { room: Room }).room = room;

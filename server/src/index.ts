@@ -55,7 +55,8 @@ async function startServer() {
       logger.info('Cleanup interval cleared');
 
       // Run final cleanup before shutdown
-      runCleanupTask();
+      const cleanedCount = runCleanupTask();
+      logger.info({ cleanedCount }, 'Final cleanup completed before shutdown');
 
       await server.close();
       logger.info('Server closed');

@@ -85,8 +85,20 @@ export function handleEpisodeChangeRequest(
   room.state.last_state_update_ts = now;
 
   // Reset playback state (hard reset)
+  const previousEpisode = room.contentIdentity?.episodeId;
   room.state.paused = true;
   room.state.time = 0;
+
+  logger.debug(
+    {
+      roomId: roomId,
+      clientId: ws.clientId,
+      previousEpisode,
+      newEpisode: episodeChangeRequest.episodeId,
+      providerId: episodeChangeRequest.providerId,
+    },
+    'State transition: episode change'
+  );
 
   // Update room state with new episode info
   room.contentIdentity = {

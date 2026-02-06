@@ -82,15 +82,30 @@ export function broadcastState(
   // Broadcast to all connected clients
   const roomConnections = connectionsByRoom.get(room.roomId);
   if (!roomConnections) {
+    logger.debug({ roomId: room.roomId }, 'No connections to broadcast STATE to');
     return;
   }
+
+  let successCount = 0;
+  let failureCount = 0;
 
   for (const ws of roomConnections) {
     try {
       if (ws.readyState === WebSocket.OPEN && ws.clientId) {
         ws.send(JSON.stringify(stateMessage));
+        successCount++;
+      } else {
+        logger.debug(
+          {
+            roomId: room.roomId,
+            clientId: ws.clientId || undefined,
+            readyState: ws.readyState,
+          },
+          'Skipping STATE broadcast: connection not ready or missing clientId'
+        );
       }
     } catch (error) {
+      failureCount++;
       logger.warn(
         {
           error,
@@ -101,6 +116,17 @@ export function broadcastState(
       );
     }
   }
+
+  logger.debug(
+    {
+      roomId: room.roomId,
+      eventId: room.state.eventId,
+      successCount,
+      failureCount,
+      totalConnections: roomConnections.size,
+    },
+    'STATE broadcast completed'
+  );
 }
 
 /**
@@ -154,15 +180,30 @@ export function broadcastEpisodeChange(
   // Broadcast to all connected clients
   const roomConnections = connectionsByRoom.get(room.roomId);
   if (!roomConnections) {
+    logger.debug({ roomId: room.roomId }, 'No connections to broadcast EPISODE_CHANGE to');
     return;
   }
+
+  let successCount = 0;
+  let failureCount = 0;
 
   for (const ws of roomConnections) {
     try {
       if (ws.readyState === WebSocket.OPEN && ws.clientId) {
         ws.send(JSON.stringify(episodeChangeMessage));
+        successCount++;
+      } else {
+        logger.debug(
+          {
+            roomId: room.roomId,
+            clientId: ws.clientId || undefined,
+            readyState: ws.readyState,
+          },
+          'Skipping EPISODE_CHANGE broadcast: connection not ready or missing clientId'
+        );
       }
     } catch (error) {
+      failureCount++;
       logger.warn(
         {
           error,
@@ -173,6 +214,18 @@ export function broadcastEpisodeChange(
       );
     }
   }
+
+  logger.debug(
+    {
+      roomId: room.roomId,
+      eventId: room.state.eventId,
+      episodeId: room.contentIdentity.episodeId,
+      successCount,
+      failureCount,
+      totalConnections: roomConnections.size,
+    },
+    'EPISODE_CHANGE broadcast completed'
+  );
 }
 
 /**

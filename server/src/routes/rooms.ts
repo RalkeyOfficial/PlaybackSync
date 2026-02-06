@@ -244,6 +244,7 @@ const roomsPlugin: FastifyPluginAsync = async fastify => {
           roomId,
           ttl: ttlSeconds,
           targetUrl,
+          shareHostname: config.shareHostname,
         },
         'room.created'
       );
@@ -271,6 +272,9 @@ const roomsPlugin: FastifyPluginAsync = async fastify => {
     },
     async () => {
       const rooms = listActiveRooms();
+
+      // Log room list access
+      logger.debug({ roomCount: rooms.length }, 'Room list requested');
 
       // Transform to response format (convert RoomId to string)
       return rooms.map(room => ({
@@ -310,6 +314,15 @@ const roomsPlugin: FastifyPluginAsync = async fastify => {
     async (request, reply) => {
       // Room is validated and attached to request by preHandler
       const room = request.room!;
+
+      logger.debug(
+        {
+          roomId: room.roomId,
+          participantCount: room.connectedClients.size,
+          eventLogSize: room.eventLog.length,
+        },
+        'Room details requested'
+      );
 
       // Transform connectedClients Map to array (exclude WebSocket conn object)
       const connectedClients = Array.from(room.connectedClients.values()).map(client => ({

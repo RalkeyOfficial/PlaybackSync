@@ -134,6 +134,14 @@ export function handleJoinMessage(
     return;
   }
 
+  logger.debug(
+    {
+      roomId: roomId,
+      clientId: clientId,
+    },
+    'JOIN authentication successful'
+  );
+
   // Check for client tombstone (reconnection)
   // According to backend_design_v1.md:
   // - Tombstone allows "re-association" with same clientId
@@ -212,6 +220,17 @@ export function handleJoinMessage(
   // For reconnections with valid tombstone, include recent events since the client's last known eventId
   // For new clients (including expired tombstone), don't include recentEvents (client will sync from current state)
   // lastKnownEventId is already set above if isReconnection === true
+
+  logger.debug(
+    {
+      roomId: roomId,
+      clientId: clientId,
+      isReconnection,
+      lastKnownEventId,
+      currentEventId: room.state.eventId,
+    },
+    'Sending ROOM_STATE to joining client'
+  );
 
   // Send current STATE to joining client (includes clientId and recentEvents for replay if reconnection)
   sendRoomState(ws, room, clientId, lastKnownEventId);

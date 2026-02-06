@@ -111,6 +111,24 @@ export function sendRoomState(
   try {
     if (ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify(roomStateMessage));
+      logger.debug(
+        {
+          roomId: ws.roomId,
+          clientId,
+          lastEventId: room.state.eventId,
+          recentEventsCount: roomStateMessage.recentEvents?.length || 0,
+        },
+        'ROOM_STATE sent to client'
+      );
+    } else {
+      logger.debug(
+        {
+          roomId: ws.roomId,
+          clientId,
+          readyState: ws.readyState,
+        },
+        'Skipping ROOM_STATE send: connection not ready'
+      );
     }
   } catch (error) {
     logger.warn(
