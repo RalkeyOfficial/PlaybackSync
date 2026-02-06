@@ -17,6 +17,7 @@ import { handleEventMessage } from './event';
 import { handleEpisodeChangeRequest } from './episode-change';
 import { handleHeartbeatMessage } from './heartbeat';
 import type { RateLimiterState } from '../utils/rate-limiter';
+import { cleanupBroadcastRateLimiter } from '../utils/broadcasting';
 
 /**
  * Extended WebSocket interface with connection metadata
@@ -80,6 +81,21 @@ export function handleConnection(ws: ExtendedWebSocket, req: { url?: string }): 
   // Set up message event handler
   ws.on('message', (data: Buffer) => {
     try {
+      // Validate message size to prevent memory exhaustion
+      const config = getConfig();
+      if (data.length > config.maxMessageSizeBytes) {
+        logger.warn(
+          {
+            roomId: roomId,
+            messageSize: data.length,
+            maxSize: config.maxMessageSizeBytes,
+          },
+          'WebSocket message rejected: exceeds maximum size'
+        );
+        ws.close(1009, `Message too large: ${data.length} bytes (max: ${config.maxMessageSizeBytes})`);
+        return;
+      }
+
       const messageStr = data.toString('utf-8');
       const message = JSON.parse(messageStr);
 
@@ -254,4 +270,7 @@ export function closeConnectionsForRoom(roomId: RoomId): void {
 
   // Remove room from tracking
   connectionsByRoom.delete(roomId);
+
+  // Clean up broadcast rate limiter for this room
+  cleanupBroadcastRateLimiter(roomId);
 }

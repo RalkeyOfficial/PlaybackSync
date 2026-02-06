@@ -92,13 +92,13 @@ export function sendRoomState(
   if (lastKnownEventId !== undefined && room.eventLog.length > 0) {
     // Filter events that occurred after client's last known eventId
     // Events are stored in eventId order (monotonically increasing)
-    const recentEvents = room.eventLog.filter((event) => event.eventId > lastKnownEventId);
+    const recentEvents = room.eventLog.filter(event => event.eventId > lastKnownEventId);
 
     if (recentEvents.length > 0) {
       // Sort by eventId to ensure correct order (should already be sorted, but be safe)
       recentEvents.sort((a, b) => a.eventId - b.eventId);
 
-      roomStateMessage.recentEvents = recentEvents.map((event) => ({
+      roomStateMessage.recentEvents = recentEvents.map(event => ({
         type: event.type,
         value: event.value,
         clientId: event.clientId,

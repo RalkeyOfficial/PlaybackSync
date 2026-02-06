@@ -2,7 +2,7 @@
  * Prometheus metrics setup and collection
  */
 
-import { Registry, Gauge, collectDefaultMetrics } from 'prom-client';
+import { Registry, Gauge, Counter, collectDefaultMetrics } from 'prom-client';
 
 /**
  * Create a new Prometheus registry
@@ -39,6 +39,17 @@ export const processCpuPercent = new Gauge({
 export const processUptimeSeconds = new Gauge({
   name: 'playbacksync_process_uptime_seconds',
   help: 'Process uptime in seconds',
+  registers: [register],
+});
+
+/**
+ * Rate limit violations counter
+ * Tracks number of rate limit violations per connection
+ */
+export const rateLimitedTotal = new Counter({
+  name: 'playbacksync_rate_limited_total',
+  help: 'Total number of rate limit violations',
+  labelNames: ['type'] as const, // 'event', 'broadcast', 'connection'
   registers: [register],
 });
 

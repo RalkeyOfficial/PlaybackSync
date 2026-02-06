@@ -14,6 +14,7 @@ import type { JoinMessage } from '../types/messages';
 import { RateLimiter } from '../utils/rate-limiter';
 import { sendError, sendRoomState, type ExtendedWebSocket } from '../utils/message-helpers';
 import { generateClientId } from '../utils/connection-helpers';
+import { rateLimitedTotal } from '../utils/metrics';
 
 /**
  * Extended WebSocket interface with connection metadata
@@ -95,6 +96,23 @@ export function handleJoinMessage(
   } else {
     // Generate new clientId
     clientId = generateClientId();
+  }
+
+  // Check connection count limit per room
+  const currentConnections = connectionsByRoom.get(roomId)?.size || 0;
+  if (currentConnections >= config.maxConnectionsPerRoom) {
+    logger.warn(
+      {
+        roomId: roomId,
+        currentConnections,
+        maxConnections: config.maxConnectionsPerRoom,
+      },
+      'JOIN failed: room connection limit exceeded'
+    );
+    rateLimitedTotal.inc({ type: 'connection' });
+    sendError(ws, 'ROOM_FULL', `Room connection limit exceeded (max: ${config.maxConnectionsPerRoom})`);
+    ws.close(1008, 'Room connection limit exceeded');
+    return;
   }
 
   // Verify password hash matches

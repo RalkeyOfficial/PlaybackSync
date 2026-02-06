@@ -685,6 +685,199 @@ describe('EVENT Message Handling', () => {
       expect(errorCalls1.length).toBe(0);
       expect(errorCalls2.length).toBe(0);
     });
+
+    it('should allow events after rate limit refills', () => {
+      const { mockWs } = setupRoomWithClient(
+        '123e4567-e89b-12d3-a456-426614174000',
+        'test-password'
+      );
+
+      const config = getConfig();
+      const rateLimit = config.rateLimitEventsPerSec;
+
+      // Exhaust rate limit
+      for (let i = 0; i < rateLimit; i++) {
+        const eventMessage = createEventMessage('play');
+        simulateWebSocketMessage(mockWs, JSON.stringify(eventMessage));
+      }
+
+      // Next event should be rate limited
+      const eventMessage = createEventMessage('pause');
+      simulateWebSocketMessage(mockWs, JSON.stringify(eventMessage));
+
+      // Verify ERROR message was sent
+      const errorCalls = mockWs.send.mock.calls.filter(call => {
+        try {
+          const message = JSON.parse(call[0] as string);
+          return message.type === 'ERROR' && message.code === 'RATE_LIMITED';
+        } catch {
+          return false;
+        }
+      });
+      expect(errorCalls.length).toBeGreaterThan(0);
+
+      // Advance time by 1 second
+      jest.advanceTimersByTime(1000);
+
+      // Clear previous calls to check new ones
+      mockWs.send.mockClear();
+
+      // Should allow event after refill
+      const newEventMessage = createEventMessage('seek', 10);
+      simulateWebSocketMessage(mockWs, JSON.stringify(newEventMessage));
+
+      // Should not have ERROR message
+      const newErrorCalls = mockWs.send.mock.calls.filter(call => {
+        try {
+          const message = JSON.parse(call[0] as string);
+          return message.type === 'ERROR' && message.code === 'RATE_LIMITED';
+        } catch {
+          return false;
+        }
+      });
+      expect(newErrorCalls.length).toBe(0);
+    });
+
+    it('should rate limit all event types (play, pause, seek)', () => {
+      const { mockWs } = setupRoomWithClient(
+        '123e4567-e89b-12d3-a456-426614174000',
+        'test-password'
+      );
+
+      const config = getConfig();
+      const rateLimit = config.rateLimitEventsPerSec;
+
+      // Send mix of event types up to rate limit
+      for (let i = 0; i < rateLimit; i++) {
+        const eventType = i % 3 === 0 ? 'play' : i % 3 === 1 ? 'pause' : 'seek';
+        const eventMessage = createEventMessage(
+          eventType as 'play' | 'pause' | 'seek',
+          eventType === 'seek' ? 10 : undefined
+        );
+        simulateWebSocketMessage(mockWs, JSON.stringify(eventMessage));
+      }
+
+      // Next event of any type should be rate limited
+      const playMessage = createEventMessage('play');
+      simulateWebSocketMessage(mockWs, JSON.stringify(playMessage));
+
+      const errorCalls = mockWs.send.mock.calls.filter(call => {
+        try {
+          const message = JSON.parse(call[0] as string);
+          return message.type === 'ERROR' && message.code === 'RATE_LIMITED';
+        } catch {
+          return false;
+        }
+      });
+      expect(errorCalls.length).toBeGreaterThan(0);
+    });
+
+    it('should initialize rate limiter during JOIN', () => {
+      const { mockWs } = setupRoomWithClient(
+        '123e4567-e89b-12d3-a456-426614174000',
+        'test-password'
+      );
+
+      // Rate limiter should be initialized after JOIN
+      // Send an event immediately - should work (rate limiter initialized)
+      const eventMessage = createEventMessage('play');
+      simulateWebSocketMessage(mockWs, JSON.stringify(eventMessage));
+
+      // Should not have ERROR for rate limiting (should have been initialized)
+      const errorCalls = mockWs.send.mock.calls.filter(call => {
+        try {
+          const message = JSON.parse(call[0] as string);
+          return message.type === 'ERROR' && message.code === 'RATE_LIMITED';
+        } catch {
+          return false;
+        }
+      });
+      // Should not have rate limit error (rate limiter should be initialized)
+      expect(errorCalls.length).toBe(0);
+    });
+
+    it('should not process event when rate limited', () => {
+      const { mockWs, roomId } = setupRoomWithClient(
+        '123e4567-e89b-12d3-a456-426614174000',
+        'test-password'
+      );
+
+      const config = getConfig();
+      const rateLimit = config.rateLimitEventsPerSec;
+      const room = getRoom(roomId);
+      expect(room).toBeDefined();
+      if (!room) return;
+      const initialEventId = room.state.eventId;
+
+      // Exhaust rate limit
+      for (let i = 0; i < rateLimit; i++) {
+        const eventMessage = createEventMessage('play');
+        simulateWebSocketMessage(mockWs, JSON.stringify(eventMessage));
+      }
+
+      // Clear send calls to check new ones
+      mockWs.send.mockClear();
+
+      // Send event that should be rate limited
+      const eventMessage = createEventMessage('pause');
+      simulateWebSocketMessage(mockWs, JSON.stringify(eventMessage));
+
+      // Verify ERROR was sent
+      const errorCalls = mockWs.send.mock.calls.filter(call => {
+        try {
+          const message = JSON.parse(call[0] as string);
+          return message.type === 'ERROR' && message.code === 'RATE_LIMITED';
+        } catch {
+          return false;
+        }
+      });
+      expect(errorCalls.length).toBeGreaterThan(0);
+
+      // Verify event was NOT processed (eventId should not have incremented beyond rateLimit)
+      expect(room.state.eventId).toBe(initialEventId + rateLimit);
+      // Last processed event was play (paused = false), pause event was rate limited so not processed
+      expect(room.state.paused).toBe(false);
+    });
+
+    it('should handle burst of events correctly', () => {
+      const { mockWs } = setupRoomWithClient(
+        '123e4567-e89b-12d3-a456-426614174000',
+        'test-password'
+      );
+
+      const config = getConfig();
+      const rateLimit = config.rateLimitEventsPerSec;
+
+      // Send burst of events rapidly
+      const results: Array<{ allowed: boolean; errorCode?: string }> = [];
+      for (let i = 0; i < rateLimit + 5; i++) {
+        mockWs.send.mockClear();
+        const eventMessage = createEventMessage('play');
+        simulateWebSocketMessage(mockWs, JSON.stringify(eventMessage));
+
+        const errorCalls = mockWs.send.mock.calls.filter(call => {
+          try {
+            const message = JSON.parse(call[0] as string);
+            return message.type === 'ERROR' && message.code === 'RATE_LIMITED';
+          } catch {
+            return false;
+          }
+        });
+
+        results.push({
+          allowed: errorCalls.length === 0,
+          errorCode: errorCalls.length > 0 ? 'RATE_LIMITED' : undefined,
+        });
+      }
+
+      // First rateLimit events should be allowed
+      const allowedCount = results.filter(r => r.allowed).length;
+      expect(allowedCount).toBe(rateLimit);
+
+      // Remaining events should be rate limited
+      const rateLimitedCount = results.filter(r => !r.allowed).length;
+      expect(rateLimitedCount).toBe(5);
+    });
   });
 
   describe('Event Log Ring Buffer', () => {

@@ -14,6 +14,7 @@ import { sendError } from '../utils/message-helpers';
 import { addEventToLog } from '../utils/connection-helpers';
 import { broadcastState } from '../utils/broadcasting';
 import type { ExtendedWebSocket } from '../utils/message-helpers';
+import { rateLimitedTotal } from '../utils/metrics';
 
 /**
  * Extended WebSocket interface with rate limiter state
@@ -100,6 +101,7 @@ export function handleEventMessage(
       },
       'Rate limit exceeded for EVENT message'
     );
+    rateLimitedTotal.inc({ type: 'event' });
     sendError(ws, 'RATE_LIMITED', 'Rate limit exceeded');
     return;
   }
