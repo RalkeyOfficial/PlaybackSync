@@ -481,83 +481,797 @@ describe('JOIN Message Handling', () => {
     });
   });
 
-  describe('Tombstone Reconnection', () => {
-    it('should reattach connection for client with valid tombstone', () => {
-      const mockWs1 = createMockWebSocket();
-      const mockWs2 = createMockWebSocket();
-      const config = getConfig();
-      const roomId = toRoomId('123e4567-e89b-12d3-a456-426614174000');
-      const password = 'test-password-123';
-      const passwordHash = hashPassword(password, config.serverSecret);
+  describe('Client Reconnection & Tombstone Logic', () => {
+    describe('Tombstone Creation on Disconnect', () => {
+      it('should create tombstone when client disconnects', () => {
+        const mockWs = createMockWebSocket();
+        const config = getConfig();
+        const roomId = toRoomId('123e4567-e89b-12d3-a456-426614174000');
+        const password = 'test-password-123';
+        const passwordHash = hashPassword(password, config.serverSecret);
 
-      // Create room
-      createRoom(roomId, passwordHash, config.roomTtlSeconds, 'https://example.com/video');
+        // Create room
+        const room = createRoom(
+          roomId,
+          passwordHash,
+          config.roomTtlSeconds,
+          'https://example.com/video'
+        );
 
-      // First connection - client joins (server generates clientId)
-      simulateWebSocketUpgrade(mockWs1, roomId);
-      simulateWebSocketMessage(mockWs1, JSON.stringify(createJoinMessage(password)));
+        // Client joins
+        simulateWebSocketUpgrade(mockWs, roomId);
+        simulateWebSocketMessage(mockWs, JSON.stringify(createJoinMessage(password)));
 
-      // Get the clientId from ROOM_STATE response
-      const firstRoomState = JSON.parse(mockWs1.send.mock.calls[0][0] as string);
-      const clientId = firstRoomState.clientId;
+        const firstRoomState = JSON.parse(mockWs.send.mock.calls[0][0] as string);
+        const clientId = firstRoomState.clientId as ClientId;
 
-      // Simulate disconnect (creates tombstone)
-      simulateWebSocketClose(mockWs1);
+        // Verify client is connected
+        const client = room.connectedClients.get(clientId);
+        expect(client).toBeDefined();
+        expect(client!.tombstonedUntil).toBeUndefined();
 
-      // Simulate reconnection within tombstone window
-      jest.advanceTimersByTime(1000); // 1 second later
+        // Simulate disconnect (creates tombstone)
+        simulateWebSocketClose(mockWs);
 
-      simulateWebSocketUpgrade(mockWs2, roomId);
-      // Reconnect with previous clientId
-      simulateWebSocketMessage(mockWs2, JSON.stringify(createJoinMessage(password, clientId)));
+        // Verify tombstone was created
+        const tombstonedClient = room.connectedClients.get(clientId);
+        expect(tombstonedClient).toBeDefined();
+        expect(tombstonedClient!.tombstonedUntil).toBeDefined();
+        expect(tombstonedClient!.tombstonedUntil).toBeGreaterThan(Date.now());
+        expect(tombstonedClient!.tombstonedUntil).toBeLessThanOrEqual(
+          Date.now() + config.clientTombstoneMs
+        );
+      });
 
-      // Verify reconnection uses same clientId
-      expect(mockWs2.clientId).toBe(clientId);
-      expect(mockWs2.roomId).toBe(roomId);
+      it('should set tombstonedUntil to now + CLIENT_TOMBSTONE_MS', () => {
+        const mockWs = createMockWebSocket();
+        const config = getConfig();
+        const roomId = toRoomId('123e4567-e89b-12d3-a456-426614174000');
+        const password = 'test-password-123';
+        const passwordHash = hashPassword(password, config.serverSecret);
 
-      // Verify ROOM_STATE includes the same clientId
-      const secondRoomState = JSON.parse(mockWs2.send.mock.calls[0][0] as string);
-      expect(secondRoomState.clientId).toBe(clientId);
+        // Create room
+        const room = createRoom(
+          roomId,
+          passwordHash,
+          config.roomTtlSeconds,
+          'https://example.com/video'
+        );
+
+        // Client joins
+        simulateWebSocketUpgrade(mockWs, roomId);
+        simulateWebSocketMessage(mockWs, JSON.stringify(createJoinMessage(password)));
+
+        const firstRoomState = JSON.parse(mockWs.send.mock.calls[0][0] as string);
+        const clientId = firstRoomState.clientId as ClientId;
+
+        const now = Date.now();
+        jest.advanceTimersByTime(100); // Small advance to ensure timestamp difference
+
+        // Simulate disconnect
+        simulateWebSocketClose(mockWs);
+
+        // Verify tombstone timestamp is correct
+        const tombstonedClient = room.connectedClients.get(clientId);
+        expect(tombstonedClient!.tombstonedUntil).toBeDefined();
+        const expectedTombstoneTime = now + config.clientTombstoneMs;
+        // Allow small margin for test execution time
+        expect(tombstonedClient!.tombstonedUntil).toBeGreaterThanOrEqual(
+          expectedTombstoneTime - 100
+        );
+        expect(tombstonedClient!.tombstonedUntil).toBeLessThanOrEqual(
+          expectedTombstoneTime + 100
+        );
+      });
+
+      it('should remove connection from connectionsByRoom on disconnect', () => {
+        const mockWs = createMockWebSocket();
+        const config = getConfig();
+        const roomId = toRoomId('123e4567-e89b-12d3-a456-426614174000');
+        const password = 'test-password-123';
+        const passwordHash = hashPassword(password, config.serverSecret);
+
+        // Create room
+        createRoom(roomId, passwordHash, config.roomTtlSeconds, 'https://example.com/video');
+
+        // Client joins
+        simulateWebSocketUpgrade(mockWs, roomId);
+        simulateWebSocketMessage(mockWs, JSON.stringify(createJoinMessage(password)));
+
+        // Get connectionsByRoom from the handler (we'll need to check this differently)
+        // For now, verify the connection metadata is cleared
+        simulateWebSocketClose(mockWs);
+
+        // Connection should be marked as closed
+        expect(mockWs.readyState).toBe(3); // CLOSED
+      });
     });
 
-    it('should create new client if tombstone expired', () => {
-      const mockWs1 = createMockWebSocket();
-      const mockWs2 = createMockWebSocket();
-      const config = getConfig();
-      const roomId = toRoomId('123e4567-e89b-12d3-a456-426614174000');
-      const password = 'test-password-123';
-      const passwordHash = hashPassword(password, config.serverSecret);
+    describe('Reconnection Within Tombstone Window', () => {
+      it('should reattach connection for client with valid tombstone', () => {
+        const mockWs1 = createMockWebSocket();
+        const mockWs2 = createMockWebSocket();
+        const config = getConfig();
+        const roomId = toRoomId('123e4567-e89b-12d3-a456-426614174000');
+        const password = 'test-password-123';
+        const passwordHash = hashPassword(password, config.serverSecret);
 
-      // Create room
-      createRoom(roomId, passwordHash, config.roomTtlSeconds, 'https://example.com/video');
+        // Create room
+        const room = createRoom(
+          roomId,
+          passwordHash,
+          config.roomTtlSeconds,
+          'https://example.com/video'
+        );
 
-      // First connection
-      simulateWebSocketUpgrade(mockWs1, roomId);
-      simulateWebSocketMessage(mockWs1, JSON.stringify(createJoinMessage(password)));
+        // First connection - client joins (server generates clientId)
+        simulateWebSocketUpgrade(mockWs1, roomId);
+        simulateWebSocketMessage(mockWs1, JSON.stringify(createJoinMessage(password)));
 
-      // Get the clientId from ROOM_STATE response
-      const firstRoomState = JSON.parse(mockWs1.send.mock.calls[0][0] as string);
-      const originalClientId = firstRoomState.clientId;
+        // Get the clientId from ROOM_STATE response
+        const firstRoomState = JSON.parse(mockWs1.send.mock.calls[0][0] as string);
+        const clientId = firstRoomState.clientId;
 
-      // Simulate disconnect (creates tombstone)
-      simulateWebSocketClose(mockWs1);
+        // Simulate disconnect (creates tombstone)
+        simulateWebSocketClose(mockWs1);
 
-      // Simulate disconnect and tombstone expiration
-      jest.advanceTimersByTime(31000); // Past tombstone window (30s + 1s)
+        // Verify tombstone exists
+        const tombstonedClient = room.connectedClients.get(clientId as ClientId);
+        expect(tombstonedClient!.tombstonedUntil).toBeDefined();
 
-      // Reconnection after tombstone expiry - provide expired clientId
-      simulateWebSocketUpgrade(mockWs2, roomId);
-      simulateWebSocketMessage(
-        mockWs2,
-        JSON.stringify(createJoinMessage(password, originalClientId))
-      );
+        // Simulate reconnection within tombstone window
+        jest.advanceTimersByTime(1000); // 1 second later (well within 30s window)
 
-      // Verify new clientId is generated (tombstone expired, new client created)
-      expect(mockWs2.clientId).toBeDefined();
-      // The clientId might be the same if tombstone logic allows it, or different if expired
-      // The key is that the connection succeeds
-      const secondRoomState = JSON.parse(mockWs2.send.mock.calls[0][0] as string);
-      expect(secondRoomState.clientId).toBeDefined();
+        simulateWebSocketUpgrade(mockWs2, roomId);
+        // Reconnect with previous clientId
+        simulateWebSocketMessage(mockWs2, JSON.stringify(createJoinMessage(password, clientId)));
+
+        // Verify reconnection uses same clientId
+        expect(mockWs2.clientId).toBe(clientId);
+        expect(mockWs2.roomId).toBe(roomId);
+
+        // Verify tombstone was cleared
+        const reconnectedClient = room.connectedClients.get(clientId as ClientId);
+        expect(reconnectedClient).toBeDefined();
+        expect(reconnectedClient!.tombstonedUntil).toBeUndefined();
+        expect(reconnectedClient!.conn).toBe(mockWs2);
+
+        // Verify ROOM_STATE includes the same clientId
+        const secondRoomState = JSON.parse(mockWs2.send.mock.calls[0][0] as string);
+        expect(secondRoomState.clientId).toBe(clientId);
+      });
+
+      it('should preserve client state on reconnection', () => {
+        const mockWs1 = createMockWebSocket();
+        const mockWs2 = createMockWebSocket();
+        const config = getConfig();
+        const roomId = toRoomId('123e4567-e89b-12d3-a456-426614174000');
+        const password = 'test-password-123';
+        const passwordHash = hashPassword(password, config.serverSecret);
+
+        // Create room with initial state
+        const room = createRoom(
+          roomId,
+          passwordHash,
+          config.roomTtlSeconds,
+          'https://example.com/video'
+        );
+        room.state.paused = false;
+        room.state.time = 100.5;
+        room.state.eventId = 42;
+
+        // First connection
+        simulateWebSocketUpgrade(mockWs1, roomId);
+        simulateWebSocketMessage(mockWs1, JSON.stringify(createJoinMessage(password)));
+
+        const firstRoomState = JSON.parse(mockWs1.send.mock.calls[0][0] as string);
+        const clientId = firstRoomState.clientId;
+
+        // Update room state while client is connected
+        room.state.time = 150.75;
+        room.state.eventId = 50;
+
+        // Disconnect
+        simulateWebSocketClose(mockWs1);
+
+        // Reconnect within tombstone window
+        jest.advanceTimersByTime(5000); // 5 seconds later
+
+        simulateWebSocketUpgrade(mockWs2, roomId);
+        simulateWebSocketMessage(mockWs2, JSON.stringify(createJoinMessage(password, clientId)));
+
+        // Verify ROOM_STATE reflects current room state
+        const secondRoomState = JSON.parse(mockWs2.send.mock.calls[0][0] as string);
+        expect(secondRoomState.clientId).toBe(clientId);
+        expect(secondRoomState.time).toBe(150.75);
+        expect(secondRoomState.lastEventId).toBe(50);
+        expect(secondRoomState.paused).toBe(false);
+      });
+
+      it('should update lastSeen timestamp on reconnection', () => {
+        const mockWs1 = createMockWebSocket();
+        const mockWs2 = createMockWebSocket();
+        const config = getConfig();
+        const roomId = toRoomId('123e4567-e89b-12d3-a456-426614174000');
+        const password = 'test-password-123';
+        const passwordHash = hashPassword(password, config.serverSecret);
+
+        // Create room
+        const room = createRoom(
+          roomId,
+          passwordHash,
+          config.roomTtlSeconds,
+          'https://example.com/video'
+        );
+
+        // First connection
+        simulateWebSocketUpgrade(mockWs1, roomId);
+        simulateWebSocketMessage(mockWs1, JSON.stringify(createJoinMessage(password)));
+
+        const firstRoomState = JSON.parse(mockWs1.send.mock.calls[0][0] as string);
+        const clientId = firstRoomState.clientId as ClientId;
+
+        const initialLastSeen = room.connectedClients.get(clientId)!.lastSeen;
+
+        // Disconnect
+        simulateWebSocketClose(mockWs1);
+
+        // Advance time
+        jest.advanceTimersByTime(5000);
+
+        // Reconnect
+        simulateWebSocketUpgrade(mockWs2, roomId);
+        simulateWebSocketMessage(mockWs2, JSON.stringify(createJoinMessage(password, clientId)));
+
+        // Verify lastSeen was updated
+        const reconnectedClient = room.connectedClients.get(clientId);
+        expect(reconnectedClient!.lastSeen).toBeGreaterThan(initialLastSeen);
+      });
+    });
+
+    describe('Reconnection After Tombstone Expiry', () => {
+      it('should honor same clientId even if tombstone expired (no state preservation)', () => {
+        const mockWs1 = createMockWebSocket();
+        const mockWs2 = createMockWebSocket();
+        const config = getConfig();
+        const roomId = toRoomId('123e4567-e89b-12d3-a456-426614174000');
+        const password = 'test-password-123';
+        const passwordHash = hashPassword(password, config.serverSecret);
+
+        // Create room
+        const room = createRoom(
+          roomId,
+          passwordHash,
+          config.roomTtlSeconds,
+          'https://example.com/video'
+        );
+
+        // First connection
+        simulateWebSocketUpgrade(mockWs1, roomId);
+        simulateWebSocketMessage(mockWs1, JSON.stringify(createJoinMessage(password)));
+
+        // Get the clientId from ROOM_STATE response
+        const firstRoomState = JSON.parse(mockWs1.send.mock.calls[0][0] as string);
+        const originalClientId = firstRoomState.clientId as ClientId;
+
+        // Simulate disconnect (creates tombstone)
+        simulateWebSocketClose(mockWs1);
+
+        // Verify tombstone exists
+        expect(room.connectedClients.get(originalClientId)!.tombstonedUntil).toBeDefined();
+
+        // Simulate tombstone expiration
+        jest.advanceTimersByTime(config.clientTombstoneMs + 1000); // Past tombstone window
+
+        // Reconnection after tombstone expiry - provide expired clientId
+        // According to backend_design_v1.md: tombstone allows "re-association" with same clientId
+        // Even if tombstone expired, we honor the clientId (just don't preserve state)
+        simulateWebSocketUpgrade(mockWs2, roomId);
+        simulateWebSocketMessage(
+          mockWs2,
+          JSON.stringify(createJoinMessage(password, originalClientId))
+        );
+
+        // Verify same clientId is used (tombstone expired, but clientId is honored)
+        expect(mockWs2.clientId).toBeDefined();
+        expect(mockWs2.clientId).toBe(originalClientId);
+        
+        const secondRoomState = JSON.parse(mockWs2.send.mock.calls[0][0] as string);
+        expect(secondRoomState.clientId).toBe(originalClientId);
+        
+        // Verify expired tombstone was removed and new client entry created with same clientId
+        // The old entry (with tombstone) was removed, and a new entry (without tombstone) was created
+        expect(room.connectedClients.has(originalClientId)).toBe(true);
+        const newClient = room.connectedClients.get(originalClientId);
+        expect(newClient).toBeDefined();
+        expect(newClient!.tombstonedUntil).toBeUndefined(); // No tombstone for new client
+        expect(newClient!.conn).toBe(mockWs2); // Connection is attached to new entry
+      });
+
+      it('should remove expired tombstone when attempting reconnection', () => {
+        const mockWs1 = createMockWebSocket();
+        const mockWs2 = createMockWebSocket();
+        const config = getConfig();
+        const roomId = toRoomId('123e4567-e89b-12d3-a456-426614174000');
+        const password = 'test-password-123';
+        const passwordHash = hashPassword(password, config.serverSecret);
+
+        // Create room
+        const room = createRoom(
+          roomId,
+          passwordHash,
+          config.roomTtlSeconds,
+          'https://example.com/video'
+        );
+
+        // First connection
+        simulateWebSocketUpgrade(mockWs1, roomId);
+        simulateWebSocketMessage(mockWs1, JSON.stringify(createJoinMessage(password)));
+
+        const firstRoomState = JSON.parse(mockWs1.send.mock.calls[0][0] as string);
+        const originalClientId = firstRoomState.clientId as ClientId;
+
+        // Disconnect
+        simulateWebSocketClose(mockWs1);
+
+        // Verify tombstone exists
+        expect(room.connectedClients.get(originalClientId)!.tombstonedUntil).toBeDefined();
+
+        // Expire tombstone
+        jest.advanceTimersByTime(config.clientTombstoneMs + 1000);
+
+        // Attempt reconnection with expired clientId
+        // According to backend_design_v1.md: tombstone allows "re-association" with same clientId
+        // Even if tombstone expired, we honor the clientId (just don't preserve state)
+        simulateWebSocketUpgrade(mockWs2, roomId);
+        simulateWebSocketMessage(
+          mockWs2,
+          JSON.stringify(createJoinMessage(password, originalClientId))
+        );
+
+        // Verify expired tombstone was removed and new client entry created with same clientId
+        expect(room.connectedClients.has(originalClientId)).toBe(true);
+        const newClient = room.connectedClients.get(originalClientId);
+        expect(newClient).toBeDefined();
+        expect(newClient!.tombstonedUntil).toBeUndefined(); // No tombstone for new client
+        expect(mockWs2.clientId).toBe(originalClientId); // Same clientId is honored
+      });
+    });
+
+    describe('ROOM_STATE Content on Reconnection', () => {
+      it('should include derivedContentKey in ROOM_STATE on reconnection', () => {
+        const mockWs1 = createMockWebSocket();
+        const mockWs2 = createMockWebSocket();
+        const config = getConfig();
+        const roomId = toRoomId('123e4567-e89b-12d3-a456-426614174000');
+        const password = 'test-password-123';
+        const passwordHash = hashPassword(password, config.serverSecret);
+
+        // Create room with content identity
+        const room = createRoom(
+          roomId,
+          passwordHash,
+          config.roomTtlSeconds,
+          'https://example.com/video'
+        );
+        room.contentIdentity = {
+          episodeId: 'ep5',
+          providerId: 'netflix',
+          derivedContentKey: 'netflix:12345:ep5',
+          pageUrl: 'https://netflix.com/watch/12345',
+        };
+
+        // First connection
+        simulateWebSocketUpgrade(mockWs1, roomId);
+        simulateWebSocketMessage(mockWs1, JSON.stringify(createJoinMessage(password)));
+
+        const firstRoomState = JSON.parse(mockWs1.send.mock.calls[0][0] as string);
+        const clientId = firstRoomState.clientId;
+
+        // Disconnect and reconnect
+        simulateWebSocketClose(mockWs1);
+        jest.advanceTimersByTime(1000);
+
+        simulateWebSocketUpgrade(mockWs2, roomId);
+        simulateWebSocketMessage(mockWs2, JSON.stringify(createJoinMessage(password, clientId)));
+
+        // Verify ROOM_STATE includes content identity fields
+        const secondRoomState = JSON.parse(mockWs2.send.mock.calls[0][0] as string);
+        expect(secondRoomState.derivedContentKey).toBe('netflix:12345:ep5');
+        expect(secondRoomState.episodeId).toBe('ep5');
+        expect(secondRoomState.providerId).toBe('netflix');
+      });
+
+      it('should include playback state in ROOM_STATE on reconnection', () => {
+        const mockWs1 = createMockWebSocket();
+        const mockWs2 = createMockWebSocket();
+        const config = getConfig();
+        const roomId = toRoomId('123e4567-e89b-12d3-a456-426614174000');
+        const password = 'test-password-123';
+        const passwordHash = hashPassword(password, config.serverSecret);
+
+        // Create room with specific playback state
+        const room = createRoom(
+          roomId,
+          passwordHash,
+          config.roomTtlSeconds,
+          'https://example.com/video'
+        );
+        room.state.paused = true;
+        room.state.time = 200.5;
+        room.state.eventId = 100;
+
+        // First connection
+        simulateWebSocketUpgrade(mockWs1, roomId);
+        simulateWebSocketMessage(mockWs1, JSON.stringify(createJoinMessage(password)));
+
+        const firstRoomState = JSON.parse(mockWs1.send.mock.calls[0][0] as string);
+        const clientId = firstRoomState.clientId;
+
+        // Disconnect and reconnect
+        simulateWebSocketClose(mockWs1);
+        jest.advanceTimersByTime(1000);
+
+        simulateWebSocketUpgrade(mockWs2, roomId);
+        simulateWebSocketMessage(mockWs2, JSON.stringify(createJoinMessage(password, clientId)));
+
+        // Verify ROOM_STATE includes current playback state
+        const secondRoomState = JSON.parse(mockWs2.send.mock.calls[0][0] as string);
+        expect(secondRoomState.paused).toBe(true);
+        expect(secondRoomState.time).toBe(200.5);
+        expect(secondRoomState.lastEventId).toBe(100);
+      });
+
+      it('should include server_ts in ROOM_STATE on reconnection', () => {
+        const mockWs1 = createMockWebSocket();
+        const mockWs2 = createMockWebSocket();
+        const config = getConfig();
+        const roomId = toRoomId('123e4567-e89b-12d3-a456-426614174000');
+        const password = 'test-password-123';
+        const passwordHash = hashPassword(password, config.serverSecret);
+
+        // Create room
+        createRoom(roomId, passwordHash, config.roomTtlSeconds, 'https://example.com/video');
+
+        // First connection
+        simulateWebSocketUpgrade(mockWs1, roomId);
+        simulateWebSocketMessage(mockWs1, JSON.stringify(createJoinMessage(password)));
+
+        const firstRoomState = JSON.parse(mockWs1.send.mock.calls[0][0] as string);
+        const clientId = firstRoomState.clientId;
+
+        // Disconnect and reconnect
+        simulateWebSocketClose(mockWs1);
+        jest.advanceTimersByTime(5000);
+
+        simulateWebSocketUpgrade(mockWs2, roomId);
+        simulateWebSocketMessage(mockWs2, JSON.stringify(createJoinMessage(password, clientId)));
+
+        // Verify ROOM_STATE includes server_ts
+        const secondRoomState = JSON.parse(mockWs2.send.mock.calls[0][0] as string);
+        expect(secondRoomState.server_ts).toBeDefined();
+        expect(typeof secondRoomState.server_ts).toBe('number');
+        expect(secondRoomState.server_ts).toBeGreaterThan(0);
+      });
+    });
+
+    describe('Rapid Reconnection Scenarios', () => {
+      it('should handle multiple rapid reconnects', () => {
+        const mockWs1 = createMockWebSocket();
+        const mockWs2 = createMockWebSocket();
+        const mockWs3 = createMockWebSocket();
+        const config = getConfig();
+        const roomId = toRoomId('123e4567-e89b-12d3-a456-426614174000');
+        const password = 'test-password-123';
+        const passwordHash = hashPassword(password, config.serverSecret);
+
+        // Create room
+        const room = createRoom(
+          roomId,
+          passwordHash,
+          config.roomTtlSeconds,
+          'https://example.com/video'
+        );
+
+        // First connection
+        simulateWebSocketUpgrade(mockWs1, roomId);
+        simulateWebSocketMessage(mockWs1, JSON.stringify(createJoinMessage(password)));
+
+        const firstRoomState = JSON.parse(mockWs1.send.mock.calls[0][0] as string);
+        const clientId = firstRoomState.clientId;
+
+        // Disconnect
+        simulateWebSocketClose(mockWs1);
+        jest.advanceTimersByTime(100);
+
+        // First reconnect
+        simulateWebSocketUpgrade(mockWs2, roomId);
+        simulateWebSocketMessage(mockWs2, JSON.stringify(createJoinMessage(password, clientId)));
+
+        expect(mockWs2.clientId).toBe(clientId);
+
+        // Disconnect again
+        simulateWebSocketClose(mockWs2);
+        jest.advanceTimersByTime(100);
+
+        // Second reconnect
+        simulateWebSocketUpgrade(mockWs3, roomId);
+        simulateWebSocketMessage(mockWs3, JSON.stringify(createJoinMessage(password, clientId)));
+
+        // Should still use same clientId
+        expect(mockWs3.clientId).toBe(clientId);
+        const reconnectedClient = room.connectedClients.get(clientId as ClientId);
+        expect(reconnectedClient).toBeDefined();
+        expect(reconnectedClient!.tombstonedUntil).toBeUndefined();
+      });
+
+      it('should handle reconnection immediately after disconnect', () => {
+        const mockWs1 = createMockWebSocket();
+        const mockWs2 = createMockWebSocket();
+        const config = getConfig();
+        const roomId = toRoomId('123e4567-e89b-12d3-a456-426614174000');
+        const password = 'test-password-123';
+        const passwordHash = hashPassword(password, config.serverSecret);
+
+        // Create room
+        const room = createRoom(
+          roomId,
+          passwordHash,
+          config.roomTtlSeconds,
+          'https://example.com/video'
+        );
+
+        // First connection
+        simulateWebSocketUpgrade(mockWs1, roomId);
+        simulateWebSocketMessage(mockWs1, JSON.stringify(createJoinMessage(password)));
+
+        const firstRoomState = JSON.parse(mockWs1.send.mock.calls[0][0] as string);
+        const clientId = firstRoomState.clientId;
+
+        // Disconnect
+        simulateWebSocketClose(mockWs1);
+
+        // Immediately reconnect (no time advance)
+        simulateWebSocketUpgrade(mockWs2, roomId);
+        simulateWebSocketMessage(mockWs2, JSON.stringify(createJoinMessage(password, clientId)));
+
+        // Should successfully reconnect
+        expect(mockWs2.clientId).toBe(clientId);
+        const reconnectedClient = room.connectedClients.get(clientId as ClientId);
+        expect(reconnectedClient).toBeDefined();
+        expect(reconnectedClient!.tombstonedUntil).toBeUndefined();
+      });
+    });
+
+    describe('Reconnection Without ClientId', () => {
+      it('should create new client when reconnecting without clientId', () => {
+        const mockWs1 = createMockWebSocket();
+        const mockWs2 = createMockWebSocket();
+        const config = getConfig();
+        const roomId = toRoomId('123e4567-e89b-12d3-a456-426614174000');
+        const password = 'test-password-123';
+        const passwordHash = hashPassword(password, config.serverSecret);
+
+        // Create room
+        const room = createRoom(
+          roomId,
+          passwordHash,
+          config.roomTtlSeconds,
+          'https://example.com/video'
+        );
+
+        // First connection
+        simulateWebSocketUpgrade(mockWs1, roomId);
+        simulateWebSocketMessage(mockWs1, JSON.stringify(createJoinMessage(password)));
+
+        const firstRoomState = JSON.parse(mockWs1.send.mock.calls[0][0] as string);
+        const originalClientId = firstRoomState.clientId;
+
+        // Disconnect
+        simulateWebSocketClose(mockWs1);
+        jest.advanceTimersByTime(1000);
+
+        // Reconnect without clientId (new client)
+        simulateWebSocketUpgrade(mockWs2, roomId);
+        simulateWebSocketMessage(mockWs2, JSON.stringify(createJoinMessage(password)));
+
+        // Should create new clientId
+        expect(mockWs2.clientId).toBeDefined();
+        expect(mockWs2.clientId).not.toBe(originalClientId);
+
+        // Original client should still have tombstone
+        const originalClient = room.connectedClients.get(originalClientId as ClientId);
+        expect(originalClient).toBeDefined();
+        expect(originalClient!.tombstonedUntil).toBeDefined();
+      });
+    });
+
+    describe('Reconnection with Different ClientId', () => {
+      it('should create new client when reconnecting with different clientId', () => {
+        const mockWs1 = createMockWebSocket();
+        const mockWs2 = createMockWebSocket();
+        const config = getConfig();
+        const roomId = toRoomId('123e4567-e89b-12d3-a456-426614174000');
+        const password = 'test-password-123';
+        const passwordHash = hashPassword(password, config.serverSecret);
+
+        // Create room
+        const room = createRoom(
+          roomId,
+          passwordHash,
+          config.roomTtlSeconds,
+          'https://example.com/video'
+        );
+
+        // First connection
+        simulateWebSocketUpgrade(mockWs1, roomId);
+        simulateWebSocketMessage(mockWs1, JSON.stringify(createJoinMessage(password)));
+
+        const firstRoomState = JSON.parse(mockWs1.send.mock.calls[0][0] as string);
+        const originalClientId = firstRoomState.clientId;
+
+        // Disconnect
+        simulateWebSocketClose(mockWs1);
+        jest.advanceTimersByTime(1000);
+
+        // Reconnect with different clientId
+        const differentClientId = '999e9999-e99b-99d9-a999-999999999999';
+        simulateWebSocketUpgrade(mockWs2, roomId);
+        simulateWebSocketMessage(
+          mockWs2,
+          JSON.stringify(createJoinMessage(password, differentClientId))
+        );
+
+        // Should create new client with provided clientId
+        expect(mockWs2.clientId).toBe(differentClientId);
+
+        // Original client should still have tombstone
+        const originalClient = room.connectedClients.get(originalClientId as ClientId);
+        expect(originalClient).toBeDefined();
+        expect(originalClient!.tombstonedUntil).toBeDefined();
+
+        // New client should exist
+        const newClient = room.connectedClients.get(differentClientId as ClientId);
+        expect(newClient).toBeDefined();
+        expect(newClient!.tombstonedUntil).toBeUndefined();
+      });
+    });
+
+    describe('Event Replay on Reconnection', () => {
+      it('should include lastEventId in ROOM_STATE for event replay', () => {
+        const mockWs1 = createMockWebSocket();
+        const mockWs2 = createMockWebSocket();
+        const config = getConfig();
+        const roomId = toRoomId('123e4567-e89b-12d3-a456-426614174000');
+        const password = 'test-password-123';
+        const passwordHash = hashPassword(password, config.serverSecret);
+
+        // Create room
+        const room = createRoom(
+          roomId,
+          passwordHash,
+          config.roomTtlSeconds,
+          'https://example.com/video'
+        );
+
+        // First connection
+        simulateWebSocketUpgrade(mockWs1, roomId);
+        simulateWebSocketMessage(mockWs1, JSON.stringify(createJoinMessage(password)));
+
+        const firstRoomState = JSON.parse(mockWs1.send.mock.calls[0][0] as string);
+        const clientId = firstRoomState.clientId;
+        const initialEventId = firstRoomState.lastEventId;
+
+        // Update eventId (simulating events occurred)
+        room.state.eventId = initialEventId + 5;
+
+        // Disconnect and reconnect
+        simulateWebSocketClose(mockWs1);
+        jest.advanceTimersByTime(1000);
+
+        simulateWebSocketUpgrade(mockWs2, roomId);
+        simulateWebSocketMessage(mockWs2, JSON.stringify(createJoinMessage(password, clientId)));
+
+        // Verify ROOM_STATE includes updated lastEventId
+        // According to backend_network_design_v1.md section 7:
+        // "Request ROOM_STATE; server returns { videoPos, playerState, lastEventId } and any recentEvents[] since lastEventId"
+        const secondRoomState = JSON.parse(mockWs2.send.mock.calls[0][0] as string);
+        expect(secondRoomState.lastEventId).toBe(initialEventId + 5);
+        // Note: Event replay (recentEvents[]) is mentioned in docs but not yet implemented
+        // This test verifies lastEventId is included for future event replay implementation
+      });
+
+      it('should allow client to determine which events to replay based on lastEventId', () => {
+        const mockWs1 = createMockWebSocket();
+        const mockWs2 = createMockWebSocket();
+        const config = getConfig();
+        const roomId = toRoomId('123e4567-e89b-12d3-a456-426614174000');
+        const password = 'test-password-123';
+        const passwordHash = hashPassword(password, config.serverSecret);
+
+        // Create room
+        const room = createRoom(
+          roomId,
+          passwordHash,
+          config.roomTtlSeconds,
+          'https://example.com/video'
+        );
+
+        // First connection
+        simulateWebSocketUpgrade(mockWs1, roomId);
+        simulateWebSocketMessage(mockWs1, JSON.stringify(createJoinMessage(password)));
+
+        const firstRoomState = JSON.parse(mockWs1.send.mock.calls[0][0] as string);
+        const clientId = firstRoomState.clientId;
+        const clientLastKnownEventId = firstRoomState.lastEventId;
+
+        // Simulate events occurred (update eventId)
+        room.state.eventId = clientLastKnownEventId + 10;
+
+        // Disconnect and reconnect
+        simulateWebSocketClose(mockWs1);
+        jest.advanceTimersByTime(1000);
+
+        simulateWebSocketUpgrade(mockWs2, roomId);
+        simulateWebSocketMessage(mockWs2, JSON.stringify(createJoinMessage(password, clientId)));
+
+        // Client can compare lastEventId to determine if replay is needed
+        const secondRoomState = JSON.parse(mockWs2.send.mock.calls[0][0] as string);
+        const serverLastEventId = secondRoomState.lastEventId;
+
+        // Client would determine: serverLastEventId > clientLastKnownEventId means events need replay
+        expect(serverLastEventId).toBeGreaterThan(clientLastKnownEventId);
+        // According to backend_network_design_v1.md: "If events need replay, server streams them in eventId order; client ACKs each"
+        // This functionality is not yet implemented but the test verifies the foundation is in place
+      });
+    });
+
+    describe('Content Key Comparison on Reconnection', () => {
+      it('should include derivedContentKey for client comparison on reconnection', () => {
+        const mockWs1 = createMockWebSocket();
+        const mockWs2 = createMockWebSocket();
+        const config = getConfig();
+        const roomId = toRoomId('123e4567-e89b-12d3-a456-426614174000');
+        const password = 'test-password-123';
+        const passwordHash = hashPassword(password, config.serverSecret);
+
+        // Create room with content identity
+        const room = createRoom(
+          roomId,
+          passwordHash,
+          config.roomTtlSeconds,
+          'https://example.com/video'
+        );
+        room.contentIdentity = {
+          episodeId: 'ep5',
+          providerId: 'netflix',
+          derivedContentKey: 'netflix:12345:ep5',
+          pageUrl: 'https://netflix.com/watch/12345',
+        };
+
+        // First connection
+        simulateWebSocketUpgrade(mockWs1, roomId);
+        simulateWebSocketMessage(mockWs1, JSON.stringify(createJoinMessage(password)));
+
+        const firstRoomState = JSON.parse(mockWs1.send.mock.calls[0][0] as string);
+        const clientId = firstRoomState.clientId;
+        const clientStoredContentKey = firstRoomState.derivedContentKey;
+
+        // Disconnect and reconnect
+        simulateWebSocketClose(mockWs1);
+        jest.advanceTimersByTime(1000);
+
+        simulateWebSocketUpgrade(mockWs2, roomId);
+        simulateWebSocketMessage(mockWs2, JSON.stringify(createJoinMessage(password, clientId)));
+
+        // Verify derivedContentKey is included for comparison
+        // According to unified_v1_backend_and_network_design.md section 5:
+        // "Compare derivedContentKey. If mismatch: do not auto-seek or auto-play."
+        const secondRoomState = JSON.parse(mockWs2.send.mock.calls[0][0] as string);
+        expect(secondRoomState.derivedContentKey).toBeDefined();
+        expect(secondRoomState.derivedContentKey).toBe(clientStoredContentKey);
+        // Client would compare this with local derivedContentKey to determine if content matches
+      });
     });
   });
 

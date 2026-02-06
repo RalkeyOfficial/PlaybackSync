@@ -153,6 +153,9 @@ export function handleConnection(ws: ExtendedWebSocket, req: { url?: string }): 
           // Create tombstone for reconnection
           const config = getConfig();
           client.tombstonedUntil = Date.now() + config.clientTombstoneMs;
+          // Store last event ID the client saw for event replay on reconnection
+          // According to backend_network_design_v1.md section 7: server returns recentEvents[] since lastEventId
+          client.lastEventId = room.state.eventId;
           // Note: conn remains pointing to closed connection, which is fine
           // The tombstone allows reconnection with same clientId
           logger.info(
@@ -160,6 +163,7 @@ export function handleConnection(ws: ExtendedWebSocket, req: { url?: string }): 
               roomId: ws.roomId,
               clientId: ws.clientId,
               tombstonedUntil: client.tombstonedUntil,
+              lastEventId: client.lastEventId,
             },
             'Client disconnected, tombstone created'
           );

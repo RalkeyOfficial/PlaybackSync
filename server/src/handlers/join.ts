@@ -117,18 +117,25 @@ export function handleJoinMessage(
   }
 
   // Check for client tombstone (reconnection)
+  // According to backend_design_v1.md:
+  // - Tombstone allows "re-association" with same clientId
+  // - If tombstone valid: preserve state (lastEventId) for event replay
+  // - If tombstone expired: still use same clientId, but treat as new client (no state preservation)
   const existingClient = room.connectedClients.get(clientId);
   const now = Date.now();
   let isReconnection = false;
+  let lastKnownEventId: number | undefined;
 
   if (existingClient) {
     // Check if tombstone is still valid
     if (existingClient.tombstonedUntil && existingClient.tombstonedUntil > now) {
-      // Valid tombstone - reattach connection
+      // Valid tombstone - reattach connection and preserve state
       isReconnection = true;
+      lastKnownEventId = existingClient.lastEventId; // Store before updating
       existingClient.conn = ws;
       existingClient.lastSeen = now;
       existingClient.tombstonedUntil = undefined; // Clear tombstone
+      existingClient.lastEventId = room.state.eventId; // Update to current state
       logger.info(
         {
           roomId: roomId,
@@ -138,7 +145,15 @@ export function handleJoinMessage(
       );
     } else {
       // Tombstone expired or no tombstone - remove old entry
+      // Client will be treated as new (same clientId, but no state preservation)
       room.connectedClients.delete(clientId);
+      logger.info(
+        {
+          roomId: roomId,
+          clientId: clientId,
+        },
+        'Tombstone expired, reconnecting with same clientId as new client'
+      );
     }
   }
 
@@ -148,6 +163,7 @@ export function handleJoinMessage(
       clientId,
       conn: ws,
       lastSeen: now,
+      lastEventId: room.state.eventId, // Track current eventId for new client
     });
     logger.info(
       {
@@ -172,6 +188,13 @@ export function handleJoinMessage(
   }
   connectionsByRoom.get(roomId)!.add(ws);
 
-  // Send current STATE to joining client (includes clientId)
-  sendRoomState(ws, room, clientId);
+  // Determine lastKnownEventId for event replay
+  // According to backend_network_design_v1.md section 7:
+  // "Request ROOM_STATE; server returns { videoPos, playerState, lastEventId } and any recentEvents[] since lastEventId"
+  // For reconnections with valid tombstone, include recent events since the client's last known eventId
+  // For new clients (including expired tombstone), don't include recentEvents (client will sync from current state)
+  // lastKnownEventId is already set above if isReconnection === true
+
+  // Send current STATE to joining client (includes clientId and recentEvents for replay if reconnection)
+  sendRoomState(ws, room, clientId, lastKnownEventId);
 }

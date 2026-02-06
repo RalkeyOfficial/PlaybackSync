@@ -50,8 +50,18 @@ export function sendError(ws: ExtendedWebSocket, code: string, message: string):
 
 /**
  * Send a ROOM_STATE message to a WebSocket client
+ * According to backend_network_design_v1.md section 7: includes recentEvents[] since lastEventId for event replay
+ * @param ws - WebSocket connection
+ * @param room - Room object containing state and event log
+ * @param clientId - Client identifier
+ * @param lastKnownEventId - Optional: client's last known eventId for event replay filtering
  */
-export function sendRoomState(ws: ExtendedWebSocket, room: Room, clientId: ClientId): void {
+export function sendRoomState(
+  ws: ExtendedWebSocket,
+  room: Room,
+  clientId: ClientId,
+  lastKnownEventId?: number
+): void {
   const roomStateMessage: RoomStateMessage = {
     type: 'ROOM_STATE',
     clientId,
@@ -73,6 +83,28 @@ export function sendRoomState(ws: ExtendedWebSocket, room: Room, clientId: Clien
     }
     if (room.state.episode) {
       roomStateMessage.episodeId = room.state.episode;
+    }
+  }
+
+  // Include recent events for event replay if client provided lastKnownEventId
+  // According to backend_network_design_v1.md section 7:
+  // "Request ROOM_STATE; server returns { videoPos, playerState, lastEventId } and any recentEvents[] since lastEventId"
+  if (lastKnownEventId !== undefined && room.eventLog.length > 0) {
+    // Filter events that occurred after client's last known eventId
+    // Events are stored in eventId order (monotonically increasing)
+    const recentEvents = room.eventLog.filter((event) => event.eventId > lastKnownEventId);
+
+    if (recentEvents.length > 0) {
+      // Sort by eventId to ensure correct order (should already be sorted, but be safe)
+      recentEvents.sort((a, b) => a.eventId - b.eventId);
+
+      roomStateMessage.recentEvents = recentEvents.map((event) => ({
+        type: event.type,
+        value: event.value,
+        clientId: event.clientId,
+        ts: event.ts,
+        eventId: event.eventId,
+      }));
     }
   }
 

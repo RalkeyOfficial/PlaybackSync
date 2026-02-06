@@ -47,6 +47,8 @@ export interface ClientConnection {
   lastSeen: number;
   /** Optional tombstone timestamp - allows reconnection with same clientId */
   tombstonedUntil?: number;
+  /** Last event ID the client acknowledged (for event replay on reconnection) */
+  lastEventId?: number;
 }
 
 /**

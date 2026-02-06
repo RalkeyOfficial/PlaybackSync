@@ -103,6 +103,7 @@ export interface StateMessage extends BaseMessage {
 /**
  * ROOM_STATE message - Server → Client
  * Sent to clients on JOIN/REJOIN with full room state
+ * According to backend_network_design_v1.md section 7: includes recentEvents[] since lastEventId for event replay
  */
 export interface RoomStateMessage extends BaseMessage {
   type: 'ROOM_STATE';
@@ -122,6 +123,19 @@ export interface RoomStateMessage extends BaseMessage {
   lastEventId: number;
   /** Server timestamp (monotonic or epoch ms) */
   server_ts: number;
+  /** Recent events since client's last known eventId (for event replay on reconnection) */
+  recentEvents?: Array<{
+    /** Event type (e.g., 'play', 'pause', 'seek', 'episode_change') */
+    type: string;
+    /** Optional event value (e.g., seek position in seconds) */
+    value?: number | string;
+    /** Client ID that triggered the event */
+    clientId?: ClientId | string;
+    /** Timestamp when event occurred (milliseconds) */
+    ts: number;
+    /** Event ID for ordering */
+    eventId: number;
+  }>;
 }
 
 /**
