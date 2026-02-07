@@ -161,11 +161,9 @@ When the content script reports a **local user action**, the background script:
 1. Verifies sync is ACTIVE
 2. Verifies suppression window is not active
 3. Serializes the request into a protocol message:
-   - PLAY_REQUEST
-   - PAUSE_REQUEST
-   - SEEK_REQUEST
-   - EPISODE_CHANGE_REQUEST
-4. Attaches client timestamp
+   - `EVENT { event: "play" | "pause" | "seek", value?: number, client_ts }`
+   - `EPISODE_CHANGE_REQUEST`
+4. Attaches client timestamp (`client_ts`)
 5. Sends to server
 
 The background script never directly mutates playback state.
@@ -314,9 +312,9 @@ Only **user-initiated** events are forwarded. Programmatic events triggered duri
 
 When the content script receives a playback command from the background script, it applies it directly to the bound `HTMLMediaElement`.
 
-For scheduled PLAY commands, the content script calculates the local execution time using the server-provided timestamp and the previously computed clock offset. The play call is scheduled using `setTimeout` rather than executed immediately. This ensures that all clients begin playback at the same real-world instant, regardless of network latency.
+**PLAY commands:** Play commands are applied immediately when received. When a user clicks play, the native video player starts immediately and cannot be delayed by JavaScript. Any initial desynchronization between clients (< 250ms typically due to RTT differences) is acceptable and quickly corrected by drift reconciliation (`SYNC_ADJUST` messages).
 
-PAUSE and SEEK commands are applied immediately, as these are not latency-sensitive in the same way and users expect them to take effect without delay.
+**PAUSE and SEEK commands:** These are applied immediately, as users expect them to take effect without delay.
 
 All command handlers are idempotent and guarded against duplicate application using the `eventId` supplied by the background script.
 

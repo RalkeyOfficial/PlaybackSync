@@ -438,8 +438,8 @@ describe('JSON Schema Validation Setup', () => {
   describe('STATE Message Validation', () => {
     const validStateMessage = {
       type: 'STATE',
-      paused: false,
-      time: 123.456,
+      playerState: 'playing',
+      videoPos: 123.456,
       provider: 'test-provider',
       episode: 5,
       server_ts: 1670000000000,
@@ -455,8 +455,8 @@ describe('JSON Schema Validation Setup', () => {
     it('should validate STATE message with optional provider and episode', () => {
       const stateWithoutOptional = {
         type: 'STATE',
-        paused: true,
-        time: 0,
+        playerState: 'paused',
+        videoPos: 0,
         server_ts: 1670000000000,
         eventId: 1,
       };
@@ -466,10 +466,10 @@ describe('JSON Schema Validation Setup', () => {
       expect(result.errors).toBeNull();
     });
 
-    it('should reject STATE message missing required field: paused', () => {
+    it('should reject STATE message missing required field: playerState', () => {
       const invalidState = {
         type: 'STATE',
-        time: 123.456,
+        videoPos: 123.456,
         server_ts: 1670000000000,
         eventId: 1,
       };
@@ -479,14 +479,14 @@ describe('JSON Schema Validation Setup', () => {
       expect(result.errors).not.toBeNull();
       if (result.errors) {
         const errorMessages = result.errors.map(e => e.message || '').join(' ');
-        expect(errorMessages).toMatch(/paused/i);
+        expect(errorMessages).toMatch(/playerState/i);
       }
     });
 
-    it('should reject STATE message missing required field: time', () => {
+    it('should reject STATE message missing required field: videoPos', () => {
       const invalidState = {
         type: 'STATE',
-        paused: false,
+        playerState: 'playing',
         server_ts: 1670000000000,
         eventId: 1,
       };
@@ -496,15 +496,15 @@ describe('JSON Schema Validation Setup', () => {
       expect(result.errors).not.toBeNull();
       if (result.errors) {
         const errorMessages = result.errors.map(e => e.message || '').join(' ');
-        expect(errorMessages).toMatch(/time/i);
+        expect(errorMessages).toMatch(/videoPos/i);
       }
     });
 
     it('should reject STATE message missing required field: server_ts', () => {
       const invalidState = {
         type: 'STATE',
-        paused: false,
-        time: 123.456,
+        playerState: 'playing',
+        videoPos: 123.456,
         eventId: 1,
       };
 
@@ -520,8 +520,8 @@ describe('JSON Schema Validation Setup', () => {
     it('should reject STATE message missing required field: eventId', () => {
       const invalidState = {
         type: 'STATE',
-        paused: false,
-        time: 123.456,
+        playerState: 'playing',
+        videoPos: 123.456,
         server_ts: 1670000000000,
       };
 
@@ -534,11 +534,11 @@ describe('JSON Schema Validation Setup', () => {
       }
     });
 
-    it('should reject STATE message with non-boolean paused', () => {
+    it('should reject STATE message with invalid playerState', () => {
       const invalidState = {
         type: 'STATE',
-        paused: 'not-boolean',
-        time: 123.456,
+        playerState: 'invalid-state',
+        videoPos: 123.456,
         server_ts: 1670000000000,
         eventId: 1,
       };
@@ -754,7 +754,7 @@ describe('JSON Schema Validation Setup', () => {
         },
         { type: 'EVENT', event: 'play', client_ts: 1670000000000 },
         { type: 'TIME_REPORT', current_time: 123.456, client_ts: 1670000000000 },
-        { type: 'STATE', paused: false, time: 123.456, server_ts: 1670000000000, eventId: 1 },
+        { type: 'STATE', playerState: 'playing', videoPos: 123.456, server_ts: 1670000000000, eventId: 1 },
       ];
 
       const startTime = performance.now();

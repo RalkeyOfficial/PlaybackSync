@@ -3,20 +3,21 @@
   "type": "object",
   "title": "STATE Message Schema",
   "description": "Schema for STATE message sent by server as authoritative playback state broadcast",
-  "required": ["type", "paused", "time", "server_ts", "eventId"],
+  "required": ["type", "playerState", "videoPos", "server_ts", "eventId"],
   "properties": {
     "type": {
       "type": "string",
       "const": "STATE"
     },
-    "paused": {
-      "type": "boolean",
-      "description": "Whether playback is paused"
+    "playerState": {
+      "type": "string",
+      "enum": ["playing", "paused"],
+      "description": "Current player state. Server state is either 'playing' or 'paused'. Only individual clients can be 'buffering'."
     },
-    "time": {
+    "videoPos": {
       "type": "number",
       "minimum": 0,
-      "description": "Current playback time (seconds)"
+      "description": "Current playback position in seconds"
     },
     "provider": {
       "type": "string",

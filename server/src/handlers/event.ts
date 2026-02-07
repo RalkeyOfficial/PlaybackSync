@@ -15,6 +15,7 @@ import { addEventToLog } from '../utils/connection-helpers';
 import { broadcastState } from '../utils/broadcasting';
 import type { ExtendedWebSocket } from '../utils/message-helpers';
 import { rateLimitedTotal } from '../utils/metrics';
+import { calculateExpectedTime } from '../utils/drift-reconciliation';
 
 /**
  * Extended WebSocket interface with rate limiter state
@@ -110,51 +111,62 @@ export function handleEventMessage(
   const now = Date.now();
   room.state.eventId += 1;
   room.state.last_explicit_event_ts = now;
-  room.state.last_state_update_ts = now;
 
   // Update state based on event type
   const previousState = {
-    paused: room.state.paused,
-    time: room.state.time,
+    playerState: room.state.playerState,
+    videoPos: room.state.videoPos,
   };
 
   switch (eventMessage.event) {
     case 'play':
-      room.state.paused = false;
+      room.state.playerState = 'playing';
+      // Update last_state_update_ts when starting playback so expected_time calculation starts correctly
+      room.state.last_state_update_ts = now;
       logger.debug(
         {
           roomId: roomId,
           clientId: ws.clientId,
-          previousState: previousState.paused ? 'paused' : 'playing',
+          previousState: previousState.playerState,
           newState: 'playing',
         },
         'State transition: play'
       );
       break;
     case 'pause':
-      room.state.paused = true;
+      // When pausing, update videoPos to the current expected time BEFORE updating last_state_update_ts
+      // This ensures we calculate expected_time using the previous timestamp
+      // This ensures the room state reflects the exact position when paused
+      room.state.videoPos = calculateExpectedTime(room);
+      room.state.playerState = 'paused';
+      room.state.last_state_update_ts = now;
       logger.debug(
         {
           roomId: roomId,
           clientId: ws.clientId,
-          previousState: previousState.paused ? 'paused' : 'playing',
+          previousState: previousState.playerState,
           newState: 'paused',
+          videoPos: room.state.videoPos,
         },
         'State transition: pause'
       );
       break;
     case 'seek':
       if (eventMessage.value !== undefined) {
+        const oldPos = room.state.videoPos;
+        const newPos = eventMessage.value;
+        room.state.videoPos = newPos;
+        // Update last_state_update_ts when seeking so expected_time calculation starts correctly
+        room.state.last_state_update_ts = now;
         logger.debug(
           {
             roomId: roomId,
             clientId: ws.clientId,
-            previousTime: room.state.time,
-            newTime: eventMessage.value,
+            previousVideoPos: oldPos,
+            newVideoPos: newPos,
           },
           'State transition: seek'
         );
-        room.state.time = eventMessage.value;
       }
       break;
   }

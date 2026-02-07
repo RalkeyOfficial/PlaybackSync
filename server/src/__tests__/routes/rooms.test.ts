@@ -419,12 +419,12 @@ describe('Rooms API Endpoints', () => {
       const rooms = JSON.parse(listResponse.body);
       const foundRoom = rooms.find((r: { id: string }) => r.id === createBody.roomId);
 
-      expect(foundRoom.last_state).toHaveProperty('paused');
-      expect(foundRoom.last_state).toHaveProperty('time');
+      expect(foundRoom.last_state).toHaveProperty('playerState');
+      expect(foundRoom.last_state).toHaveProperty('videoPos');
       expect(foundRoom.last_state).toHaveProperty('provider');
       expect(foundRoom.last_state).toHaveProperty('episode');
-      expect(typeof foundRoom.last_state.paused).toBe('boolean');
-      expect(typeof foundRoom.last_state.time).toBe('number');
+      expect(typeof foundRoom.last_state.playerState).toBe('string');
+      expect(typeof foundRoom.last_state.videoPos).toBe('number');
       expect(typeof foundRoom.last_state.provider).toBe('string');
       expect(typeof foundRoom.last_state.episode).toBe('number');
     });
@@ -557,15 +557,15 @@ describe('Rooms API Endpoints', () => {
 
       const body = JSON.parse(response.body);
 
-      expect(body.state).toHaveProperty('paused');
-      expect(body.state).toHaveProperty('time');
+      expect(body.state).toHaveProperty('playerState');
+      expect(body.state).toHaveProperty('videoPos');
       expect(body.state).toHaveProperty('provider');
       expect(body.state).toHaveProperty('episode');
       expect(body.state).toHaveProperty('eventId');
       expect(body.state).toHaveProperty('last_explicit_event_ts');
       expect(body.state).toHaveProperty('last_state_update_ts');
-      expect(typeof body.state.paused).toBe('boolean');
-      expect(typeof body.state.time).toBe('number');
+      expect(typeof body.state.playerState).toBe('string');
+      expect(typeof body.state.videoPos).toBe('number');
       expect(typeof body.state.provider).toBe('string');
       expect(typeof body.state.episode).toBe('number');
       expect(typeof body.state.eventId).toBe('number');

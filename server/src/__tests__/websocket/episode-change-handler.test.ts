@@ -25,10 +25,7 @@ import { hashPassword } from '../../utils/password';
 import { getConfig } from '../../config';
 import { validateMessage } from '../../utils/validation';
 import { handleConnection, type ExtendedWebSocket } from '../../handlers/websocket';
-import type {
-  EpisodeChangeRequestMessage,
-  EpisodeChangeMessage,
-} from '../../types/messages';
+import type { EpisodeChangeRequestMessage, EpisodeChangeMessage } from '../../types/messages';
 import { createHash } from 'crypto';
 
 // Mock WebSocket connection interface for testing
@@ -179,21 +176,33 @@ describe('Episode Change Handling', () => {
 
   describe('Schema Validation', () => {
     it('should validate a valid EPISODE_CHANGE_REQUEST message', () => {
-      const message = createEpisodeChangeRequestMessage('ep1', 'netflix', 'https://netflix.com/watch/123');
+      const message = createEpisodeChangeRequestMessage(
+        'ep1',
+        'netflix',
+        'https://netflix.com/watch/123'
+      );
       const result = validateMessage(message, 'EPISODE_CHANGE_REQUEST');
       expect(result.valid).toBe(true);
       expect(result.errors).toBeNull();
     });
 
     it('should validate EPISODE_CHANGE_REQUEST with numeric episodeId', () => {
-      const message = createEpisodeChangeRequestMessage(5, 'netflix', 'https://netflix.com/watch/123');
+      const message = createEpisodeChangeRequestMessage(
+        5,
+        'netflix',
+        'https://netflix.com/watch/123'
+      );
       const result = validateMessage(message, 'EPISODE_CHANGE_REQUEST');
       expect(result.valid).toBe(true);
       expect(result.errors).toBeNull();
     });
 
     it('should validate EPISODE_CHANGE_REQUEST with string episodeId', () => {
-      const message = createEpisodeChangeRequestMessage('episode-5', 'netflix', 'https://netflix.com/watch/123');
+      const message = createEpisodeChangeRequestMessage(
+        'episode-5',
+        'netflix',
+        'https://netflix.com/watch/123'
+      );
       const result = validateMessage(message, 'EPISODE_CHANGE_REQUEST');
       expect(result.valid).toBe(true);
       expect(result.errors).toBeNull();
@@ -252,7 +261,11 @@ describe('Episode Change Handling', () => {
     });
 
     it('should reject EPISODE_CHANGE_REQUEST with empty providerId', () => {
-      const invalidRequest = createEpisodeChangeRequestMessage('ep1', '', 'https://netflix.com/watch/123');
+      const invalidRequest = createEpisodeChangeRequestMessage(
+        'ep1',
+        '',
+        'https://netflix.com/watch/123'
+      );
       const result = validateMessage(invalidRequest, 'EPISODE_CHANGE_REQUEST');
       expect(result.valid).toBe(false);
       expect(result.errors).not.toBeNull();
@@ -284,7 +297,11 @@ describe('Episode Change Handling', () => {
       const pageUrl = 'https://netflix.com/watch/12345';
 
       // Send episode change request
-      const episodeChangeRequest = createEpisodeChangeRequestMessage(episodeId, providerId, pageUrl);
+      const episodeChangeRequest = createEpisodeChangeRequestMessage(
+        episodeId,
+        providerId,
+        pageUrl
+      );
       simulateWebSocketMessage(mockWs, JSON.stringify(episodeChangeRequest));
 
       // Verify room state was updated with episode info
@@ -297,7 +314,7 @@ describe('Episode Change Handling', () => {
       }
     });
 
-    it('should reset playback state on episode change (paused=true, time=0)', () => {
+    it('should reset playback state on episode change (playerState=paused, videoPos=0)', () => {
       const { mockWs, roomId } = setupRoomWithClient(
         '123e4567-e89b-12d3-a456-426614174000',
         'test-password'
@@ -310,16 +327,20 @@ describe('Episode Change Handling', () => {
       }
 
       // Set initial playback state (playing at position 100)
-      room.state.paused = false;
-      room.state.time = 100.5;
+      room.state.playerState = 'playing';
+      room.state.videoPos = 100.5;
 
       // Send episode change request
-      const episodeChangeRequest = createEpisodeChangeRequestMessage('ep1', 'netflix', 'https://netflix.com/watch/123');
+      const episodeChangeRequest = createEpisodeChangeRequestMessage(
+        'ep1',
+        'netflix',
+        'https://netflix.com/watch/123'
+      );
       simulateWebSocketMessage(mockWs, JSON.stringify(episodeChangeRequest));
 
       // Verify playback state was reset
-      expect(room.state.paused).toBe(true);
-      expect(room.state.time).toBe(0);
+      expect(room.state.playerState).toBe('paused');
+      expect(room.state.videoPos).toBe(0);
     });
 
     it('should increment eventId on episode change', () => {
@@ -336,7 +357,11 @@ describe('Episode Change Handling', () => {
       const initialEventId = room.state.eventId;
 
       // Send episode change request
-      const episodeChangeRequest = createEpisodeChangeRequestMessage('ep1', 'netflix', 'https://netflix.com/watch/123');
+      const episodeChangeRequest = createEpisodeChangeRequestMessage(
+        'ep1',
+        'netflix',
+        'https://netflix.com/watch/123'
+      );
       simulateWebSocketMessage(mockWs, JSON.stringify(episodeChangeRequest));
 
       // Verify eventId was incremented
@@ -360,7 +385,11 @@ describe('Episode Change Handling', () => {
       jest.advanceTimersByTime(1000); // Advance time by 1 second
 
       // Send episode change request
-      const episodeChangeRequest = createEpisodeChangeRequestMessage('ep1', 'netflix', 'https://netflix.com/watch/123');
+      const episodeChangeRequest = createEpisodeChangeRequestMessage(
+        'ep1',
+        'netflix',
+        'https://netflix.com/watch/123'
+      );
       simulateWebSocketMessage(mockWs, JSON.stringify(episodeChangeRequest));
 
       // Verify timestamps were updated
@@ -385,7 +414,11 @@ describe('Episode Change Handling', () => {
       const pageUrl = 'https://netflix.com/watch/12345';
 
       // Send episode change request
-      const episodeChangeRequest = createEpisodeChangeRequestMessage(episodeId, providerId, pageUrl);
+      const episodeChangeRequest = createEpisodeChangeRequestMessage(
+        episodeId,
+        providerId,
+        pageUrl
+      );
       simulateWebSocketMessage(mockWs, JSON.stringify(episodeChangeRequest));
 
       // Verify derivedContentKey was computed correctly
@@ -407,20 +440,28 @@ describe('Episode Change Handling', () => {
       const initialEventId = room.state.eventId;
 
       // Send first episode change
-      const episodeChange1 = createEpisodeChangeRequestMessage('ep1', 'netflix', 'https://netflix.com/watch/123');
+      const episodeChange1 = createEpisodeChangeRequestMessage(
+        'ep1',
+        'netflix',
+        'https://netflix.com/watch/123'
+      );
       simulateWebSocketMessage(mockWs, JSON.stringify(episodeChange1));
 
       expect(room.state.eventId).toBe(initialEventId + 1);
       expect(room.contentIdentity?.episodeId).toBe('ep1');
 
       // Send second episode change
-      const episodeChange2 = createEpisodeChangeRequestMessage('ep2', 'netflix', 'https://netflix.com/watch/124');
+      const episodeChange2 = createEpisodeChangeRequestMessage(
+        'ep2',
+        'netflix',
+        'https://netflix.com/watch/124'
+      );
       simulateWebSocketMessage(mockWs, JSON.stringify(episodeChange2));
 
       expect(room.state.eventId).toBe(initialEventId + 2);
       expect(room.contentIdentity?.episodeId).toBe('ep2');
-      expect(room.state.paused).toBe(true);
-      expect(room.state.time).toBe(0);
+      expect(room.state.playerState).toBe('paused');
+      expect(room.state.videoPos).toBe(0);
     });
   });
 
@@ -438,7 +479,11 @@ describe('Episode Change Handling', () => {
       );
 
       // Send episode change request from first client
-      const episodeChangeRequest = createEpisodeChangeRequestMessage('ep1', 'netflix', 'https://netflix.com/watch/123');
+      const episodeChangeRequest = createEpisodeChangeRequestMessage(
+        'ep1',
+        'netflix',
+        'https://netflix.com/watch/123'
+      );
       simulateWebSocketMessage(mockWs1, JSON.stringify(episodeChangeRequest));
 
       // Verify both clients received EPISODE_CHANGE broadcast
@@ -473,7 +518,11 @@ describe('Episode Change Handling', () => {
       }
 
       // Send episode change request
-      const episodeChangeRequest = createEpisodeChangeRequestMessage('ep1', 'netflix', 'https://netflix.com/watch/123');
+      const episodeChangeRequest = createEpisodeChangeRequestMessage(
+        'ep1',
+        'netflix',
+        'https://netflix.com/watch/123'
+      );
       simulateWebSocketMessage(mockWs, JSON.stringify(episodeChangeRequest));
 
       // Verify EPISODE_CHANGE includes eventId matching room state
@@ -494,7 +543,11 @@ describe('Episode Change Handling', () => {
       const beforeTs = Date.now();
 
       // Send episode change request
-      const episodeChangeRequest = createEpisodeChangeRequestMessage('ep1', 'netflix', 'https://netflix.com/watch/123');
+      const episodeChangeRequest = createEpisodeChangeRequestMessage(
+        'ep1',
+        'netflix',
+        'https://netflix.com/watch/123'
+      );
       simulateWebSocketMessage(mockWs, JSON.stringify(episodeChangeRequest));
 
       // Verify EPISODE_CHANGE includes server_ts
@@ -522,7 +575,11 @@ describe('Episode Change Handling', () => {
       );
 
       // Send episode change request from first client
-      const episodeChangeRequest = createEpisodeChangeRequestMessage('ep1', 'netflix', 'https://netflix.com/watch/123');
+      const episodeChangeRequest = createEpisodeChangeRequestMessage(
+        'ep1',
+        'netflix',
+        'https://netflix.com/watch/123'
+      );
       simulateWebSocketMessage(mockWs1, JSON.stringify(episodeChangeRequest));
 
       // Verify all three clients received EPISODE_CHANGE
@@ -534,7 +591,9 @@ describe('Episode Change Handling', () => {
       const getEpisodeChangeMessages = (mockWs: MockWebSocket): EpisodeChangeMessage[] =>
         mockWs.send.mock.calls
           .map(call => JSON.parse(call[0] as string))
-          .filter((msg: { type: string }) => msg.type === 'EPISODE_CHANGE') as EpisodeChangeMessage[];
+          .filter(
+            (msg: { type: string }) => msg.type === 'EPISODE_CHANGE'
+          ) as EpisodeChangeMessage[];
 
       const messages1 = getEpisodeChangeMessages(mockWs1);
       const messages2 = getEpisodeChangeMessages(mockWs2);
@@ -565,7 +624,11 @@ describe('Episode Change Handling', () => {
       mockWs2.readyState = 3; // CLOSED
 
       // Send episode change request from first client
-      const episodeChangeRequest = createEpisodeChangeRequestMessage('ep1', 'netflix', 'https://netflix.com/watch/123');
+      const episodeChangeRequest = createEpisodeChangeRequestMessage(
+        'ep1',
+        'netflix',
+        'https://netflix.com/watch/123'
+      );
       simulateWebSocketMessage(mockWs1, JSON.stringify(episodeChangeRequest));
 
       // Verify first client still received EPISODE_CHANGE
@@ -596,7 +659,11 @@ describe('Episode Change Handling', () => {
       const episodeId = 'episode-5';
       const providerId = 'netflix';
       const pageUrl = 'https://netflix.com/watch/12345';
-      const episodeChangeRequest = createEpisodeChangeRequestMessage(episodeId, providerId, pageUrl);
+      const episodeChangeRequest = createEpisodeChangeRequestMessage(
+        episodeId,
+        providerId,
+        pageUrl
+      );
       simulateWebSocketMessage(mockWs, JSON.stringify(episodeChangeRequest));
 
       // Verify room has content identity set
@@ -625,14 +692,22 @@ describe('Episode Change Handling', () => {
       const pageUrl = 'https://netflix.com/watch/12345';
 
       // Send first episode change
-      const episodeChangeRequest1 = createEpisodeChangeRequestMessage(episodeId, providerId, pageUrl);
+      const episodeChangeRequest1 = createEpisodeChangeRequestMessage(
+        episodeId,
+        providerId,
+        pageUrl
+      );
       simulateWebSocketMessage(mockWs, JSON.stringify(episodeChangeRequest1));
 
       const firstKey = room.contentIdentity?.derivedContentKey;
       expect(firstKey).toBeDefined();
 
       // Send same episode change again (same content identity)
-      const episodeChangeRequest2 = createEpisodeChangeRequestMessage(episodeId, providerId, pageUrl);
+      const episodeChangeRequest2 = createEpisodeChangeRequestMessage(
+        episodeId,
+        providerId,
+        pageUrl
+      );
       simulateWebSocketMessage(mockWs, JSON.stringify(episodeChangeRequest2));
 
       // Verify derivedContentKey remains the same
@@ -656,16 +731,20 @@ describe('Episode Change Handling', () => {
       }
 
       // Set initial state (paused at position 50)
-      room.state.paused = true;
-      room.state.time = 50.0;
+      room.state.playerState = 'paused';
+      room.state.videoPos = 50.0;
 
       // Send episode change request
-      const episodeChangeRequest = createEpisodeChangeRequestMessage('ep1', 'netflix', 'https://netflix.com/watch/123');
+      const episodeChangeRequest = createEpisodeChangeRequestMessage(
+        'ep1',
+        'netflix',
+        'https://netflix.com/watch/123'
+      );
       simulateWebSocketMessage(mockWs, JSON.stringify(episodeChangeRequest));
 
       // Verify playback state was reset
-      expect(room.state.paused).toBe(true);
-      expect(room.state.time).toBe(0);
+      expect(room.state.playerState).toBe('paused');
+      expect(room.state.videoPos).toBe(0);
     });
 
     it('should reset playback state even if already at time 0', () => {
@@ -681,16 +760,20 @@ describe('Episode Change Handling', () => {
       }
 
       // Set initial state (paused at position 0)
-      room.state.paused = true;
-      room.state.time = 0;
+      room.state.playerState = 'paused';
+      room.state.videoPos = 0;
 
       // Send episode change request
-      const episodeChangeRequest = createEpisodeChangeRequestMessage('ep1', 'netflix', 'https://netflix.com/watch/123');
+      const episodeChangeRequest = createEpisodeChangeRequestMessage(
+        'ep1',
+        'netflix',
+        'https://netflix.com/watch/123'
+      );
       simulateWebSocketMessage(mockWs, JSON.stringify(episodeChangeRequest));
 
       // Verify playback state was reset (still paused at 0, but episode changed)
-      expect(room.state.paused).toBe(true);
-      expect(room.state.time).toBe(0);
+      expect(room.state.playerState).toBe('paused');
+      expect(room.state.videoPos).toBe(0);
       // Verify episode info was updated
       expect(room.contentIdentity?.episodeId).toBe('ep1');
     });
@@ -711,7 +794,11 @@ describe('Episode Change Handling', () => {
       simulateWebSocketUpgrade(mockWs, roomId);
 
       // Send EPISODE_CHANGE_REQUEST before JOIN
-      const episodeChangeRequest = createEpisodeChangeRequestMessage('ep1', 'netflix', 'https://netflix.com/watch/123');
+      const episodeChangeRequest = createEpisodeChangeRequestMessage(
+        'ep1',
+        'netflix',
+        'https://netflix.com/watch/123'
+      );
       simulateWebSocketMessage(mockWs, JSON.stringify(episodeChangeRequest));
 
       // Verify ERROR was sent (client not authenticated yet)
@@ -752,13 +839,21 @@ describe('Episode Change Handling', () => {
       }
 
       // Send episode change with netflix
-      const episodeChange1 = createEpisodeChangeRequestMessage('ep1', 'netflix', 'https://netflix.com/watch/123');
+      const episodeChange1 = createEpisodeChangeRequestMessage(
+        'ep1',
+        'netflix',
+        'https://netflix.com/watch/123'
+      );
       simulateWebSocketMessage(mockWs, JSON.stringify(episodeChange1));
 
       expect(room.contentIdentity?.providerId).toBe('netflix');
 
       // Send episode change with hulu (different provider)
-      const episodeChange2 = createEpisodeChangeRequestMessage('ep1', 'hulu', 'https://hulu.com/watch/456');
+      const episodeChange2 = createEpisodeChangeRequestMessage(
+        'ep1',
+        'hulu',
+        'https://hulu.com/watch/456'
+      );
       simulateWebSocketMessage(mockWs, JSON.stringify(episodeChange2));
 
       expect(room.contentIdentity?.providerId).toBe('hulu');
@@ -778,13 +873,21 @@ describe('Episode Change Handling', () => {
       }
 
       // Send episode change with numeric episodeId
-      const episodeChange1 = createEpisodeChangeRequestMessage(5, 'netflix', 'https://netflix.com/watch/123');
+      const episodeChange1 = createEpisodeChangeRequestMessage(
+        5,
+        'netflix',
+        'https://netflix.com/watch/123'
+      );
       simulateWebSocketMessage(mockWs, JSON.stringify(episodeChange1));
 
       expect(room.contentIdentity?.episodeId).toBe(5);
 
       // Send episode change with string episodeId
-      const episodeChange2 = createEpisodeChangeRequestMessage('episode-6', 'netflix', 'https://netflix.com/watch/124');
+      const episodeChange2 = createEpisodeChangeRequestMessage(
+        'episode-6',
+        'netflix',
+        'https://netflix.com/watch/124'
+      );
       simulateWebSocketMessage(mockWs, JSON.stringify(episodeChange2));
 
       expect(room.contentIdentity?.episodeId).toBe('episode-6');

@@ -12,8 +12,8 @@ import { validateMessage, formatValidationError } from '../utils/validation';
 import { validateRoomForWebSocket } from '../utils/room-validation';
 import type { JoinMessage } from '../types/messages';
 import { RateLimiter } from '../utils/rate-limiter';
-import { sendError, sendRoomState, type ExtendedWebSocket } from '../utils/message-helpers';
-import { generateClientId } from '../utils/connection-helpers';
+import { sendError, sendRoomState, sendContentMismatch, type ExtendedWebSocket } from '../utils/message-helpers';
+import { generateClientId, computeDerivedContentKey } from '../utils/connection-helpers';
 import { rateLimitedTotal } from '../utils/metrics';
 
 /**
@@ -110,7 +110,11 @@ export function handleJoinMessage(
       'JOIN failed: room connection limit exceeded'
     );
     rateLimitedTotal.inc({ type: 'connection' });
-    sendError(ws, 'ROOM_FULL', `Room connection limit exceeded (max: ${config.maxConnectionsPerRoom})`);
+    sendError(
+      ws,
+      'ROOM_FULL',
+      `Room connection limit exceeded (max: ${config.maxConnectionsPerRoom})`
+    );
     ws.close(1008, 'Room connection limit exceeded');
     return;
   }
@@ -141,6 +145,117 @@ export function handleJoinMessage(
     },
     'JOIN authentication successful'
   );
+
+  // Content identity validation and initialization
+  // According to unified_v1_backend_and_network_design.md section 5:
+  // - If room has no content identity, set it from first client's JOIN
+  // - If room has content identity, validate client's content matches
+  // - If mismatch, send CONTENT_MISMATCH and reject join
+  if (!room.contentIdentity) {
+    // Room has no content identity yet - set it from first client's JOIN
+    if (joinMessage.episodeId && joinMessage.providerId && joinMessage.pageUrl) {
+      const derivedContentKey = computeDerivedContentKey(
+        joinMessage.pageUrl,
+        joinMessage.providerId,
+        joinMessage.episodeId
+      );
+      
+      room.contentIdentity = {
+        episodeId: joinMessage.episodeId,
+        providerId: joinMessage.providerId,
+        derivedContentKey,
+        pageUrl: joinMessage.pageUrl,
+      };
+
+      // Update legacy state fields for backward compatibility
+      room.state.provider = joinMessage.providerId;
+      room.state.episode =
+        typeof joinMessage.episodeId === 'number'
+          ? joinMessage.episodeId
+          : parseInt(joinMessage.episodeId, 10) || 0;
+
+      logger.info(
+        {
+          roomId: roomId,
+          clientId: clientId,
+          episodeId: joinMessage.episodeId,
+          providerId: joinMessage.providerId,
+          derivedContentKey,
+        },
+        'Content identity established from first client join'
+      );
+    } else {
+      // Client didn't provide content identity fields - this is acceptable for first join
+      // Room will remain without content identity until an episode change occurs
+      logger.debug(
+        {
+          roomId: roomId,
+          clientId: clientId,
+        },
+        'First client join without content identity fields - room remains without content identity'
+      );
+    }
+  } else {
+    // Room has content identity - validate client's content matches
+    if (!joinMessage.episodeId || !joinMessage.providerId || !joinMessage.pageUrl) {
+      logger.warn(
+        {
+          roomId: roomId,
+          clientId: clientId,
+          expectedContentKey: room.contentIdentity.derivedContentKey,
+        },
+        'JOIN failed: room has content identity but client did not provide content identity fields'
+      );
+      sendContentMismatch(ws, room.contentIdentity.derivedContentKey);
+      sendError(
+        ws,
+        'CONTENT_MISMATCH',
+        'Room has established content identity. Please provide episodeId, providerId, and pageUrl in JOIN message.'
+      );
+      ws.close(1008, 'Content identity mismatch');
+      return;
+    }
+
+    // Compute client's derivedContentKey and compare with room's
+    const clientDerivedContentKey = computeDerivedContentKey(
+      joinMessage.pageUrl,
+      joinMessage.providerId,
+      joinMessage.episodeId
+    );
+
+    if (clientDerivedContentKey !== room.contentIdentity.derivedContentKey) {
+      logger.warn(
+        {
+          roomId: roomId,
+          clientId: clientId,
+          expectedContentKey: room.contentIdentity.derivedContentKey,
+          reportedContentKey: clientDerivedContentKey,
+          expectedEpisodeId: room.contentIdentity.episodeId,
+          reportedEpisodeId: joinMessage.episodeId,
+          expectedProviderId: room.contentIdentity.providerId,
+          reportedProviderId: joinMessage.providerId,
+        },
+        'JOIN failed: content identity mismatch'
+      );
+      sendContentMismatch(ws, room.contentIdentity.derivedContentKey, clientDerivedContentKey);
+      sendError(
+        ws,
+        'CONTENT_MISMATCH',
+        'Content identity mismatch. Client content does not match room content.'
+      );
+      ws.close(1008, 'Content identity mismatch');
+      return;
+    }
+
+    logger.debug(
+      {
+        roomId: roomId,
+        clientId: clientId,
+        derivedContentKey: clientDerivedContentKey,
+      },
+      'Content identity validation successful'
+    );
+  }
 
   // Check for client tombstone (reconnection)
   // According to backend_design_v1.md:

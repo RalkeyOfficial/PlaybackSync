@@ -49,8 +49,8 @@ describe('Room Storage', () => {
     it('should initialize room state with default values', () => {
       const room = createRoom(testRoomId, testPasswordHash, testTtlSeconds, testTargetUrl);
 
-      expect(room.state.paused).toBe(true);
-      expect(room.state.time).toBe(0);
+      expect(room.state.playerState).toBe('paused');
+      expect(room.state.videoPos).toBe(0);
       expect(room.state.provider).toBe('');
       expect(room.state.episode).toBe(0);
       expect(room.state.eventId).toBe(0);
@@ -159,8 +159,8 @@ describe('Room Storage', () => {
       const rooms = listActiveRooms();
       const foundRoom = rooms.find(r => r.id === testRoomId);
 
-      expect(foundRoom?.last_state.paused).toBe(room.state.paused);
-      expect(foundRoom?.last_state.time).toBe(room.state.time);
+      expect(foundRoom?.last_state.playerState).toBe(room.state.playerState);
+      expect(foundRoom?.last_state.videoPos).toBe(room.state.videoPos);
       expect(foundRoom?.last_state.provider).toBe(room.state.provider);
       expect(foundRoom?.last_state.episode).toBe(room.state.episode);
     });

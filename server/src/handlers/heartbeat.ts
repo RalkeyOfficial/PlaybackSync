@@ -132,6 +132,19 @@ export function handleHeartbeatMessage(
   const client = room.connectedClients.get(ws.clientId);
   if (client) {
     client.lastSeen = Date.now();
+
+    // Skip drift reconciliation if client is buffering
+    // BUFFER_START tells the server to stop trying to sync that client
+    if (client.isBuffering) {
+      logger.debug(
+        {
+          roomId: roomId,
+          clientId: ws.clientId,
+        },
+        'Skipping drift reconciliation: client is buffering'
+      );
+      return;
+    }
   }
 
   // Skip drift reconciliation if in cooldown window after explicit event

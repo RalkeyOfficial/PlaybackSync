@@ -56,7 +56,6 @@ Required env vars (examples and defaults):
 - `SHARE_HOSTNAME=share.playbacksync.mydomain.tld` (used in share redirects)
 - `SYNC_HOSTNAME=sync.playbacksync.mydomain.tld` (wss host used for client params)
 - `ROOM_TTL_SECONDS=86400` (24h)
-- `DRIFT_CHECK_INTERVAL_MS=5000` (5s)
 - `DRIFT_THRESHOLD_MS=500` (0.5s)
 - `COOLDOWN_WINDOW_MS=3000` (3s) — suspend reconciliation for this window after explicit event
 - `CLIENT_TOMBSTONE_MS=30000` (30s) — allow quick reconnect identity
@@ -187,14 +186,16 @@ Validation: each message type will have an explicit JSON Schema used by `ajv`. M
 
 Note: When broadcasting, tag messages with server_ts and the authoritative show id so clients can double-check before applying.
 
-### Periodic drift reconciliation (every DRIFT_CHECK_INTERVAL_MS)
+### Drift reconciliation (event-driven via HEARTBEAT)
 The server maintains an **expected playback time** derived from the last explicit event and current play/pause state.
 
 Expected time calculation:
-- If `paused == true`:
-  - `expected_time = state.time`
-- If `paused == false`:
-  - `expected_time = state.time + (now - state.last_state_update_ts)`
+- If `playerState == 'paused'`:
+  - `expected_time = state.videoPos`
+- If `playerState == 'playing'`:
+  - `expected_time = state.videoPos + (now - state.last_state_update_ts)`
+
+Note: Server state is always either `'playing'` or `'paused'`. Buffering is client-specific and reported via HEARTBEAT messages, but does not affect the authoritative server state.
 
 Reconciliation algorithm (per room):
 1. If `now - last_explicit_event_ts < COOLDOWN_WINDOW_MS` → skip
@@ -203,7 +204,7 @@ Reconciliation algorithm (per room):
 4. If **any** client satisfies `abs(delta) >= DRIFT_THRESHOLD_MS`:
    - Server does **not** shift authoritative time to max/min
    - Server keeps authoritative `expected_time`
-   - Broadcast `STATE { time: expected_time }` to all clients
+   - Broadcast `STATE { videoPos: expected_time, playerState }` to all clients
 
 This ensures that:
 - A single heavily drifted client is corrected even if the group average is close
@@ -311,7 +312,6 @@ services:
       - SHARE_HOSTNAME=share.playbacksync.mydomain.tld
       - SYNC_HOSTNAME=sync.playbacksync.mydomain.tld
       - ROOM_TTL_SECONDS=86400
-      - DRIFT_CHECK_INTERVAL_MS=5000
       - DRIFT_THRESHOLD_MS=500
       - COOLDOWN_WINDOW_MS=3000
       - CLIENT_TOMBSTONE_MS=30000

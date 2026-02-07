@@ -12,6 +12,7 @@ import { toRoomId } from '../types/ids';
 import { closeRoomConnections } from '../utils/room-cleanup';
 import { closeConnectionsForRoom } from '../handlers/websocket';
 import { roomValidationPreHandler } from '../utils/room-validation';
+import { getCurrentVideoPos } from '../utils/drift-reconciliation';
 
 /**
  * Generate a random alphanumeric password
@@ -103,8 +104,8 @@ const listRoomsResponseSchema = {
       last_state: {
         type: 'object',
         properties: {
-          paused: { type: 'boolean' },
-          time: { type: 'number' },
+          playerState: { type: 'string', enum: ['playing', 'paused'] },
+          videoPos: { type: 'number' },
           provider: { type: 'string' },
           episode: { type: 'number' },
           last_explicit_event_ts: { type: 'number' },
@@ -112,8 +113,8 @@ const listRoomsResponseSchema = {
           eventId: { type: 'number' },
         },
         required: [
-          'paused',
-          'time',
+          'playerState',
+          'videoPos',
           'provider',
           'episode',
           'last_explicit_event_ts',
@@ -139,8 +140,8 @@ const getRoomDetailsResponseSchema = {
     state: {
       type: 'object',
       properties: {
-        paused: { type: 'boolean' },
-        time: { type: 'number' },
+        playerState: { type: 'string', enum: ['playing', 'paused'] },
+        videoPos: { type: 'number' },
         provider: { type: 'string' },
         episode: { type: 'number' },
         eventId: { type: 'number' },
@@ -148,8 +149,8 @@ const getRoomDetailsResponseSchema = {
         last_state_update_ts: { type: 'number' },
       },
       required: [
-        'paused',
-        'time',
+        'playerState',
+        'videoPos',
         'provider',
         'episode',
         'eventId',
@@ -332,12 +333,17 @@ const roomsPlugin: FastifyPluginAsync = async fastify => {
       }));
 
       // Return room details (exclude passwordHash)
+      // Use getCurrentVideoPos to ensure API returns expected_time when playing
+      const currentState = {
+        ...room.state,
+        videoPos: getCurrentVideoPos(room),
+      };
       return reply.code(200).send({
         roomId: room.roomId as string,
         createdAt: room.createdAt,
         expiresAt: room.expiresAt,
         targetUrl: room.targetUrl,
-        state: room.state,
+        state: currentState,
         connectedClients,
         recentEvents: room.eventLog,
       });

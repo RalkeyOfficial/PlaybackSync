@@ -86,6 +86,7 @@ The JOIN handler can send the following error responses:
 ### Example Flow
 
 **First Connection:**
+
 1. Client connects to `wss://host/{roomId}`
 2. Server validates room exists
 3. Client sends JOIN with password
@@ -93,6 +94,7 @@ The JOIN handler can send the following error responses:
 5. Server sends ROOM_STATE with `clientId` and current state
 
 **Reconnection (Valid Tombstone):**
+
 1. Client disconnects (tombstone created)
 2. Client reconnects within 30 seconds
 3. Client sends JOIN with previous `clientId` and password
@@ -392,6 +394,242 @@ The HEARTBEAT handler can send the following error responses:
 7. Server selects mode: `seek` (large drift)
 8. Server sends SYNC_ADJUST to client: `{ type: "SYNC_ADJUST", serverTime: 1670000000000, targetPos: 125.0, mode: "seek" }`
 9. Client receives SYNC_ADJUST and seeks to 125.0 seconds
+
+## CLOCK_PING Handler
+
+The CLOCK_PING handler implements NTP-style clock synchronization between clients and the server. This allows the server to track per-client clock offsets and round-trip times (RTT), which are essential for accurate scheduled playback and drift detection.
+
+### Handler Function
+
+```typescript
+handleClockPingMessage(
+  ws: ExtendedWebSocketWithRateLimit,
+  message: unknown,
+  roomId: RoomId,
+  connectionsByRoom: ConnectionsByRoom
+): void
+```
+
+### What It Does
+
+When a client sends a CLOCK_PING message, the handler:
+
+1. **Checks authentication** - verifies client has `clientId` (completed JOIN)
+2. **Validates message** against CLOCK_PING schema
+3. **Validates room** exists and is not expired
+4. **Records server receive time** immediately upon message receipt
+5. **Records server send time** just before sending response
+6. **Calculates estimated RTT** based on server processing time
+7. **Sends CLOCK_PONG response** with all four timestamps:
+   - `clientSendTime`: From CLOCK_PING message (client timestamp when ping was sent)
+   - `serverRecvTime`: Server timestamp when ping was received
+   - `serverSendTime`: Server timestamp when pong is being sent
+   - `clientRecvTime`: Placeholder (client fills this in when pong is received)
+8. **Updates client connection metadata**:
+   - `rtt`: Estimated round-trip time (server processing time)
+   - `clockOffset`: Estimated clock offset (one-way estimate)
+   - `clockSyncTime`: Timestamp when clock sync occurred
+
+### Clock Synchronization Protocol
+
+The CLOCK_PING/CLOCK_PONG protocol follows an NTP-style four-timestamp exchange:
+
+1. **Client sends CLOCK_PING** with `clientSendTime` (T1)
+2. **Server receives** and records `serverRecvTime` (T2)
+3. **Server sends CLOCK_PONG** with T1, T2, and `serverSendTime` (T3)
+4. **Client receives** and records `clientRecvTime` (T4)
+
+The client then calculates:
+- **RTT**: `(T4 - T1) - (T3 - T2)` (total time minus server processing time)
+- **Clock Offset**: `((T2 - T1) + (T3 - T4)) / 2` (average of forward and reverse path delays)
+
+### Server-Side Tracking
+
+The server tracks clock synchronization metadata on each `ClientConnection`:
+
+- **`clockOffset`**: Estimated clock offset in milliseconds (`serverTime - clientTime`)
+  - Initially set to one-way estimate: `serverRecvTime - clientSendTime`
+  - Can be refined when client reports final calculation
+- **`rtt`**: Round-trip time in milliseconds
+  - Initially set to server processing time estimate
+  - True RTT requires client to complete the calculation
+- **`clockSyncTime`**: Timestamp when clock sync last occurred (for tracking sync freshness)
+
+**Note**: The server's initial estimates are approximations. The true clock offset and RTT require the client to complete the calculation using all four timestamps. The server stores these estimates for monitoring and potential future use in scheduled playback.
+
+### Client Connection Updates
+
+When processing CLOCK_PING:
+
+1. **Updates `lastSeen`**: Marks client as active
+2. **Stores estimated RTT**: `client.rtt = serverSendTime - serverRecvTime`
+3. **Stores estimated clock offset**: `client.clockOffset = serverRecvTime - clientSendTime`
+4. **Records sync time**: `client.clockSyncTime = Date.now()`
+
+### Error Responses
+
+The CLOCK_PING handler can send the following error responses:
+
+- `NOT_AUTHENTICATED`: CLOCK_PING received before JOIN message
+- `INVALID_MESSAGE`: Message validation failed (schema errors)
+- `ROOM_NOT_FOUND`: Room doesn't exist or is expired
+
+### Usage Pattern
+
+According to the design specification, clients should perform 3-5 ping/pong exchanges on join to establish accurate clock synchronization. This allows:
+
+- **Multiple samples** for better accuracy (averaging reduces noise)
+- **RTT measurement** for network condition assessment
+- **Clock offset calculation** for scheduled playback timing
+
+### Example Flow
+
+1. Client sends CLOCK_PING: `{ type: "CLOCK_PING", clientSendTime: 1670000000000 }`
+2. Server receives at `serverRecvTime: 1670000000010` (10ms later)
+3. Server prepares response at `serverSendTime: 1670000000012` (2ms processing)
+4. Server sends CLOCK_PONG: `{ type: "CLOCK_PONG", clientSendTime: 1670000000000, serverRecvTime: 1670000000010, serverSendTime: 1670000000012 }`
+5. Client receives at `clientRecvTime: 1670000000015` (3ms network delay)
+6. Client calculates:
+   - RTT: `(1670000000015 - 1670000000000) - (1670000000012 - 1670000000010) = 15 - 2 = 13ms`
+   - Clock Offset: `((1670000000010 - 1670000000000) + (1670000000012 - 1670000000015)) / 2 = (10 + (-3)) / 2 = 3.5ms`
+7. Server stores estimated values: `rtt: 2ms`, `clockOffset: 10ms`
+
+## BUFFER_START Handler
+
+The BUFFER_START handler processes notifications from clients when playback stalls and buffering begins. When a client is buffering, the server stops attempting to sync that client (skips drift reconciliation) until buffering ends.
+
+### Handler Function
+
+```typescript
+handleBufferStartMessage(
+  ws: ExtendedWebSocketWithRateLimit,
+  message: unknown,
+  roomId: RoomId,
+  connectionsByRoom: ConnectionsByRoom
+): void
+```
+
+### What It Does
+
+When a client sends a BUFFER_START message, the handler:
+
+1. **Checks authentication** - verifies client has `clientId` (completed JOIN)
+2. **Validates message** against BUFFER_START schema
+3. **Validates room** exists and is not expired
+4. **Marks client as buffering** by setting `client.isBuffering = true`
+5. **Updates `lastSeen` timestamp** for connection health tracking
+
+### Buffering State Management
+
+When a client is marked as buffering:
+
+- **Drift Reconciliation Skipped**: The HEARTBEAT handler checks `client.isBuffering` and skips drift reconciliation if true
+- **No SYNC_ADJUST Messages**: The server will not send SYNC_ADJUST messages to buffering clients
+- **State Preserved**: Room state and other client metadata remain unchanged
+
+**Purpose**: Buffering clients cannot maintain accurate playback position, so attempting to sync them would be futile and could cause incorrect corrections. The server waits until buffering ends before resuming sync attempts.
+
+### Error Responses
+
+The BUFFER_START handler can send the following error responses:
+
+- `NOT_AUTHENTICATED`: BUFFER_START received before JOIN message
+- `INVALID_MESSAGE`: Message validation failed (schema errors)
+- `ROOM_NOT_FOUND`: Room doesn't exist or is expired
+
+### Example Flow
+
+1. Client detects playback stall (video element `waiting` event)
+2. Client sends BUFFER_START: `{ type: "BUFFER_START", videoPos: 125.5 }`
+3. Server validates message
+4. Server marks client: `client.isBuffering = true`
+5. Server logs: "Client marked as buffering - server will stop syncing this client"
+6. Subsequent HEARTBEAT messages from this client are processed but drift reconciliation is skipped
+
+## BUFFER_END Handler
+
+The BUFFER_END handler processes notifications from clients when buffering ends and playback can resume. When buffering ends, the server unmarks the client and sends a ROOM_STATE update to help the client sync up with the current room state.
+
+### Handler Function
+
+```typescript
+handleBufferEndMessage(
+  ws: ExtendedWebSocketWithRateLimit,
+  message: unknown,
+  roomId: RoomId,
+  connectionsByRoom: ConnectionsByRoom
+): void
+```
+
+### What It Does
+
+When a client sends a BUFFER_END message, the handler:
+
+1. **Checks authentication** - verifies client has `clientId` (completed JOIN)
+2. **Validates message** against BUFFER_END schema
+3. **Validates room** exists and is not expired
+4. **Unmarks client as buffering** by setting `client.isBuffering = false`
+5. **Updates `lastSeen` timestamp** for connection health tracking
+6. **Sends ROOM_STATE update** to the client with current room state
+
+### Buffering End Behavior
+
+When buffering ends:
+
+- **Sync Resumed**: The server can resume drift reconciliation for this client
+- **State Update Sent**: The server immediately sends a ROOM_STATE message to the client
+- **Sync Opportunity**: The ROOM_STATE includes current `videoPos`, `playerState`, and `serverTime`, allowing the client to sync up
+
+**Purpose**: After buffering, the client's playback position may be out of sync with the room state. Sending ROOM_STATE immediately gives the client the authoritative state to sync to, rather than waiting for the next HEARTBEAT cycle.
+
+### ROOM_STATE Update
+
+The ROOM_STATE message sent after BUFFER_END includes:
+
+- **Current playback position** (`videoPos`): Where the room is currently at
+- **Player state** (`playerState`): Whether the room is playing or paused
+- **Server timestamp** (`server_ts`): For synchronization timing
+- **Last event ID** (`lastEventId`): For event ordering
+- **Content identity** (if set): Episode and provider information
+
+The client can use this information to:
+- Seek to the correct position if needed
+- Resume playback if the room is playing
+- Sync its clock using the server timestamp
+
+### Error Responses
+
+The BUFFER_END handler can send the following error responses:
+
+- `NOT_AUTHENTICATED`: BUFFER_END received before JOIN message
+- `INVALID_MESSAGE`: Message validation failed (schema errors)
+- `ROOM_NOT_FOUND`: Room doesn't exist or is expired
+
+### Example Flow
+
+1. Client detects buffering ended (video element `canplay` event)
+2. Client sends BUFFER_END: `{ type: "BUFFER_END", videoPos: 125.8 }`
+3. Server validates message
+4. Server unmarks client: `client.isBuffering = false`
+5. Server sends ROOM_STATE to client: `{ type: "ROOM_STATE", clientId: "...", playerState: "playing", videoPos: 130.2, server_ts: 1670000000000, lastEventId: 45 }`
+6. Client receives ROOM_STATE and syncs to position 130.2 seconds
+7. Subsequent HEARTBEAT messages from this client will resume drift reconciliation
+
+### Integration with HEARTBEAT Handler
+
+The HEARTBEAT handler checks `client.isBuffering` before performing drift reconciliation:
+
+```typescript
+if (client.isBuffering) {
+  logger.debug('Skipping drift reconciliation: client is buffering');
+  return;
+}
+```
+
+This ensures that:
+- Buffering clients are not corrected (they can't maintain accurate position)
+- Resources are not wasted on futile sync attempts
+- Sync resumes automatically when buffering ends
 
 ## Related Documentation
 

@@ -13,15 +13,16 @@ sequenceDiagram
     end
 
     rect rgba(230,255,230,0.3)
-    Note over C,S: PLAY flow (scheduled start)
-    C->>S: PLAY_REQUEST {videoPos, clientTime}
-    Note right of S: compute authoritative videoPosServer\ncompute playAt = now_server + SAFETY_BUFFER_MS
-    S-->>O: PLAY {serverTime: playAt, videoPos, eventId}
-    S-->>C: PLAY {serverTime: playAt, videoPos, eventId}
-    Note left of O: compute localPlayAt = playAt - offset\nschedule video.play() at localPlayAt
+    Note over C,S: PLAY flow (immediate broadcast)
+    C->>S: EVENT {event: "play", client_ts}
+    Note right of S: compute authoritative videoPos broadcast STATE immediately
+    S-->>O: STATE {playerState: "playing", videoPos, server_ts, eventId}
+    S-->>C: STATE {playerState: "playing", videoPos, server_ts, eventId}
+    Note left of C: play() starts immediately (native player cannot be delayed)
+    Note left of O: play() applied immediately when message received
     O-->>S: ACK {eventId}
     C-->>S: ACK {eventId}
-    Note right of S: wait up to ACK_TIMEOUT_MS\nflag missing ACKs as lagging
+    Note right of S: wait up to ACK_TIMEOUT_MS flag missing ACKs as lagging any initial drift corrected by SYNC_ADJUST
     end
 
     rect rgba(255,230,230,0.3)
@@ -33,7 +34,7 @@ sequenceDiagram
         S-->>C: SYNC_ADJUST {mode: nudge-rate, targetPos}
         Note right of C: temporarily adjust playbackRate
     else gap > SEEK_THRESHOLD_MS
-        S-->>C: SEEK {targetPos, serverTime: now, eventId}
+        S-->>C: STATE {playerState, videoPos: targetPos, server_ts: now, eventId}
         C-->>S: ACK {eventId}
         Note right of C: apply hard seek
     end
@@ -41,9 +42,9 @@ sequenceDiagram
 
     rect rgba(240,240,255,0.3)
     Note over O,S: PAUSE flow (immediate)
-    O->>S: PAUSE_REQUEST {videoPos, clientTime}
-    S-->>O: PAUSE {serverTime: now_server, videoPos, eventId}
-    S-->>C: PAUSE {serverTime: now_server, videoPos, eventId}
+    O->>S: EVENT {event: "pause", client_ts}
+    S-->>O: STATE {playerState: "paused", videoPos, server_ts, eventId}
+    S-->>C: STATE {playerState: "paused", videoPos, server_ts, eventId}
     O-->>S: ACK {eventId}
     C-->>S: ACK {eventId}
     Note right of S: pause is authoritative and immediate
@@ -51,7 +52,7 @@ sequenceDiagram
 
     rect rgba(250,250,250,0.6)
     Note over S: Configuration labels (examples only)
-    Note over S: SAFETY_BUFFER_MS = max(MEDIAN_RTT_MS, BASELINE_MARGIN_MS)
     Note over S: ACK_TIMEOUT_MS = configurable
     Note over S: NUDGE_THRESHOLD_MS / SEEK_THRESHOLD_MS are tunable
+    Note over S: Playback events broadcast immediately any drift corrected by SYNC_ADJUST
     end

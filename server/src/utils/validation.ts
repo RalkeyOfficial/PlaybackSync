@@ -19,7 +19,10 @@ export type MessageSchemaType =
   | 'SYNC_ADJUST'
   | 'STATE'
   | 'COMMAND'
-  | 'ERROR';
+  | 'ERROR'
+  | 'CLOCK_PING'
+  | 'BUFFER_START'
+  | 'BUFFER_END';
 
 /**
  * Validation result
@@ -56,6 +59,9 @@ function loadSchemasInternal(): SchemaMap {
     STATE: 'state.json',
     COMMAND: 'command.json',
     ERROR: 'error.json',
+    CLOCK_PING: 'clock-ping.json',
+    BUFFER_START: 'buffer-start.json',
+    BUFFER_END: 'buffer-end.json',
   };
 
   const loadedSchemas: Partial<SchemaMap> = {};

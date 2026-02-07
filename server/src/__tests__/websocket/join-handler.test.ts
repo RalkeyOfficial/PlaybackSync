@@ -276,8 +276,8 @@ describe('JOIN Message Handling', () => {
         config.roomTtlSeconds,
         'https://example.com/video'
       );
-      room.state.paused = false;
-      room.state.time = 42.5;
+      room.state.playerState = 'playing';
+      room.state.videoPos = 42.5;
       room.state.provider = 'netflix';
       room.state.episode = 5;
       room.state.eventId = 10;
@@ -294,8 +294,8 @@ describe('JOIN Message Handling', () => {
       const sentMessage = JSON.parse(mockWs.send.mock.calls[0][0] as string);
       expect(sentMessage.type).toBe('ROOM_STATE');
       expect(sentMessage.clientId).toBeDefined();
-      expect(sentMessage.paused).toBe(false);
-      expect(sentMessage.time).toBe(42.5);
+      expect(sentMessage.playerState).toBe('playing');
+      expect(sentMessage.videoPos).toBe(42.5);
       expect(sentMessage.lastEventId).toBe(10);
     });
   });
@@ -559,9 +559,7 @@ describe('JOIN Message Handling', () => {
         expect(tombstonedClient!.tombstonedUntil).toBeGreaterThanOrEqual(
           expectedTombstoneTime - 100
         );
-        expect(tombstonedClient!.tombstonedUntil).toBeLessThanOrEqual(
-          expectedTombstoneTime + 100
-        );
+        expect(tombstonedClient!.tombstonedUntil).toBeLessThanOrEqual(expectedTombstoneTime + 100);
       });
 
       it('should remove connection from connectionsByRoom on disconnect', () => {
@@ -656,8 +654,8 @@ describe('JOIN Message Handling', () => {
           config.roomTtlSeconds,
           'https://example.com/video'
         );
-        room.state.paused = false;
-        room.state.time = 100.5;
+        room.state.playerState = 'playing';
+        room.state.videoPos = 100.5;
         room.state.eventId = 42;
 
         // First connection
@@ -668,7 +666,7 @@ describe('JOIN Message Handling', () => {
         const clientId = firstRoomState.clientId;
 
         // Update room state while client is connected
-        room.state.time = 150.75;
+        room.state.videoPos = 150.75;
         room.state.eventId = 50;
 
         // Disconnect
@@ -683,9 +681,9 @@ describe('JOIN Message Handling', () => {
         // Verify ROOM_STATE reflects current room state
         const secondRoomState = JSON.parse(mockWs2.send.mock.calls[0][0] as string);
         expect(secondRoomState.clientId).toBe(clientId);
-        expect(secondRoomState.time).toBe(150.75);
+        expect(secondRoomState.videoPos).toBe(150.75);
         expect(secondRoomState.lastEventId).toBe(50);
-        expect(secondRoomState.paused).toBe(false);
+        expect(secondRoomState.playerState).toBe('playing');
       });
 
       it('should update lastSeen timestamp on reconnection', () => {
@@ -775,10 +773,10 @@ describe('JOIN Message Handling', () => {
         // Verify same clientId is used (tombstone expired, but clientId is honored)
         expect(mockWs2.clientId).toBeDefined();
         expect(mockWs2.clientId).toBe(originalClientId);
-        
+
         const secondRoomState = JSON.parse(mockWs2.send.mock.calls[0][0] as string);
         expect(secondRoomState.clientId).toBe(originalClientId);
-        
+
         // Verify expired tombstone was removed and new client entry created with same clientId
         // The old entry (with tombstone) was removed, and a new entry (without tombstone) was created
         expect(room.connectedClients.has(originalClientId)).toBe(true);
@@ -897,8 +895,8 @@ describe('JOIN Message Handling', () => {
           config.roomTtlSeconds,
           'https://example.com/video'
         );
-        room.state.paused = true;
-        room.state.time = 200.5;
+        room.state.playerState = 'paused';
+        room.state.videoPos = 200.5;
         room.state.eventId = 100;
 
         // First connection
@@ -917,8 +915,8 @@ describe('JOIN Message Handling', () => {
 
         // Verify ROOM_STATE includes current playback state
         const secondRoomState = JSON.parse(mockWs2.send.mock.calls[0][0] as string);
-        expect(secondRoomState.paused).toBe(true);
-        expect(secondRoomState.time).toBe(200.5);
+        expect(secondRoomState.playerState).toBe('paused');
+        expect(secondRoomState.videoPos).toBe(200.5);
         expect(secondRoomState.lastEventId).toBe(100);
       });
 

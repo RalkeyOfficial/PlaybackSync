@@ -13,7 +13,7 @@ The system is built around four invariants:
 1. The server owns the authoritative timeline.
 2. All user-visible control actions (play, pause, seek, episode change) are serialized and rebroadcast by the server.
 3. Clients never infer intent from other clients; they only react to server commands.
-4. Clock synchronization is required to schedule simultaneous actions across heterogeneous RTTs.
+4. Clock synchronization is required for drift reconciliation and timing-sensitive operations. Playback events are broadcast immediately, as the initiating client's native player cannot be delayed by JavaScript.
 
 The newer event-handling document already satisfies these invariants well. The changes below extend the *scope* of what is considered part of the authoritative state.
 
@@ -26,7 +26,7 @@ The old document treated “what is being watched” as first-class state. That 
 Each room maintains the following authoritative state:
 
 - Playback state
-  - paused: boolean
+  - playerState: 'playing' | 'paused' (server state is always either playing or paused; buffering is client-specific)
   - videoPos: seconds
   - lastEventId
   - lastServerUpdateTs
@@ -81,7 +81,7 @@ Server behavior:
 2. Derive `derivedContentKey` from the provided URL + provider + episode.
 3. Increment `eventId`.
 4. Reset authoritative playback state:
-   - paused = true
+   - playerState = 'paused'
    - videoPos = 0
 5. Broadcast authoritative episode change.
 
@@ -99,7 +99,7 @@ Client behavior:
 - If `derivedContentKey` matches local derivation:
   - load episode if not already loaded
   - seek to 0
-  - pause
+  - set playerState to 'paused'
 - If it does not match:
   - enter “out-of-sync content” state
   - surface UI warning and refuse to apply play/seek events

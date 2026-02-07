@@ -8,9 +8,10 @@ import { logger } from './logger';
 import { getConfig } from '../config';
 import { RateLimiter } from './rate-limiter';
 import { rateLimitedTotal } from './metrics';
-import type { RoomId } from '../types/ids';
+import type { RoomId, ClientId } from '../types/ids';
 import type { StateMessage, EpisodeChangeMessage } from '../types/messages';
 import type { Room } from '../types/room';
+import { getCurrentVideoPos } from './drift-reconciliation';
 
 /**
  * Per-room broadcast rate limiter state
@@ -65,8 +66,8 @@ export function broadcastState(
   const now = Date.now();
   const stateMessage: StateMessage = {
     type: 'STATE',
-    paused: room.state.paused,
-    time: room.state.time,
+    playerState: room.state.playerState,
+    videoPos: getCurrentVideoPos(room),
     server_ts: now,
     eventId: room.state.eventId,
   };
@@ -88,10 +89,25 @@ export function broadcastState(
 
   let successCount = 0;
   let failureCount = 0;
+  let skippedBufferingCount = 0;
 
   for (const ws of roomConnections) {
     try {
       if (ws.readyState === WebSocket.OPEN && ws.clientId) {
+        // Skip clients that are buffering - BUFFER_START tells server to stop syncing
+        const client = room.connectedClients.get(ws.clientId as ClientId);
+        if (client?.isBuffering) {
+          logger.debug(
+            {
+              roomId: room.roomId,
+              clientId: ws.clientId,
+            },
+            'Skipping STATE broadcast: client is buffering'
+          );
+          skippedBufferingCount++;
+          continue;
+        }
+
         ws.send(JSON.stringify(stateMessage));
         successCount++;
       } else {
@@ -123,10 +139,12 @@ export function broadcastState(
       eventId: room.state.eventId,
       successCount,
       failureCount,
+      skippedBufferingCount,
       totalConnections: roomConnections.size,
     },
     'STATE broadcast completed'
   );
+
 }
 
 /**
@@ -186,10 +204,25 @@ export function broadcastEpisodeChange(
 
   let successCount = 0;
   let failureCount = 0;
+  let skippedBufferingCount = 0;
 
   for (const ws of roomConnections) {
     try {
       if (ws.readyState === WebSocket.OPEN && ws.clientId) {
+        // Skip clients that are buffering - BUFFER_START tells server to stop syncing
+        const client = room.connectedClients.get(ws.clientId as ClientId);
+        if (client?.isBuffering) {
+          logger.debug(
+            {
+              roomId: room.roomId,
+              clientId: ws.clientId,
+            },
+            'Skipping EPISODE_CHANGE broadcast: client is buffering'
+          );
+          skippedBufferingCount++;
+          continue;
+        }
+
         ws.send(JSON.stringify(episodeChangeMessage));
         successCount++;
       } else {
@@ -222,6 +255,7 @@ export function broadcastEpisodeChange(
       episodeId: room.contentIdentity.episodeId,
       successCount,
       failureCount,
+      skippedBufferingCount,
       totalConnections: roomConnections.size,
     },
     'EPISODE_CHANGE broadcast completed'

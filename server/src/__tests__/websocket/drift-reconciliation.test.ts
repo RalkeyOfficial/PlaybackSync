@@ -26,11 +26,7 @@ import { hashPassword } from '../../utils/password';
 import { getConfig } from '../../config';
 import { validateMessage } from '../../utils/validation';
 import { handleConnection, type ExtendedWebSocket } from '../../handlers/websocket';
-import type {
-  HeartbeatMessage,
-  SyncAdjustMessage,
-  EventMessage,
-} from '../../types/messages';
+import type { HeartbeatMessage, SyncAdjustMessage, EventMessage } from '../../types/messages';
 
 // Mock WebSocket connection interface for testing
 interface MockWebSocket {
@@ -178,12 +174,12 @@ function calculateExpectedTime(room: ReturnType<typeof getRoom>): number {
     throw new Error('Room not found');
   }
   const now = Date.now();
-  if (room.state.paused) {
-    return room.state.time;
+  if (room.state.playerState === 'paused') {
+    return room.state.videoPos;
   } else {
-    // Playing: expected_time = state.time + (now - last_state_update_ts)
+    // Playing: expected_time = state.videoPos + (now - last_state_update_ts)
     const elapsedSeconds = (now - room.state.last_state_update_ts) / 1000;
-    return room.state.time + elapsedSeconds;
+    return room.state.videoPos + elapsedSeconds;
   }
 }
 
@@ -326,8 +322,8 @@ describe('Drift Reconciliation System', () => {
       }
 
       // Set room to paused state
-      room.state.paused = true;
-      room.state.time = 100.0;
+      room.state.playerState = 'paused';
+      room.state.videoPos = 100.0;
       room.state.last_state_update_ts = Date.now();
 
       const expectedTime = calculateExpectedTime(room);
@@ -347,8 +343,8 @@ describe('Drift Reconciliation System', () => {
       }
 
       // Set room to playing state
-      room.state.paused = false;
-      room.state.time = 100.0;
+      room.state.playerState = 'playing';
+      room.state.videoPos = 100.0;
       const baseTime = Date.now();
       room.state.last_state_update_ts = baseTime;
 
@@ -371,8 +367,8 @@ describe('Drift Reconciliation System', () => {
         return;
       }
 
-      room.state.paused = true;
-      room.state.time = 100.0;
+      room.state.playerState = 'paused';
+      room.state.videoPos = 100.0;
       room.state.last_state_update_ts = Date.now();
 
       // Advance time by 10 seconds
@@ -397,8 +393,8 @@ describe('Drift Reconciliation System', () => {
       }
 
       // Set room state
-      room.state.paused = false;
-      room.state.time = 100.0;
+      room.state.playerState = 'playing';
+      room.state.videoPos = 100.0;
       room.state.last_state_update_ts = Date.now();
 
       // Send HEARTBEAT with matching position (after small time advance)
@@ -427,8 +423,8 @@ describe('Drift Reconciliation System', () => {
       }
 
       // Set room to playing state
-      room.state.paused = false;
-      room.state.time = 0.0;
+      room.state.playerState = 'playing';
+      room.state.videoPos = 0.0;
       room.state.last_state_update_ts = Date.now();
 
       // Advance time by 8 seconds (simulating playback)
@@ -470,8 +466,8 @@ describe('Drift Reconciliation System', () => {
         return;
       }
 
-      room.state.paused = false;
-      room.state.time = 100.0;
+      room.state.playerState = 'playing';
+      room.state.videoPos = 100.0;
       room.state.last_state_update_ts = Date.now();
 
       // Client reports position ahead by 1 second
@@ -495,8 +491,8 @@ describe('Drift Reconciliation System', () => {
         return;
       }
 
-      room.state.paused = false;
-      room.state.time = 100.0;
+      room.state.playerState = 'playing';
+      room.state.videoPos = 100.0;
       room.state.last_state_update_ts = Date.now();
 
       // Client reports position behind by 1 second
@@ -523,8 +519,8 @@ describe('Drift Reconciliation System', () => {
         return;
       }
 
-      room.state.paused = false;
-      room.state.time = 100.0;
+      room.state.playerState = 'playing';
+      room.state.videoPos = 100.0;
       room.state.last_state_update_ts = Date.now();
 
       // Small drift: 150ms (between NUDGE_THRESHOLD_MS and SEEK_THRESHOLD_MS)
@@ -556,8 +552,8 @@ describe('Drift Reconciliation System', () => {
         return;
       }
 
-      room.state.paused = false;
-      room.state.time = 100.0;
+      room.state.playerState = 'playing';
+      room.state.videoPos = 100.0;
       room.state.last_state_update_ts = Date.now();
 
       // Large drift: 1 second (above SEEK_THRESHOLD_MS)
@@ -586,8 +582,8 @@ describe('Drift Reconciliation System', () => {
         return;
       }
 
-      room.state.paused = false;
-      room.state.time = 100.0;
+      room.state.playerState = 'playing';
+      room.state.videoPos = 100.0;
       room.state.last_state_update_ts = Date.now();
 
       // Medium drift: between thresholds
@@ -692,8 +688,8 @@ describe('Drift Reconciliation System', () => {
         return;
       }
 
-      room.state.paused = false;
-      room.state.time = 100.0;
+      room.state.playerState = 'playing';
+      room.state.videoPos = 100.0;
       room.state.last_state_update_ts = Date.now();
 
       // Client 1: small drift (within threshold)
@@ -751,8 +747,8 @@ describe('Drift Reconciliation System', () => {
         derivedContentKey: 'key-1',
       };
 
-      room.state.paused = false;
-      room.state.time = 100.0;
+      room.state.playerState = 'playing';
+      room.state.videoPos = 100.0;
       room.state.last_state_update_ts = Date.now();
 
       // Send HEARTBEAT with large drift
@@ -779,15 +775,15 @@ describe('Drift Reconciliation System', () => {
         return;
       }
 
-      room.state.paused = true;
-      const initialPaused = room.state.paused;
+      room.state.playerState = 'paused';
+      const initialPlayerState = room.state.playerState;
 
       // Send HEARTBEAT with drift
       const heartbeat = createHeartbeatMessage(200.0, 'playing');
       simulateWebSocketMessage(mockWs, JSON.stringify(heartbeat));
 
       // Paused state should not change
-      expect(room.state.paused).toBe(initialPaused);
+      expect(room.state.playerState).toBe(initialPlayerState);
     });
 
     it('should not override user intent from explicit events', () => {
@@ -806,14 +802,14 @@ describe('Drift Reconciliation System', () => {
       const seekEvent = createEventMessage('seek', 150.0);
       simulateWebSocketMessage(mockWs, JSON.stringify(seekEvent));
 
-      const explicitTime = room.state.time;
+      const explicitVideoPos = room.state.videoPos;
 
       // Send HEARTBEAT immediately after (should be in cooldown)
       const heartbeat = createHeartbeatMessage(100.0, 'playing');
       simulateWebSocketMessage(mockWs, JSON.stringify(heartbeat));
 
-      // Time should remain at explicit seek value (not changed by reconciliation)
-      expect(room.state.time).toBe(explicitTime);
+      // VideoPos should remain at explicit seek value (not changed by reconciliation)
+      expect(room.state.videoPos).toBe(explicitVideoPos);
     });
   });
 

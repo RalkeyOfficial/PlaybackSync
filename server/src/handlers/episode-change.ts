@@ -86,8 +86,8 @@ export function handleEpisodeChangeRequest(
 
   // Reset playback state (hard reset)
   const previousEpisode = room.contentIdentity?.episodeId;
-  room.state.paused = true;
-  room.state.time = 0;
+  room.state.playerState = 'paused';
+  room.state.videoPos = 0;
 
   logger.debug(
     {

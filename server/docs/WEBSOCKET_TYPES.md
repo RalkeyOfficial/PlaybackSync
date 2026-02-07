@@ -18,6 +18,33 @@ Messages are categorized by direction:
 - **Client → Server**: Messages sent by clients to the server
 - **Server → Client**: Messages sent by the server to clients
 
+## Server State vs Client State
+
+**Important**: The server maintains authoritative playback state that is either `"playing"` or `"paused"`. The server does not track `"buffering"` state because:
+
+- Buffering is a **client-specific condition** (network issues, media loading, device performance, etc.)
+- Multiple clients in the same room can have different buffering states simultaneously
+- Buffering does not affect the authoritative room playback state (the room is still either playing or paused)
+
+**Server State** (in `PlaybackState`, `StateMessage`, `RoomStateMessage`):
+- `playerState`: `"playing"` or `"paused"` only
+
+**Client Buffering Events** (reported via dedicated messages):
+- `BUFFER_START`: Sent immediately when playback stalls (buffering begins)
+- `BUFFER_END`: Sent immediately when buffering ends and playback can resume
+- These messages are sent **immediately** when buffering occurs, not on a periodic schedule
+
+**Client State in HEARTBEAT** (periodic status updates):
+- `playerState`: `"playing"`, `"paused"`, or `"buffering"` (client-specific)
+- HEARTBEAT messages may include `"buffering"` in `playerState`, but the primary mechanism for reporting buffering events is the dedicated `BUFFER_START`/`BUFFER_END` messages
+
+**Why separate BUFFER_START/BUFFER_END messages?**
+- Buffering needs to be reported **immediately** when it happens, not on a periodic heartbeat schedule
+- This allows the server to respond quickly to buffering events and make decisions about room state
+- HEARTBEAT messages are periodic (e.g., every 5 seconds), which would introduce unacceptable delay for buffering notifications
+
+The server never includes `"buffering"` in its authoritative state broadcasts - buffering is a per-client condition that doesn't affect the room's authoritative playback state.
+
 ## Client → Server Messages
 
 ### JOIN
@@ -218,7 +245,7 @@ interface EpisodeChangeRequestMessage {
 2. Verifies client is authenticated (must have completed JOIN)
 3. Computes `derivedContentKey` from URL + provider + episode (SHA-256 hash)
 4. Increments `eventId` for ordering
-5. Resets playback state: `paused = true`, `time = 0`
+5. Resets playback state: `playerState = 'paused'`, `videoPos = 0`
 6. Updates room content identity with new episode metadata
 7. Broadcasts `EPISODE_CHANGE` message to all clients
 8. Broadcasts `STATE` message to ensure all clients have updated playback state
@@ -319,7 +346,254 @@ interface HeartbeatMessage {
 
 ---
 
+### CLOCK_PING
+
+Sent by clients for clock synchronization using an NTP-style protocol. This message is used to calculate per-client clock offset and round-trip time (RTT), which are essential for accurate scheduled playback and drift detection.
+
+**Schema**: `schemas/clock-ping.json`
+
+**TypeScript Interface**:
+
+```typescript
+interface ClockPingMessage {
+  type: 'CLOCK_PING';
+  clientSendTime: number; // Client timestamp when ping was sent (epoch ms)
+}
+```
+
+**Required Fields**:
+
+- `type`: Must be `"CLOCK_PING"`
+- `clientSendTime`: Client timestamp when ping was sent (epoch milliseconds, >= 0)
+
+**Validation Rules**:
+
+- `clientSendTime` must be >= 0
+- `clientSendTime` must be a number
+
+**Example**:
+
+```json
+{
+  "type": "CLOCK_PING",
+  "clientSendTime": 1670000000000
+}
+```
+
+**Server Processing**:
+
+1. Records server receive time immediately upon message receipt
+2. Records server send time just before sending response
+3. Calculates estimated RTT based on server processing time
+4. Sends CLOCK_PONG response with all four timestamps
+5. Updates client connection metadata:
+   - `rtt`: Estimated round-trip time
+   - `clockOffset`: Estimated clock offset (one-way estimate)
+   - `clockSyncTime`: Timestamp when clock sync occurred
+
+**Clock Synchronization Protocol**:
+
+The CLOCK_PING/CLOCK_PONG protocol follows an NTP-style four-timestamp exchange:
+
+1. **Client sends CLOCK_PING** with `clientSendTime` (T1)
+2. **Server receives** and records `serverRecvTime` (T2)
+3. **Server sends CLOCK_PONG** with T1, T2, and `serverSendTime` (T3)
+4. **Client receives** and records `clientRecvTime` (T4)
+
+The client then calculates:
+- **RTT**: `(T4 - T1) - (T3 - T2)` (total time minus server processing time)
+- **Clock Offset**: `((T2 - T1) + (T3 - T4)) / 2` (average of forward and reverse path delays)
+
+**Usage Pattern**:
+
+According to the design specification, clients should perform 3-5 ping/pong exchanges on join to establish accurate clock synchronization. This allows:
+- Multiple samples for better accuracy (averaging reduces noise)
+- RTT measurement for network condition assessment
+- Clock offset calculation for scheduled playback timing
+
+**Response**: Server sends `CLOCK_PONG` message with all four timestamps
+
+**Error Responses**:
+
+- `NOT_AUTHENTICATED`: CLOCK_PING received before JOIN authentication
+- `INVALID_MESSAGE`: Message validation failed (schema errors)
+- `ROOM_NOT_FOUND`: Room doesn't exist or is expired
+
+---
+
+### BUFFER_START
+
+Sent by clients **immediately** when playback stalls and buffering begins. This is a high-priority message that must be sent as soon as buffering is detected, not on a periodic schedule.
+
+**Why separate from HEARTBEAT?**
+- Buffering needs to be reported **immediately** when it happens, not on a periodic heartbeat schedule (e.g., every 5 seconds)
+- This allows the server to respond quickly to buffering events and make decisions about room state
+- HEARTBEAT messages are periodic and would introduce unacceptable delay for buffering notifications
+
+**TypeScript Interface**:
+
+```typescript
+interface BufferStartMessage {
+  type: 'BUFFER_START';
+  videoPos: number; // Current playback position when buffering started (seconds)
+}
+```
+
+**Required Fields**:
+
+- `type`: Must be `"BUFFER_START"`
+- `videoPos`: Current playback position in seconds (>= 0) when buffering started
+
+**Example**:
+
+```json
+{
+  "type": "BUFFER_START",
+  "videoPos": 123.456
+}
+```
+
+**Server Processing**:
+
+1. Marks the client as buffering by setting `client.isBuffering = true`
+2. Updates client's `lastSeen` timestamp for connection health tracking
+3. Server stops drift reconciliation for this client (skips SYNC_ADJUST messages)
+4. Room continues playback for other clients (does not pause the entire room)
+
+**Buffering State Management**:
+
+When a client is marked as buffering:
+- **Drift Reconciliation Skipped**: The HEARTBEAT handler checks `client.isBuffering` and skips drift reconciliation if true
+- **No SYNC_ADJUST Messages**: The server will not send SYNC_ADJUST messages to buffering clients
+- **State Preserved**: Room state and other client metadata remain unchanged
+
+**Purpose**: Buffering clients cannot maintain accurate playback position, so attempting to sync them would be futile and could cause incorrect corrections. The server waits until buffering ends before resuming sync attempts.
+
+**Priority**: High-medium priority - buffering events are important but should not block control events
+
+---
+
+### BUFFER_END
+
+Sent by clients **immediately** when buffering ends and playback can resume. This is a high-priority message that must be sent as soon as buffering ends.
+
+**TypeScript Interface**:
+
+```typescript
+interface BufferEndMessage {
+  type: 'BUFFER_END';
+  videoPos: number; // Current playback position when buffering ended (seconds)
+}
+```
+
+**Required Fields**:
+
+- `type`: Must be `"BUFFER_END"`
+- `videoPos`: Current playback position in seconds (>= 0) when buffering ended
+
+**Example**:
+
+```json
+{
+  "type": "BUFFER_END",
+  "videoPos": 125.789
+}
+```
+
+**Server Processing**:
+
+1. Unmarks client as buffering by setting `client.isBuffering = false`
+2. Updates client's `lastSeen` timestamp for connection health tracking
+3. Sends ROOM_STATE update to the client with current room state
+4. Server can resume drift reconciliation for this client
+
+**Buffering End Behavior**:
+
+When buffering ends:
+- **Sync Resumed**: The server can resume drift reconciliation for this client
+- **State Update Sent**: The server immediately sends a ROOM_STATE message to the client
+- **Sync Opportunity**: The ROOM_STATE includes current `videoPos`, `playerState`, and `serverTime`, allowing the client to sync up
+
+**Purpose**: After buffering, the client's playback position may be out of sync with the room state. Sending ROOM_STATE immediately gives the client the authoritative state to sync to, rather than waiting for the next HEARTBEAT cycle.
+
+**Priority**: High-medium priority - buffering events are important but should not block control events
+
+**Important**: Both `BUFFER_START` and `BUFFER_END` are sent **immediately** when buffering occurs, not on a periodic schedule. This ensures the server can respond quickly to buffering events.
+
+---
+
 ## Server → Client Messages
+
+### CLOCK_PONG
+
+Sent by the server in response to CLOCK_PING messages. This message contains all four timestamps needed for the client to calculate clock offset and round-trip time (RTT).
+
+**Schema**: `schemas/clock-pong.json`
+
+**TypeScript Interface**:
+
+```typescript
+interface ClockPongMessage {
+  type: 'CLOCK_PONG';
+  clientSendTime: number; // Client timestamp when ping was sent (from CLOCK_PING)
+  serverRecvTime: number; // Server timestamp when ping was received (epoch ms)
+  serverSendTime: number; // Server timestamp when pong is being sent (epoch ms)
+  clientRecvTime?: number; // Client timestamp when pong is received (epoch ms, filled in by client)
+}
+```
+
+**Required Fields**:
+
+- `type`: Must be `"CLOCK_PONG"`
+- `clientSendTime`: Client timestamp when ping was sent (from CLOCK_PING message)
+- `serverRecvTime`: Server timestamp when ping was received (epoch milliseconds, >= 0)
+- `serverSendTime`: Server timestamp when pong is being sent (epoch milliseconds, >= 0)
+
+**Optional Fields**:
+
+- `clientRecvTime`: Client timestamp when pong is received (epoch milliseconds, filled in by client when received)
+
+**Validation Rules**:
+
+- `clientSendTime` must be >= 0
+- `serverRecvTime` must be >= 0
+- `serverSendTime` must be >= 0
+- `clientRecvTime` must be >= 0 if provided
+
+**Example**:
+
+```json
+{
+  "type": "CLOCK_PONG",
+  "clientSendTime": 1670000000000,
+  "serverRecvTime": 1670000000010,
+  "serverSendTime": 1670000000012
+}
+```
+
+**Client Processing**:
+
+When the client receives CLOCK_PONG, it should:
+
+1. Record `clientRecvTime` (T4) when the message is received
+2. Calculate RTT: `(clientRecvTime - clientSendTime) - (serverSendTime - serverRecvTime)`
+3. Calculate clock offset: `((serverRecvTime - clientSendTime) + (serverSendTime - clientRecvTime)) / 2`
+4. Use these values for scheduled playback timing and drift detection
+
+**Clock Synchronization**:
+
+The four timestamps enable accurate clock synchronization:
+- **T1** (`clientSendTime`): When client sent ping
+- **T2** (`serverRecvTime`): When server received ping
+- **T3** (`serverSendTime`): When server sent pong
+- **T4** (`clientRecvTime`): When client receives pong (filled in by client)
+
+**When Sent**:
+
+- Immediately after receiving a CLOCK_PING message
+- Sent only to the client that sent the CLOCK_PING (not broadcast)
+
+---
 
 ### STATE
 
@@ -332,8 +606,8 @@ Authoritative playback state broadcast sent by the server to all clients in a ro
 ```typescript
 interface StateMessage {
   type: 'STATE';
-  paused: boolean;
-  time: number; // Current playback time (seconds)
+  playerState: 'playing' | 'paused'; // Server state: either playing or paused. Buffering is client-specific.
+  videoPos: number; // Current playback position in seconds
   provider?: string; // Optional provider identifier
   episode?: number; // Optional episode number
   server_ts: number; // Server timestamp
@@ -344,8 +618,8 @@ interface StateMessage {
 **Required Fields**:
 
 - `type`: Must be `"STATE"`
-- `paused`: Whether playback is paused (boolean)
-- `time`: Current playback time in seconds (>= 0)
+- `playerState`: Current player state - either `"playing"` or `"paused"`. Note: Server state is always either playing or paused. Only individual clients can be buffering (reported via `BUFFER_START`/`BUFFER_END` messages).
+- `videoPos`: Current playback position in seconds (>= 0)
 - `server_ts`: Server timestamp (monotonic or epoch milliseconds)
 - `eventId`: Event ID for ordering (integer >= 0)
 
@@ -356,18 +630,20 @@ interface StateMessage {
 
 **Validation Rules**:
 
-- `paused` must be boolean
-- `time` must be >= 0
+- `playerState` must be either `"playing"` or `"paused"` (not `"buffering"` - that's client-specific)
+- `videoPos` must be >= 0
 - `eventId` must be integer >= 0
 - `server_ts` must be a number
+
+**Important Note**: Server state only tracks `"playing"` or `"paused"`. The `"buffering"` state is client-specific and is reported by clients via `BUFFER_START`/`BUFFER_END` messages (sent immediately when buffering occurs). The server does not maintain buffering state because buffering is a per-client condition (network issues, media loading, etc.) that doesn't affect the authoritative room state.
 
 **Example**:
 
 ```json
 {
   "type": "STATE",
-  "paused": false,
-  "time": 123.456,
+  "playerState": "playing",
+  "videoPos": 123.456,
   "provider": "netflix",
   "episode": 5,
   "server_ts": 1670000000000,
@@ -393,8 +669,8 @@ Sent to clients on JOIN/REJOIN with full room state. Includes the server-generat
 interface RoomStateMessage {
   type: 'ROOM_STATE';
   clientId: string; // Server-generated client identifier (UUID v4) - use for reconnection
-  paused: boolean;
-  time: number;
+  playerState: 'playing' | 'paused'; // Server state: either playing or paused. Buffering is client-specific.
+  videoPos: number; // Current playback position in seconds
   episodeId?: string | number;
   providerId?: string;
   derivedContentKey?: string;
@@ -414,8 +690,8 @@ interface RoomStateMessage {
 
 - `type`: Must be `"ROOM_STATE"`
 - `clientId`: Server-generated client identifier (UUID v4 format). Clients should store this and include it in subsequent JOIN messages for reconnection
-- `paused`: Playback state (boolean)
-- `time`: Current playback time (seconds)
+- `playerState`: Current player state - either `"playing"` or `"paused"`. Note: Server state is always either playing or paused. Only individual clients can be buffering (reported via `BUFFER_START`/`BUFFER_END` messages).
+- `videoPos`: Current playback position in seconds (>= 0)
 - `lastEventId`: Last event ID (integer)
 - `server_ts`: Server timestamp (monotonic or epoch ms)
 
@@ -426,14 +702,16 @@ interface RoomStateMessage {
 - `derivedContentKey`: Derived content key for content identity
 - `recentEvents`: Array of events that occurred since the client's last known `eventId` (only included for reconnections with valid tombstone)
 
+**Important Note**: Server state only tracks `"playing"` or `"paused"`. The `"buffering"` state is client-specific and is reported by clients via `BUFFER_START`/`BUFFER_END` messages (sent immediately when buffering occurs). The server does not maintain buffering state because buffering is a per-client condition (network issues, media loading, etc.) that doesn't affect the authoritative room state.
+
 **Example (First Connection)**:
 
 ```json
 {
   "type": "ROOM_STATE",
   "clientId": "123e4567-e89b-12d3-a456-426614174001",
-  "paused": false,
-  "time": 123.456,
+  "playerState": "playing",
+  "videoPos": 123.456,
   "episodeId": 5,
   "providerId": "netflix",
   "derivedContentKey": "netflix:12345:ep5",
@@ -514,11 +792,13 @@ interface EpisodeChangeMessage {
 **Derived Content Key**:
 
 The `derivedContentKey` is computed server-side using SHA-256 hash of the format:
+
 ```
 SHA256(providerId:normalizedUrl:episodeId)
 ```
 
 Where:
+
 - `providerId`: Provider identifier from the request
 - `normalizedUrl`: URL pathname (query params and hash removed)
 - `episodeId`: Episode ID from the request
@@ -558,6 +838,7 @@ Where:
 **Client Behavior**:
 
 Clients should:
+
 1. Compare `derivedContentKey` with their local derivation
 2. If match: Load episode if not already loaded, seek to 0, pause
 3. If mismatch: Enter "out-of-sync content" state, surface UI warning, refuse to apply play/seek events
@@ -634,6 +915,7 @@ interface SyncAdjustMessage {
 **Client Behavior**:
 
 Clients should:
+
 1. Receive `SYNC_ADJUST` message
 2. If `mode === "nudge-rate"`: Gradually adjust playback rate to reach `targetPos`
 3. If `mode === "seek"`: Immediately seek to `targetPos`
@@ -730,7 +1012,10 @@ type ClientToServerMessage =
   | JoinMessage
   | EventMessage
   | EpisodeChangeRequestMessage
-  | HeartbeatMessage;
+  | HeartbeatMessage
+  | ClockPingMessage
+  | BufferStartMessage
+  | BufferEndMessage;
 ```
 
 ### ServerToClientMessage
@@ -743,7 +1028,8 @@ type ServerToClientMessage =
   | RoomStateMessage
   | SyncAdjustMessage
   | EpisodeChangeMessage
-  | ErrorMessage;
+  | ErrorMessage
+  | ClockPongMessage;
 ```
 
 ### WebSocketMessage

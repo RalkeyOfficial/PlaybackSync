@@ -3,9 +3,9 @@
  *
  * Tests verify:
  * - Valid EVENT messages (play, pause, seek) are processed correctly
- * - Play event updates state.paused = false and broadcasts STATE to all clients
- * - Pause event updates state.paused = true and broadcasts STATE to all clients
- * - Seek event updates state.time and broadcasts STATE to all clients
+ * - Play event updates state.playerState = 'playing' and broadcasts STATE to all clients
+ * - Pause event updates state.playerState = 'paused' and broadcasts STATE to all clients
+ * - Seek event updates state.videoPos and broadcasts STATE to all clients
  * - Rate limiting prevents message flooding
  * - Rate limit exceeded returns ERROR message
  * - Event log maintains last N events (ring buffer)
@@ -221,7 +221,7 @@ describe('EVENT Message Handling', () => {
   });
 
   describe('Play Event Handling', () => {
-    it('should update room.state.paused to false on play event', () => {
+    it('should update room.state.playerState to playing on play event', () => {
       const { mockWs, roomId } = setupRoomWithClient(
         '123e4567-e89b-12d3-a456-426614174000',
         'test-password'
@@ -233,14 +233,14 @@ describe('EVENT Message Handling', () => {
       if (!room) {
         return;
       }
-      room.state.paused = true; // Start paused
+      room.state.playerState = 'paused'; // Start paused
 
       // Send play event
       const eventMessage = createEventMessage('play');
       simulateWebSocketMessage(mockWs, JSON.stringify(eventMessage));
 
       // Verify state was updated
-      expect(room.state.paused).toBe(false);
+      expect(room.state.playerState).toBe('playing');
     });
 
     it('should broadcast STATE message to all clients on play event', () => {
@@ -266,13 +266,13 @@ describe('EVENT Message Handling', () => {
       // Verify STATE message content
       const stateMessage1 = JSON.parse(mockWs1.send.mock.calls[0][0] as string) as StateMessage;
       expect(stateMessage1.type).toBe('STATE');
-      expect(stateMessage1.paused).toBe(false);
+      expect(stateMessage1.playerState).toBe('playing');
       expect(stateMessage1.eventId).toBeDefined();
       expect(stateMessage1.server_ts).toBeDefined();
 
       const stateMessage2 = JSON.parse(mockWs2.send.mock.calls[0][0] as string) as StateMessage;
       expect(stateMessage2.type).toBe('STATE');
-      expect(stateMessage2.paused).toBe(false);
+      expect(stateMessage2.playerState).toBe('playing');
     });
 
     it('should update last_explicit_event_ts on play event', () => {
@@ -371,7 +371,7 @@ describe('EVENT Message Handling', () => {
   });
 
   describe('Pause Event Handling', () => {
-    it('should update room.state.paused to true on pause event', () => {
+    it('should update room.state.playerState to paused on pause event', () => {
       const { mockWs, roomId } = setupRoomWithClient(
         '123e4567-e89b-12d3-a456-426614174000',
         'test-password'
@@ -383,14 +383,14 @@ describe('EVENT Message Handling', () => {
       if (!room) {
         return;
       }
-      room.state.paused = false; // Start playing
+      room.state.playerState = 'playing'; // Start playing
 
       // Send pause event
       const eventMessage = createEventMessage('pause');
       simulateWebSocketMessage(mockWs, JSON.stringify(eventMessage));
 
       // Verify state was updated
-      expect(room.state.paused).toBe(true);
+      expect(room.state.playerState).toBe('paused');
     });
 
     it('should broadcast STATE message to all clients on pause event', () => {
@@ -416,11 +416,11 @@ describe('EVENT Message Handling', () => {
       // Verify STATE message content
       const stateMessage1 = JSON.parse(mockWs1.send.mock.calls[0][0] as string) as StateMessage;
       expect(stateMessage1.type).toBe('STATE');
-      expect(stateMessage1.paused).toBe(true);
+      expect(stateMessage1.playerState).toBe('paused');
 
       const stateMessage2 = JSON.parse(mockWs2.send.mock.calls[0][0] as string) as StateMessage;
       expect(stateMessage2.type).toBe('STATE');
-      expect(stateMessage2.paused).toBe(true);
+      expect(stateMessage2.playerState).toBe('paused');
     });
 
     it('should update timestamps and eventId on pause event', () => {
@@ -475,7 +475,7 @@ describe('EVENT Message Handling', () => {
   });
 
   describe('Seek Event Handling', () => {
-    it('should update room.state.time on seek event', () => {
+    it('should update room.state.videoPos on seek event', () => {
       const { mockWs, roomId } = setupRoomWithClient(
         '123e4567-e89b-12d3-a456-426614174000',
         'test-password'
@@ -493,8 +493,8 @@ describe('EVENT Message Handling', () => {
       const eventMessage = createEventMessage('seek', seekPosition);
       simulateWebSocketMessage(mockWs, JSON.stringify(eventMessage));
 
-      // Verify time was updated
-      expect(room.state.time).toBe(seekPosition);
+      // Verify videoPos was updated
+      expect(room.state.videoPos).toBe(seekPosition);
     });
 
     it('should broadcast STATE message with updated time on seek event', () => {
@@ -522,12 +522,12 @@ describe('EVENT Message Handling', () => {
       // Verify STATE message content
       const stateMessage1 = JSON.parse(mockWs1.send.mock.calls[0][0] as string) as StateMessage;
       expect(stateMessage1.type).toBe('STATE');
-      expect(stateMessage1.time).toBe(seekPosition);
+      expect(stateMessage1.videoPos).toBe(seekPosition);
       expect(stateMessage1.eventId).toBeDefined();
 
       const stateMessage2 = JSON.parse(mockWs2.send.mock.calls[0][0] as string) as StateMessage;
       expect(stateMessage2.type).toBe('STATE');
-      expect(stateMessage2.time).toBe(seekPosition);
+      expect(stateMessage2.videoPos).toBe(seekPosition);
     });
 
     it('should update timestamps and eventId on seek event', () => {
@@ -836,7 +836,7 @@ describe('EVENT Message Handling', () => {
       // Verify event was NOT processed (eventId should not have incremented beyond rateLimit)
       expect(room.state.eventId).toBe(initialEventId + rateLimit);
       // Last processed event was play (paused = false), pause event was rate limited so not processed
-      expect(room.state.paused).toBe(false);
+      expect(room.state.playerState).toBe('playing');
     });
 
     it('should handle burst of events correctly', () => {
@@ -897,9 +897,7 @@ describe('EVENT Message Handling', () => {
       const events = ['play', 'pause', 'seek'] as const;
       events.forEach((event, index) => {
         const eventMessage =
-          event === 'seek'
-            ? createEventMessage(event, index * 10)
-            : createEventMessage(event);
+          event === 'seek' ? createEventMessage(event, index * 10) : createEventMessage(event);
         simulateWebSocketMessage(mockWs, JSON.stringify(eventMessage));
       });
 
@@ -993,8 +991,8 @@ describe('EVENT Message Handling', () => {
       expect(stateMessage3.type).toBe('STATE');
 
       // Verify all have same state values
-      expect(stateMessage1.paused).toBe(stateMessage2.paused);
-      expect(stateMessage2.paused).toBe(stateMessage3.paused);
+      expect(stateMessage1.playerState).toBe(stateMessage2.playerState);
+      expect(stateMessage2.playerState).toBe(stateMessage3.playerState);
       expect(stateMessage1.eventId).toBe(stateMessage2.eventId);
       expect(stateMessage2.eventId).toBe(stateMessage3.eventId);
     });
@@ -1100,9 +1098,7 @@ describe('EVENT Message Handling', () => {
       const events = ['play', 'pause', 'seek'] as const;
       events.forEach((event, index) => {
         const eventMessage =
-          event === 'seek'
-            ? createEventMessage(event, index * 10)
-            : createEventMessage(event);
+          event === 'seek' ? createEventMessage(event, index * 10) : createEventMessage(event);
         simulateWebSocketMessage(mockWs, JSON.stringify(eventMessage));
 
         // Verify eventId increments sequentially

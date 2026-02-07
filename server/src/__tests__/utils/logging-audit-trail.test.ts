@@ -87,9 +87,7 @@ describe('Enhanced Logging & Audit Trail Logic', () => {
 
       // Verify logging occurred with structured context
       expect(loggerSpy).toHaveBeenCalled();
-      const logCall = loggerSpy.mock.calls.find(call => 
-        call[1] === 'room.deleted'
-      );
+      const logCall = loggerSpy.mock.calls.find(call => call[1] === 'room.deleted');
       expect(logCall).toBeDefined();
       expect(logCall![0]).toMatchObject({
         roomId,
@@ -136,9 +134,7 @@ describe('Enhanced Logging & Audit Trail Logic', () => {
 
       // Verify logging occurred with structured context
       expect(loggerSpy).toHaveBeenCalled();
-      const logCall = loggerSpy.mock.calls.find(call => 
-        call[1] === 'Client joined room'
-      );
+      const logCall = loggerSpy.mock.calls.find(call => call[1] === 'Client joined room');
       expect(logCall).toBeDefined();
       expect(logCall![0]).toMatchObject({
         roomId,
@@ -188,8 +184,8 @@ describe('Enhanced Logging & Audit Trail Logic', () => {
 
       // Verify logging occurred with structured context
       expect(loggerSpy).toHaveBeenCalled();
-      const logCall = loggerSpy.mock.calls.find(call => 
-        call[1] === 'Client disconnected from room'
+      const logCall = loggerSpy.mock.calls.find(
+        call => call[1] === 'Client disconnected from room'
       );
       expect(logCall).toBeDefined();
       expect(logCall![0]).toMatchObject({
@@ -227,8 +223,8 @@ describe('Enhanced Logging & Audit Trail Logic', () => {
 
       // Simulate event processing (as done in handleEventMessage)
       room.state.eventId += 1;
-      room.state.paused = false;
-      room.state.time = 123.456;
+      room.state.playerState = 'playing';
+      room.state.videoPos = 123.456;
       room.state.last_explicit_event_ts = Date.now();
       room.state.last_state_update_ts = Date.now();
 
@@ -249,8 +245,8 @@ describe('Enhanced Logging & Audit Trail Logic', () => {
 
       // Verify logging occurred with structured context
       expect(loggerSpy).toHaveBeenCalled();
-      const logCall = loggerSpy.mock.calls.find(call => 
-        call[1] === 'Event processed and state broadcast'
+      const logCall = loggerSpy.mock.calls.find(
+        call => call[1] === 'Event processed and state broadcast'
       );
       expect(logCall).toBeDefined();
       expect(logCall![0]).toMatchObject({
@@ -309,8 +305,8 @@ describe('Enhanced Logging & Audit Trail Logic', () => {
 
       // Verify logging occurred with structured context
       expect(loggerSpy).toHaveBeenCalled();
-      const logCall = loggerSpy.mock.calls.find(call => 
-        call[1] === 'Drift detected and SYNC_ADJUST sent to client'
+      const logCall = loggerSpy.mock.calls.find(
+        call => call[1] === 'Drift detected and SYNC_ADJUST sent to client'
       );
       expect(logCall).toBeDefined();
       expect(logCall![0]).toMatchObject({
@@ -345,8 +341,8 @@ describe('Enhanced Logging & Audit Trail Logic', () => {
 
       // Verify logging occurred with structured context
       expect(loggerSpy).toHaveBeenCalled();
-      const logCall = loggerSpy.mock.calls.find(call => 
-        call[1] === 'Rate limit exceeded for EVENT message'
+      const logCall = loggerSpy.mock.calls.find(
+        call => call[1] === 'Rate limit exceeded for EVENT message'
       );
       expect(logCall).toBeDefined();
       expect(logCall![0]).toMatchObject({
@@ -553,10 +549,10 @@ describe('Enhanced Logging & Audit Trail Logic', () => {
       // Must set environment variable BEFORE resetting modules so config loads correctly
       const originalAnonLogging = process.env.ANON_LOGGING;
       process.env.ANON_LOGGING = 'false';
-      
+
       // Reset modules to reload config with new environment variable
       jest.resetModules();
-      
+
       // Dynamically require logger module AFTER resetting modules
       // This ensures it uses the config with ANON_LOGGING=false
       // Note: Using require() here is necessary for dynamic module loading after jest.resetModules()
@@ -611,9 +607,7 @@ describe('Enhanced Logging & Audit Trail Logic', () => {
       );
 
       // Verify roomId is in log
-      const logCall = loggerSpy.mock.calls.find(call => 
-        call[1] === 'room.created'
-      );
+      const logCall = loggerSpy.mock.calls.find(call => call[1] === 'room.created');
       expect(logCall).toBeDefined();
       const logData = logCall![0] as Record<string, unknown>;
       expect(logData).toHaveProperty('roomId');
@@ -658,9 +652,7 @@ describe('Enhanced Logging & Audit Trail Logic', () => {
       );
 
       // Verify clientId is in log
-      const logCall = loggerSpy.mock.calls.find(call => 
-        call[1] === 'Client joined room'
-      );
+      const logCall = loggerSpy.mock.calls.find(call => call[1] === 'Client joined room');
       expect(logCall).toBeDefined();
       const logData = logCall![0] as Record<string, unknown>;
       expect(logData).toHaveProperty('clientId');
@@ -751,8 +743,8 @@ describe('Enhanced Logging & Audit Trail Logic', () => {
       logger.info('Background room cleanup task started (interval: 60s)');
 
       expect(loggerSpy).toHaveBeenCalled();
-      const logCall = loggerSpy.mock.calls.find(call => 
-        call[0] === 'Background room cleanup task started (interval: 60s)'
+      const logCall = loggerSpy.mock.calls.find(
+        call => call[0] === 'Background room cleanup task started (interval: 60s)'
       );
       expect(logCall).toBeDefined();
 
@@ -769,9 +761,7 @@ describe('Enhanced Logging & Audit Trail Logic', () => {
       logger.info({ cleanedCount }, 'room.cleanup.completed');
 
       expect(loggerSpy).toHaveBeenCalled();
-      const logCall = loggerSpy.mock.calls.find(call => 
-        call[1] === 'room.cleanup.completed'
-      );
+      const logCall = loggerSpy.mock.calls.find(call => call[1] === 'room.cleanup.completed');
       expect(logCall).toBeDefined();
       expect(logCall![0]).toMatchObject({
         cleanedCount,
@@ -792,8 +782,8 @@ describe('Enhanced Logging & Audit Trail Logic', () => {
       logger.error({ roomId, error }, 'Error cleaning up expired room');
 
       expect(errorSpy).toHaveBeenCalled();
-      const logCall = errorSpy.mock.calls.find(call => 
-        call[1] === 'Error cleaning up expired room'
+      const logCall = errorSpy.mock.calls.find(
+        call => call[1] === 'Error cleaning up expired room'
       );
       expect(logCall).toBeDefined();
       expect(logCall![0]).toMatchObject({

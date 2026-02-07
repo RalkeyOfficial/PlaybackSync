@@ -4,6 +4,7 @@
 
 import type { Room, PlaybackState } from '../types/room';
 import type { RoomId } from '../types/ids';
+import { getCurrentVideoPos } from '../utils/drift-reconciliation';
 
 /**
  * In-memory storage for rooms
@@ -28,8 +29,8 @@ export function createRoom(
   const now = Date.now();
 
   const defaultState: PlaybackState = {
-    paused: true,
-    time: 0,
+    playerState: 'paused',
+    videoPos: 0,
     provider: '',
     episode: 0,
     last_explicit_event_ts: now,
@@ -119,11 +120,16 @@ export function listActiveRooms(): Array<{
   for (const [roomId, room] of rooms.entries()) {
     // Filter expired rooms (do not include rooms where the expired timestamp is equal to now)
     if (room.expiresAt > now) {
+      // Use getCurrentVideoPos to ensure API returns expected_time when playing
+      const currentState: PlaybackState = {
+        ...room.state,
+        videoPos: getCurrentVideoPos(room),
+      };
       activeRooms.push({
         id: roomId,
         createdAt: room.createdAt,
         participantCount: room.connectedClients.size,
-        last_state: room.state,
+        last_state: currentState,
         expiresAt: room.expiresAt,
       });
     }

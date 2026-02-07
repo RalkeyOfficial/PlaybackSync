@@ -16,6 +16,8 @@ import { handleJoinMessage } from './join';
 import { handleEventMessage } from './event';
 import { handleEpisodeChangeRequest } from './episode-change';
 import { handleHeartbeatMessage } from './heartbeat';
+import { handleClockPingMessage } from './clock-sync';
+import { handleBufferStartMessage, handleBufferEndMessage } from './buffer';
 import type { RateLimiterState } from '../utils/rate-limiter';
 import { cleanupBroadcastRateLimiter } from '../utils/broadcasting';
 
@@ -142,6 +144,39 @@ export function handleConnection(ws: ExtendedWebSocket, req: { url?: string }): 
           'Routing HEARTBEAT message to handler'
         );
         handleHeartbeatMessage(ws, message, roomId, connectionsByRoom);
+      } else if (message.type === 'CLOCK_PING') {
+        // Handle CLOCK_PING message for clock synchronization
+        logger.debug(
+          {
+            roomId,
+            messageType: 'CLOCK_PING',
+            clientId: ws.clientId || undefined,
+          },
+          'Routing CLOCK_PING message to handler'
+        );
+        handleClockPingMessage(ws, message, roomId, connectionsByRoom);
+      } else if (message.type === 'BUFFER_START') {
+        // Handle BUFFER_START message for buffering state
+        logger.debug(
+          {
+            roomId,
+            messageType: 'BUFFER_START',
+            clientId: ws.clientId || undefined,
+          },
+          'Routing BUFFER_START message to handler'
+        );
+        handleBufferStartMessage(ws, message, roomId, connectionsByRoom);
+      } else if (message.type === 'BUFFER_END') {
+        // Handle BUFFER_END message for buffering state
+        logger.debug(
+          {
+            roomId,
+            messageType: 'BUFFER_END',
+            clientId: ws.clientId || undefined,
+          },
+          'Routing BUFFER_END message to handler'
+        );
+        handleBufferEndMessage(ws, message, roomId, connectionsByRoom);
       } else {
         // Other message types will be handled in later steps
         logger.debug({ messageType: message.type, roomId }, 'Unhandled message type received');

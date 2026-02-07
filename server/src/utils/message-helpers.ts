@@ -6,8 +6,9 @@
 import { WebSocket } from 'ws';
 import { logger } from './logger';
 import type { RoomId, ClientId } from '../types/ids';
-import type { ErrorMessage, RoomStateMessage } from '../types/messages';
+import type { ErrorMessage, RoomStateMessage, ContentMismatchMessage } from '../types/messages';
 import type { Room } from '../types/room';
+import { getCurrentVideoPos } from './drift-reconciliation';
 
 /**
  * Extended WebSocket interface with connection metadata
@@ -49,6 +50,38 @@ export function sendError(ws: ExtendedWebSocket, code: string, message: string):
 }
 
 /**
+ * Send a CONTENT_MISMATCH message to a WebSocket client
+ * Sent when a client's content identity doesn't match the room's content identity
+ */
+export function sendContentMismatch(
+  ws: ExtendedWebSocket,
+  expectedContentKey: string,
+  reportedContentKey?: string
+): void {
+  const contentMismatchMessage: ContentMismatchMessage = {
+    type: 'CONTENT_MISMATCH',
+    expectedContentKey,
+    reportedContentKey,
+    server_ts: Date.now(),
+  };
+
+  try {
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify(contentMismatchMessage));
+    }
+  } catch (error) {
+    logger.warn(
+      {
+        error,
+        roomId: ws.roomId,
+        clientId: ws.clientId || undefined,
+      },
+      'Failed to send CONTENT_MISMATCH message to client'
+    );
+  }
+}
+
+/**
  * Send a ROOM_STATE message to a WebSocket client
  * According to backend_network_design_v1.md section 7: includes recentEvents[] since lastEventId for event replay
  * @param ws - WebSocket connection
@@ -65,8 +98,8 @@ export function sendRoomState(
   const roomStateMessage: RoomStateMessage = {
     type: 'ROOM_STATE',
     clientId,
-    paused: room.state.paused,
-    time: room.state.time,
+    playerState: room.state.playerState,
+    videoPos: getCurrentVideoPos(room),
     lastEventId: room.state.eventId,
     server_ts: Date.now(),
   };

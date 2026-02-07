@@ -52,11 +52,13 @@ Rooms are ephemeral and exist only in memory. Backend restarts destroy all rooms
 ### 3.2 Playback State
 
 The authoritative playback state stored by the backend consists of:
-- `paused: boolean`
-- `time: number` (seconds)
+- `playerState: 'playing' | 'paused'` (server state is always either playing or paused; buffering is client-specific)
+- `videoPos: number` (seconds)
 - `provider: string`
 - `episode: number`
 - `last_explicit_event_ts: monotonic timestamp`
+
+Note: Server state only tracks `'playing'` or `'paused'`. The `'buffering'` state is client-specific and is only reported by clients in HEARTBEAT messages. The server does not maintain buffering state because buffering is a per-client condition (network issues, media loading, etc.) that doesn't affect the authoritative room state.
 
 ---
 
@@ -267,7 +269,7 @@ All timestamps are monotonic and used only for ordering, not wall-clock sync.
 2. Server ignores reports if:
    - `now - last_explicit_event_ts < COOLDOWN_WINDOW`
 3. Compute `max_time` across clients
-4. If `|max_time - state.time| ≥ 0.5s`:
+4. If `|max_time - state.videoPos| ≥ 0.5s`:
    - Update room state
    - Broadcast `STATE`
 

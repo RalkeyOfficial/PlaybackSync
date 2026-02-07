@@ -23,6 +23,19 @@
       "type": "number",
       "minimum": 0,
       "description": "Last known playback time from client (seconds, optional)"
+    },
+    "episodeId": {
+      "type": ["string", "number"],
+      "description": "Optional: Episode ID or episode number (required for content identity validation)"
+    },
+    "providerId": {
+      "type": "string",
+      "description": "Optional: Provider identifier (required for content identity validation)"
+    },
+    "pageUrl": {
+      "type": "string",
+      "format": "uri",
+      "description": "Optional: Page URL (required for content identity validation)"
     }
   },
   "additionalProperties": false

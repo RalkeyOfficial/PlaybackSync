@@ -14,14 +14,26 @@ import type { Room } from '../types/room';
 export function calculateExpectedTime(room: Room): number {
   const now = Date.now();
 
-  if (room.state.paused) {
-    // If paused: expected_time = state.time
-    return room.state.time;
+  if (room.state.playerState === 'paused') {
+    // If paused: expected_time = state.videoPos
+    return room.state.videoPos;
   } else {
-    // If playing: expected_time = state.time + (now - last_state_update_ts)
+    // If playing: expected_time = state.videoPos + (now - last_state_update_ts)
     const elapsedSeconds = (now - room.state.last_state_update_ts) / 1000;
-    return room.state.time + elapsedSeconds;
+    return room.state.videoPos + elapsedSeconds;
   }
+}
+
+/**
+ * Get current video position for API/WS calls
+ * When playing: returns expected_time (calculated dynamically)
+ * When paused: returns room.state.videoPos (static value)
+ * This ensures API calls and new joiners get the correct current position
+ * @param room - Room to get current video position for
+ * @returns Current video position in seconds
+ */
+export function getCurrentVideoPos(room: Room): number {
+  return calculateExpectedTime(room);
 }
 
 /**

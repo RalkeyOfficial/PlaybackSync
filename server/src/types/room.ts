@@ -3,12 +3,13 @@ import type { RoomId, ClientId } from './ids';
 
 /**
  * Playback state within a room
+ * Note: Server state is either 'playing' or 'paused'. Only individual clients can be 'buffering'.
  */
 export interface PlaybackState {
-  /** Whether playback is currently paused */
-  paused: boolean;
+  /** Current player state: 'playing' or 'paused'. Buffering is client-specific, not server state. */
+  playerState: 'playing' | 'paused';
   /** Current playback position in seconds */
-  time: number;
+  videoPos: number;
   /** Provider identifier (e.g., 'netflix', 'hulu') */
   provider: string;
   /** Episode number or identifier */
@@ -49,6 +50,14 @@ export interface ClientConnection {
   tombstonedUntil?: number;
   /** Last event ID the client acknowledged (for event replay on reconnection) */
   lastEventId?: number;
+  /** Clock offset in milliseconds (serverTime - clientTime) */
+  clockOffset?: number;
+  /** Round-trip time in milliseconds */
+  rtt?: number;
+  /** Timestamp when clock offset was last updated (milliseconds) */
+  clockSyncTime?: number;
+  /** Whether the client is currently buffering (stops server from syncing this client) */
+  isBuffering?: boolean;
 }
 
 /**

@@ -22,6 +22,12 @@ export interface JoinMessage extends BaseMessage {
   clientId?: ClientId | string;
   /** Last known playback time from client (seconds) */
   lastKnownTime?: number;
+  /** Optional: Episode ID or episode number (required for content identity validation) */
+  episodeId?: string | number;
+  /** Optional: Provider identifier (required for content identity validation) */
+  providerId?: string;
+  /** Optional: Page URL (required for content identity validation) */
+  pageUrl?: string;
 }
 
 /**
@@ -81,15 +87,66 @@ export interface HeartbeatMessage extends BaseMessage {
 }
 
 /**
+ * CLOCK_PING message - Client → Server
+ * Clock synchronization request (NTP-style)
+ * Used to calculate per-client clock offset and RTT
+ */
+export interface ClockPingMessage extends BaseMessage {
+  type: 'CLOCK_PING';
+  /** Client timestamp when ping was sent (epoch ms) */
+  clientSendTime: number;
+}
+
+/**
+ * CLOCK_PONG message - Server → Client
+ * Clock synchronization response (NTP-style)
+ * Client calculates offset and RTT from these timestamps
+ */
+export interface ClockPongMessage extends BaseMessage {
+  type: 'CLOCK_PONG';
+  /** Client timestamp when ping was sent (from CLOCK_PING) */
+  clientSendTime: number;
+  /** Server timestamp when ping was received (epoch ms) */
+  serverRecvTime: number;
+  /** Server timestamp when pong is being sent (epoch ms) */
+  serverSendTime: number;
+  /** Client should fill this in when pong is received (epoch ms) */
+  clientRecvTime?: number;
+}
+
+/**
+ * BUFFER_START message - Client → Server
+ * Sent immediately when playback stalls and buffering begins
+ * Tells the server to stop trying to sync that client
+ */
+export interface BufferStartMessage extends BaseMessage {
+  type: 'BUFFER_START';
+  /** Current playback position when buffering started (seconds) */
+  videoPos: number;
+}
+
+/**
+ * BUFFER_END message - Client → Server
+ * Sent immediately when buffering ends and playback can resume
+ * Tells the server it can re-try syncing again, and should send an update to the client with the current room state
+ */
+export interface BufferEndMessage extends BaseMessage {
+  type: 'BUFFER_END';
+  /** Current playback position when buffering ended (seconds) */
+  videoPos: number;
+}
+
+/**
  * STATE message - Server → Client
  * Authoritative playback state broadcast
+ * Note: Server state is either 'playing' or 'paused'. Only individual clients can be 'buffering'.
  */
 export interface StateMessage extends BaseMessage {
   type: 'STATE';
-  /** Whether playback is paused */
-  paused: boolean;
-  /** Current playback time (seconds) */
-  time: number;
+  /** Current player state: 'playing' or 'paused'. Buffering is client-specific, not server state. */
+  playerState: 'playing' | 'paused';
+  /** Current playback position in seconds */
+  videoPos: number;
   /** Provider identifier */
   provider?: string;
   /** Episode number or identifier */
@@ -104,15 +161,16 @@ export interface StateMessage extends BaseMessage {
  * ROOM_STATE message - Server → Client
  * Sent to clients on JOIN/REJOIN with full room state
  * According to backend_network_design_v1.md section 7: includes recentEvents[] since lastEventId for event replay
+ * Note: Server state is either 'playing' or 'paused'. Only individual clients can be 'buffering'.
  */
 export interface RoomStateMessage extends BaseMessage {
   type: 'ROOM_STATE';
   /** Client identifier assigned by server (UUID v4) - use this for reconnection */
   clientId: ClientId | string;
-  /** Playback state */
-  paused: boolean;
-  /** Current playback time (seconds) */
-  time: number;
+  /** Current player state: 'playing' or 'paused'. Buffering is client-specific, not server state. */
+  playerState: 'playing' | 'paused';
+  /** Current playback position in seconds */
+  videoPos: number;
   /** Episode ID */
   episodeId?: string | number;
   /** Provider identifier */
@@ -230,7 +288,10 @@ export type ClientToServerMessage =
   | EventMessage
   | EpisodeChangeRequestMessage
   | TimeReportMessage
-  | HeartbeatMessage;
+  | HeartbeatMessage
+  | ClockPingMessage
+  | BufferStartMessage
+  | BufferEndMessage;
 
 /**
  * Union type of all server-to-client messages
@@ -243,7 +304,8 @@ export type ServerToClientMessage =
   | ContentMismatchMessage
   | ErrorMessage
   | ServerShutdownMessage
-  | SyncAdjustMessage;
+  | SyncAdjustMessage
+  | ClockPongMessage;
 
 /**
  * Union type of all WebSocket messages
