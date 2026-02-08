@@ -90,6 +90,8 @@ export interface Room {
   expiresAt: number;
   /** Target video URL for the room - required for sharing functionality */
   targetUrl: string;
+  /** Optional room name/nickname for identification */
+  name?: string;
   /** Current playback state */
   state: PlaybackState;
   /** Content identity information */

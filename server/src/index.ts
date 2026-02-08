@@ -9,6 +9,7 @@ import healthzPlugin from './routes/healthz';
 import metricsPlugin from './routes/metrics';
 import roomsPlugin from './routes/rooms';
 import sharePlugin from './routes/share';
+import dashboardPlugin from './routes/dashboard';
 import { runCleanupTask } from './utils/room-cleanup';
 import { setupWebSocketServer } from './handlers/websocket';
 
@@ -31,6 +32,7 @@ async function startServer() {
   await server.register(metricsPlugin);
   await server.register(roomsPlugin);
   await server.register(sharePlugin);
+  await server.register(dashboardPlugin);
 
   // Set up WebSocket server
   setupWebSocketServer(server);

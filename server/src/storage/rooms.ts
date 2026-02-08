@@ -18,13 +18,15 @@ const rooms = new Map<RoomId, Room>();
  * @param passwordHash - Hashed password (HMAC-SHA256)
  * @param ttlSeconds - Time-to-live in seconds
  * @param targetUrl - Target video URL for the room (required for sharing)
+ * @param name - Optional room name/nickname for identification
  * @returns Created Room object
  */
 export function createRoom(
   roomId: RoomId,
   passwordHash: string,
   ttlSeconds: number,
-  targetUrl: string
+  targetUrl: string,
+  name?: string
 ): Room {
   const now = Date.now();
 
@@ -44,6 +46,7 @@ export function createRoom(
     createdAt: now,
     expiresAt: now + ttlSeconds * 1000,
     targetUrl,
+    ...(name !== undefined && { name }),
     state: defaultState,
     connectedClients: new Map(),
     eventLog: [],
@@ -107,6 +110,7 @@ export function listActiveRooms(): Array<{
   participantCount: number;
   last_state: PlaybackState;
   expiresAt: number;
+  name?: string;
 }> {
   const now = Date.now();
   const activeRooms: Array<{
@@ -115,6 +119,7 @@ export function listActiveRooms(): Array<{
     participantCount: number;
     last_state: PlaybackState;
     expiresAt: number;
+    name?: string;
   }> = [];
 
   for (const [roomId, room] of rooms.entries()) {
@@ -131,6 +136,7 @@ export function listActiveRooms(): Array<{
         participantCount: room.connectedClients.size,
         last_state: currentState,
         expiresAt: room.expiresAt,
+        ...(room.name !== undefined && { name: room.name }),
       });
     }
   }

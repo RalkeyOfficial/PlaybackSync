@@ -4,13 +4,14 @@
 
 import { FastifyPluginAsync } from 'fastify';
 import crypto from 'crypto';
+import { WebSocket } from 'ws';
 import { getConfig } from '../config';
 import { logger } from '../utils/logger';
 import { hashPassword } from '../utils/password';
 import { createRoom, listActiveRooms, deleteRoom } from '../storage/rooms';
-import { toRoomId } from '../types/ids';
+import { toRoomId, toClientId } from '../types/ids';
 import { closeRoomConnections } from '../utils/room-cleanup';
-import { closeConnectionsForRoom } from '../handlers/websocket';
+import { closeConnectionsForRoom, connectionsByRoom } from '../handlers/websocket';
 import { roomValidationPreHandler } from '../utils/room-validation';
 import { getCurrentVideoPos } from '../utils/drift-reconciliation';
 
@@ -47,12 +48,12 @@ function generateRoomId(): string {
 /**
  * Build share link for a room
  * @param roomId - Room identifier
- * @param shareHostname - Optional share hostname from config
+ * @param hostname - Optional hostname from config
  * @returns Share link (relative path or full URL)
  */
-function buildShareLink(roomId: string, shareHostname?: string): string {
-  if (shareHostname) {
-    return `https://${shareHostname}/${roomId}`;
+function buildShareLink(roomId: string, hostname?: string): string {
+  if (hostname) {
+    return `https://${hostname}/${roomId}`;
   }
   return `/${roomId}`;
 }
@@ -70,6 +71,9 @@ const createRoomSchema = {
     targetUrl: {
       type: 'string',
       format: 'uri',
+    },
+    name: {
+      type: 'string',
     },
   },
   required: ['targetUrl'],
@@ -101,6 +105,7 @@ const listRoomsResponseSchema = {
       createdAt: { type: 'number' },
       participantCount: { type: 'number' },
       expiresAt: { type: 'number' },
+      name: { type: 'string' },
       last_state: {
         type: 'object',
         properties: {
@@ -137,6 +142,7 @@ const getRoomDetailsResponseSchema = {
     createdAt: { type: 'number' },
     expiresAt: { type: 'number' },
     targetUrl: { type: 'string' },
+    name: { type: 'string' },
     state: {
       type: 'object',
       properties: {
@@ -206,7 +212,7 @@ const roomsPlugin: FastifyPluginAsync = async fastify => {
   /**
    * POST /admin/api/rooms - Create a new room
    */
-  fastify.post<{ Body: { ttl?: number; targetUrl: string } }>(
+  fastify.post<{ Body: { ttl?: number; targetUrl: string; name?: string } }>(
     '/admin/api/rooms',
     {
       schema: {
@@ -233,11 +239,14 @@ const roomsPlugin: FastifyPluginAsync = async fastify => {
       // Extract targetUrl from request (required)
       const targetUrl = request.body.targetUrl;
 
+      // Extract name from request (optional)
+      const name = request.body.name;
+
       // Create room in storage
-      createRoom(roomId, passwordHash, ttlSeconds, targetUrl);
+      createRoom(roomId, passwordHash, ttlSeconds, targetUrl, name);
 
       // Build share link
-      const shareLink = buildShareLink(roomIdString, config.shareHostname);
+      const shareLink = buildShareLink(roomIdString, config.hostname);
 
       // Log room creation with structured logging
       logger.info(
@@ -245,7 +254,8 @@ const roomsPlugin: FastifyPluginAsync = async fastify => {
           roomId,
           ttl: ttlSeconds,
           targetUrl,
-          shareHostname: config.shareHostname,
+          name,
+          hostname: config.hostname,
         },
         'room.created'
       );
@@ -283,6 +293,7 @@ const roomsPlugin: FastifyPluginAsync = async fastify => {
         createdAt: room.createdAt,
         participantCount: room.participantCount,
         expiresAt: room.expiresAt,
+        ...(room.name !== undefined && { name: room.name }),
         last_state: room.last_state,
       }));
     }
@@ -343,6 +354,7 @@ const roomsPlugin: FastifyPluginAsync = async fastify => {
         createdAt: room.createdAt,
         expiresAt: room.expiresAt,
         targetUrl: room.targetUrl,
+        ...(room.name !== undefined && { name: room.name }),
         state: currentState,
         connectedClients,
         recentEvents: room.eventLog,
@@ -400,6 +412,98 @@ const roomsPlugin: FastifyPluginAsync = async fastify => {
           roomId: roomId,
         },
         'room.deleted'
+      );
+
+      // Return 204 No Content on success
+      return reply.code(204).send();
+    }
+  );
+
+  /**
+   * DELETE /admin/api/rooms/:roomId/clients/:clientId - Remove a client from a room
+   */
+  fastify.delete<{ Params: { roomId: string; clientId: string } }>(
+    '/admin/api/rooms/:roomId/clients/:clientId',
+    {
+      schema: {
+        params: {
+          type: 'object',
+          properties: {
+            roomId: {
+              type: 'string',
+              pattern: '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
+              description: 'UUID v4 format',
+            },
+            clientId: {
+              type: 'string',
+              pattern: '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
+              description: 'UUID v4 format',
+            },
+          },
+          required: ['roomId', 'clientId'],
+        },
+      },
+      preHandler: roomValidationPreHandler,
+    },
+    async (request, reply) => {
+      // Room is validated and attached to request by preHandler
+      const room = request.room!;
+      const { roomId: roomIdString, clientId: clientIdString } = request.params;
+      const roomId = toRoomId(roomIdString);
+      const clientId = toClientId(clientIdString);
+
+      // Check if client exists in room
+      const client = room.connectedClients.get(clientId);
+      if (!client) {
+        return reply.code(404).send({
+          statusCode: 404,
+          error: 'Not Found',
+          message: `Client not found in room: ${clientIdString}`,
+        });
+      }
+
+      // Close WebSocket connection if still open
+      try {
+        if (client.conn.readyState === WebSocket.OPEN || client.conn.readyState === WebSocket.CONNECTING) {
+          client.conn.close(1001, 'Client removed by admin');
+        }
+      } catch (error) {
+        logger.warn(
+          {
+            roomId,
+            clientId,
+            error,
+          },
+          'Failed to close WebSocket connection during client removal'
+        );
+      }
+
+      // Remove client from room.connectedClients
+      room.connectedClients.delete(clientId);
+
+      // Remove connection from connectionsByRoom if it exists
+      const roomConnections = connectionsByRoom.get(roomId);
+      if (roomConnections) {
+        // Find and remove the connection
+        for (const ws of roomConnections) {
+          if (ws.clientId === clientId) {
+            roomConnections.delete(ws);
+            // Clean up empty sets
+            if (roomConnections.size === 0) {
+              connectionsByRoom.delete(roomId);
+            }
+            break;
+          }
+        }
+      }
+
+      // Log client removal with structured logging
+      logger.info(
+        {
+          roomId,
+          clientId,
+        },
+        'client.removed'
       );
 
       // Return 204 No Content on success

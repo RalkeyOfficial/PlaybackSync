@@ -46,19 +46,19 @@ function parseBasicAuth(
  * @param targetUrl - Target video URL
  * @param roomId - Room identifier
  * @param password - Room password
- * @param syncHostname - WebSocket hostname from config
+ * @param hostname - Hostname from config (used for WebSocket URL)
  * @returns Redirect URL with sync parameters
  */
 function buildRedirectUrl(
   targetUrl: string,
   roomId: string,
   password: string,
-  syncHostname?: string
+  hostname?: string
 ): string {
   const url = new URL(targetUrl);
 
   // Build WebSocket URL
-  const wsUrl = syncHostname ? `wss://${syncHostname}/${roomId}` : `wss://localhost/${roomId}`;
+  const wsUrl = hostname ? `wss://${hostname}/${roomId}` : `wss://localhost/${roomId}`;
 
   // Add sync parameters
   url.searchParams.set('sync_url', wsUrl);
@@ -144,7 +144,7 @@ const sharePlugin: FastifyPluginAsync = async fastify => {
         room.targetUrl,
         roomIdString,
         credentials.password,
-        config.syncHostname
+        config.hostname
       );
 
       // Log successful authentication

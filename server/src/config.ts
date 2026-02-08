@@ -36,10 +36,8 @@ export interface Config {
   maxConnectionsPerRoom: number;
   /** Maximum broadcast rate per room in messages per second (default: 20) */
   maxBroadcastRatePerSec: number;
-  /** Hostname for share links (used in room creation responses) - optional */
-  shareHostname?: string;
-  /** WebSocket hostname (used for client connection parameters) - optional */
-  syncHostname?: string;
+  /** Hostname for share links and WebSocket URLs (used in room creation responses and sync redirects) - optional */
+  hostname?: string;
   /** Server secret key used for HMAC password hashing - required for security */
   serverSecret: string;
 }
@@ -69,8 +67,7 @@ export function getConfig(): Config {
     maxMessageSizeBytes: parseInt(process.env.MAX_MESSAGE_SIZE_BYTES || '65536', 10),
     maxConnectionsPerRoom: parseInt(process.env.MAX_CONNECTIONS_PER_ROOM || '50', 10),
     maxBroadcastRatePerSec: parseInt(process.env.MAX_BROADCAST_RATE_PER_SEC || '20', 10),
-    shareHostname: process.env.SHARE_HOSTNAME,
-    syncHostname: process.env.SYNC_HOSTNAME,
+    hostname: process.env.HOSTNAME,
     serverSecret,
   };
 }

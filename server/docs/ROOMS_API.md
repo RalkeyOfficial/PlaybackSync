@@ -72,6 +72,7 @@ Request body (JSON):
 |------|------|----------|-------------|
 | `targetUrl` | string | yes | Absolute URL to the video page that clients will be redirected to |
 | `ttl` | number | no | Time-to-live in seconds (minimum: 1). Defaults to `ROOM_TTL_SECONDS` |
+| `name` | string | no | Optional room name/nickname for identification |
 
 Response – `201 Created`:
 
@@ -101,6 +102,7 @@ Array of room summaries:
 | `createdAt` | number | Creation timestamp (ms) |
 | `expiresAt` | number | Expiration timestamp (ms) |
 | `participantCount` | number | Active WebSocket connections |
+| `name` | string | Optional room name/nickname (if provided) |
 | `last_state` | object | Current playback state snapshot |
 
 If no rooms exist, an empty array is returned.
@@ -121,6 +123,7 @@ Response – `200 OK`:
 | `createdAt` | number | Creation timestamp (ms) |
 | `expiresAt` | number | Expiration timestamp (ms) |
 | `targetUrl` | string | Original target URL |
+| `name` | string | Optional room name/nickname (if provided) |
 | `state` | object | Authoritative playback state |
 | `connectedClients` | array | Active and tombstoned clients |
 | `recentEvents` | array | Ring buffer of recent events |
@@ -138,6 +141,31 @@ Immediately destroys a room and disconnects all clients.
 Response – `204 No Content`
 
 Deletion is irreversible. Clients are forcibly disconnected.
+
+---
+
+### Remove Client from Room
+
+**DELETE `/admin/api/rooms/:roomId/clients/:clientId`**
+
+Forcefully removes a specific client from a room and closes their WebSocket connection.
+
+Path parameters:
+
+| Parameter | Type | Description |
+|----------|------|-------------|
+| `roomId` | string (UUID v4) | Room identifier |
+| `clientId` | string (UUID v4) | Client identifier |
+
+Response – `204 No Content`
+
+The client's WebSocket connection is forcibly closed, and the client is removed from the room's connected clients list. This operation is useful for administrative purposes, such as removing problematic or disconnected clients.
+
+Error responses:
+
+• `400 Bad Request` – Invalid UUID format for `roomId` or `clientId`
+• `404 Not Found` – Room not found or expired
+• `404 Not Found` – Client not found in the specified room
 
 ---
 
@@ -163,7 +191,7 @@ Successful response:
 
 Appended query parameters:
 
-• `sync_url` – WebSocket URL (`wss://{SYNC_HOSTNAME}/{roomId}`)
+• `sync_url` – WebSocket URL (`wss://{HOSTNAME}/{roomId}`)
 • `sync_password` – room password (plaintext)
 
 These parameters are intentionally exposed for browser‑extension detection.
@@ -209,8 +237,7 @@ Restrict access in production if required.
 ## Environment Variables
 
 • `ROOM_TTL_SECONDS` – default room TTL (seconds)
-• `SHARE_HOSTNAME` – hostname used for share links
-• `SYNC_HOSTNAME` – hostname used for WebSocket URLs (required in production)
+• `HOSTNAME` – hostname used for share links and WebSocket URLs (technically option, but functionally required for production)
 • `SERVER_SECRET` – HMAC secret for password hashing (required)
 
 ---

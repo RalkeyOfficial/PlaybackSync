@@ -82,6 +82,19 @@ describe('Room Storage', () => {
       expect(room1.passwordHash).toBe('hash1');
       expect(room2.passwordHash).toBe('hash2');
     });
+
+    it('should create room without name when name is not provided', () => {
+      const room = createRoom(testRoomId, testPasswordHash, testTtlSeconds, testTargetUrl);
+
+      expect(room.name).toBeUndefined();
+    });
+
+    it('should create room with name when name is provided', () => {
+      const roomName = 'My Test Room';
+      const room = createRoom(testRoomId, testPasswordHash, testTtlSeconds, testTargetUrl, roomName);
+
+      expect(room.name).toBe(roomName);
+    });
   });
 
   describe('getRoom', () => {
@@ -144,6 +157,25 @@ describe('Room Storage', () => {
       expect(foundRoom?.id).toBe(testRoomId);
       expect(foundRoom?.createdAt).toBe(room.createdAt);
       expect(foundRoom?.participantCount).toBe(0);
+    });
+
+    it('should include name in list when room has name', () => {
+      const roomName = 'Test Room Name';
+      createRoom(testRoomId, testPasswordHash, testTtlSeconds, testTargetUrl, roomName);
+      const rooms = listActiveRooms();
+
+      const foundRoom = rooms.find(r => r.id === testRoomId);
+      expect(foundRoom).toBeDefined();
+      expect(foundRoom?.name).toBe(roomName);
+    });
+
+    it('should not include name in list when room has no name', () => {
+      createRoom(testRoomId, testPasswordHash, testTtlSeconds, testTargetUrl);
+      const rooms = listActiveRooms();
+
+      const foundRoom = rooms.find(r => r.id === testRoomId);
+      expect(foundRoom).toBeDefined();
+      expect(foundRoom?.name).toBeUndefined();
     });
 
     it('should return correct participantCount (0 for new rooms)', () => {

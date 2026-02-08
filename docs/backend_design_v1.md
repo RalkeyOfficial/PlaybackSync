@@ -53,8 +53,7 @@ All components run in the same Node process.
 ## 3. Config & environment variables
 Required env vars (examples and defaults):
 - `PORT=8080`
-- `SHARE_HOSTNAME=share.playbacksync.mydomain.tld` (used in share redirects)
-- `SYNC_HOSTNAME=sync.playbacksync.mydomain.tld` (wss host used for client params)
+- `HOSTNAME=playbacksync.mydomain.tld` (used for share links and WebSocket URLs)
 - `ROOM_TTL_SECONDS=86400` (24h)
 - `DRIFT_THRESHOLD_MS=500` (0.5s)
 - `COOLDOWN_WINDOW_MS=3000` (3s) — suspend reconciliation for this window after explicit event
@@ -80,6 +79,7 @@ Room {
   passwordHash: string,
   createdAt: number,
   expiresAt: number,
+  name?: string, // Optional room name/nickname for identification
 
   // Canonical video identity for the room
   target: {
@@ -272,10 +272,11 @@ Protected by external auth (Authelia); server does not implement user auth.
 
 Endpoints (JSON REST):
 - `POST /admin/api/rooms` → create room
-  - body: `{ "ttl": 86400, "targetUrl": "https://..." }`
+  - body: `{ "ttl": 86400, "targetUrl": "https://...", "name": "optional room name" }`
   - server generates `roomId` and `password` and returns share link and password one-time in response
 - `DELETE /admin/api/rooms/:roomId` → revoke (immediately destroy room and close connections)
-- `GET /admin/api/rooms` → list rooms (id, createdAt, participantCount, last_state)
+- `DELETE /admin/api/rooms/:roomId/clients/:clientId` → remove specific client from room (force disconnect)
+- `GET /admin/api/rooms` → list rooms (id, createdAt, participantCount, name, last_state)
 - `GET /admin/api/rooms/:roomId` → room details and recent events
 - `GET /healthz` → return 200 if server running
 - `GET /metrics` → Prometheus metrics
@@ -309,8 +310,7 @@ services:
     container_name: PlaybackSync
     environment:
       - PORT=8080
-      - SHARE_HOSTNAME=share.playbacksync.mydomain.tld
-      - SYNC_HOSTNAME=sync.playbacksync.mydomain.tld
+      - HOSTNAME=playbacksync.mydomain.tld
       - ROOM_TTL_SECONDS=86400
       - DRIFT_THRESHOLD_MS=500
       - COOLDOWN_WINDOW_MS=3000
@@ -320,7 +320,7 @@ services:
       - ANON_LOGGING=true
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.playbacksync.rule=Host(`share.playbacksync.mydomain.tld`) || Host(`sync.playbacksync.mydomain.tld`)"
+      - "traefik.http.routers.playbacksync.rule=Host(`playbacksync.mydomain.tld`)"
       - "traefik.http.routers.playbacksync.entrypoints=websecure"
       - "traefik.http.routers.playbacksync.tls=true"
       

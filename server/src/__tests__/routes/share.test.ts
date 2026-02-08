@@ -207,9 +207,9 @@ describe('Public Share Endpoint', () => {
     });
 
     it('should redirect to targetUrl with sync parameters on successful authentication', async () => {
-      // Set SYNC_HOSTNAME for WebSocket URL construction
-      const originalSyncHostname = process.env.SYNC_HOSTNAME;
-      process.env.SYNC_HOSTNAME = 'sync.example.com';
+      // Set HOSTNAME for WebSocket URL construction
+      const originalHostname = process.env.HOSTNAME;
+      process.env.HOSTNAME = 'playbacksync.example.com';
 
       // Create a new server instance to pick up the new env var
       const testServer = await createTestServer();
@@ -250,22 +250,22 @@ describe('Public Share Endpoint', () => {
         // URL is encoded in query parameters, so decode it for checking
         if (location) {
           const decodedLocation = decodeURIComponent(location);
-          expect(decodedLocation).toContain(`wss://sync.example.com/${roomId}`);
+          expect(decodedLocation).toContain(`wss://playbacksync.example.com/${roomId}`);
         }
       } finally {
         await testServer.close();
-        if (originalSyncHostname) {
-          process.env.SYNC_HOSTNAME = originalSyncHostname;
+        if (originalHostname) {
+          process.env.HOSTNAME = originalHostname;
         } else {
-          delete process.env.SYNC_HOSTNAME;
+          delete process.env.HOSTNAME;
         }
       }
     });
 
-    it('should format sync_url correctly with SYNC_HOSTNAME', async () => {
-      // Set SYNC_HOSTNAME
-      const originalSyncHostname = process.env.SYNC_HOSTNAME;
-      process.env.SYNC_HOSTNAME = 'wss.example.com';
+    it('should format sync_url correctly with HOSTNAME', async () => {
+      // Set HOSTNAME
+      const originalHostname = process.env.HOSTNAME;
+      process.env.HOSTNAME = 'playbacksync.example.com';
 
       // Create a new server instance to pick up the new env var
       const testServer = await createTestServer();
@@ -304,13 +304,13 @@ describe('Public Share Endpoint', () => {
 
         const url = new URL(location);
         const syncUrl = url.searchParams.get('sync_url');
-        expect(syncUrl).toBe(`wss://wss.example.com/${roomId}`);
+        expect(syncUrl).toBe(`wss://playbacksync.example.com/${roomId}`);
       } finally {
         await testServer.close();
-        if (originalSyncHostname) {
-          process.env.SYNC_HOSTNAME = originalSyncHostname;
+        if (originalHostname) {
+          process.env.HOSTNAME = originalHostname;
         } else {
-          delete process.env.SYNC_HOSTNAME;
+          delete process.env.HOSTNAME;
         }
       }
     });
@@ -351,10 +351,10 @@ describe('Public Share Endpoint', () => {
       expect(syncPassword).toBe(password);
     });
 
-    it('should construct sync_url using SYNC_HOSTNAME environment variable', async () => {
-      // Set SYNC_HOSTNAME
-      const originalSyncHostname = process.env.SYNC_HOSTNAME;
-      process.env.SYNC_HOSTNAME = 'websocket.example.com';
+    it('should construct sync_url using HOSTNAME environment variable', async () => {
+      // Set HOSTNAME
+      const originalHostname = process.env.HOSTNAME;
+      process.env.HOSTNAME = 'playbacksync.example.com';
 
       // Create a new server instance to pick up the new env var
       const testServer = await createTestServer();
@@ -393,15 +393,15 @@ describe('Public Share Endpoint', () => {
 
         const url = new URL(location);
         const syncUrl = url.searchParams.get('sync_url');
-        // Should use SYNC_HOSTNAME from environment
-        expect(syncUrl).toContain('websocket.example.com');
+        // Should use HOSTNAME from environment
+        expect(syncUrl).toContain('playbacksync.example.com');
         expect(syncUrl).toMatch(/^wss:\/\//);
       } finally {
         await testServer.close();
-        if (originalSyncHostname) {
-          process.env.SYNC_HOSTNAME = originalSyncHostname;
+        if (originalHostname) {
+          process.env.HOSTNAME = originalHostname;
         } else {
-          delete process.env.SYNC_HOSTNAME;
+          delete process.env.HOSTNAME;
         }
       }
     });

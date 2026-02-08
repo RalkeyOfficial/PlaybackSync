@@ -24,8 +24,7 @@ services:
       - MAX_MESSAGE_SIZE_BYTES=65536
       - MAX_CONNECTIONS_PER_ROOM=50
       - MAX_BROADCAST_RATE_PER_SEC=20
-      - SHARE_HOSTNAME=${SHARE_HOSTNAME:-}
-      - SYNC_HOSTNAME=${SYNC_HOSTNAME:-}
+      - HOSTNAME=playbacksync.mydomain.tld
       - SERVER_SECRET=${SERVER_SECRET:-}
     ports:
       - '8080:8080'

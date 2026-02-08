@@ -43,6 +43,7 @@ A **room** represents a single synchronized viewing session.
 Room properties:
 - UUID (primary identifier)
 - Password (shared secret)
+- Name (optional nickname for identification)
 - Expiration time (TTL ≤ 24h)
 - Current playback state
 - Connected clients
@@ -303,7 +304,7 @@ No live playback control in v1.
 4. Password prompt
 5. On success, redirect to target streaming URL with:
 ```
-?sync_url=wss://sync.playbacksync.mydomain.tld/UUID
+?sync_url=wss://playbacksync.mydomain.tld/UUID
 &sync_password=<password>
 ```
 
