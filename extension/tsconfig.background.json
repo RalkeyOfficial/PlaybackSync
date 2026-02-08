@@ -3,8 +3,10 @@
   "compilerOptions": {
     "outDir": "./dist/background",
     "rootDir": "./src/background",
-    "lib": ["ES2022"],
-    "types": ["chrome"]
+    "lib": ["ES2022", "WebWorker"],
+    "types": ["chrome"],
+    "module": "ES2022",
+    "target": "ES2022"
   },
   "include": ["src/background/**/*"],
   "exclude": ["node_modules", "dist", "**/*.test.ts", "**/*.spec.ts"]
