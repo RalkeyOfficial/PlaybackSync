@@ -1,0 +1,11 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "outDir": "./dist/background",
+    "rootDir": "./src/background",
+    "lib": ["ES2022"],
+    "types": ["chrome"]
+  },
+  "include": ["src/background/**/*"],
+  "exclude": ["node_modules", "dist", "**/*.test.ts", "**/*.spec.ts"]
+}

@@ -3,8 +3,14 @@
     "version": "0.1.0",
     "description": "PlaybackSync browser extension",
     "scripts": {
-        "build": "tsc",
-        "dev": "tsc --watch",
+        "build": "npm run build:background && npm run build:content && npm run build:injected",
+        "build:background": "tsc -p tsconfig.background.json",
+        "build:content": "tsc -p tsconfig.content.json",
+        "build:injected": "tsc -p tsconfig.injected.json",
+        "dev": "npm run dev:background & npm run dev:content & npm run dev:injected",
+        "dev:background": "tsc -p tsconfig.background.json --watch",
+        "dev:content": "tsc -p tsconfig.content.json --watch",
+        "dev:injected": "tsc -p tsconfig.injected.json --watch",
         "test": "jest",
         "lint": "eslint src --ext .ts"
     },
