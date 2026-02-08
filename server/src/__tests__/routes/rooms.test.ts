@@ -1,5 +1,5 @@
 /**
- * Tests for the /api/rooms endpoints
+ * Tests for the /admin/api/rooms endpoints
  */
 
 import { createTestServer } from '../helpers/test-server';
@@ -22,11 +22,11 @@ describe('Rooms API Endpoints', () => {
     cleanupTestEnv();
   });
 
-  describe('POST /api/rooms', () => {
+  describe('POST /admin/api/rooms', () => {
     it('should require targetUrl', async () => {
       const response = await server.inject({
         method: 'POST',
-        url: '/api/rooms',
+        url: '/admin/api/rooms',
         payload: {},
       });
 
@@ -36,7 +36,7 @@ describe('Rooms API Endpoints', () => {
     it('should create room with UUID v4 roomId', async () => {
       const response = await server.inject({
         method: 'POST',
-        url: '/api/rooms',
+        url: '/admin/api/rooms',
         payload: {
           targetUrl: 'https://example.com/video',
         },
@@ -51,7 +51,7 @@ describe('Rooms API Endpoints', () => {
     it('should generate random password (different each time)', async () => {
       const response1 = await server.inject({
         method: 'POST',
-        url: '/api/rooms',
+        url: '/admin/api/rooms',
         payload: {
           targetUrl: 'https://example.com/video1',
         },
@@ -59,7 +59,7 @@ describe('Rooms API Endpoints', () => {
 
       const response2 = await server.inject({
         method: 'POST',
-        url: '/api/rooms',
+        url: '/admin/api/rooms',
         payload: {
           targetUrl: 'https://example.com/video2',
         },
@@ -76,7 +76,7 @@ describe('Rooms API Endpoints', () => {
     it('should hash password using HMAC-SHA256 (never stores plaintext)', async () => {
       const response = await server.inject({
         method: 'POST',
-        url: '/api/rooms',
+        url: '/admin/api/rooms',
         payload: {
           targetUrl: 'https://example.com/video',
         },
@@ -90,7 +90,7 @@ describe('Rooms API Endpoints', () => {
       // Verify room exists and password is hashed (not plaintext)
       const listResponse = await server.inject({
         method: 'GET',
-        url: '/api/rooms',
+        url: '/admin/api/rooms',
       });
 
       const rooms = JSON.parse(listResponse.body);
@@ -104,7 +104,7 @@ describe('Rooms API Endpoints', () => {
       const ttl = 7200; // 2 hours
       const response = await server.inject({
         method: 'POST',
-        url: '/api/rooms',
+        url: '/admin/api/rooms',
         payload: {
           ttl: ttl,
           targetUrl: 'https://example.com/video',
@@ -117,7 +117,7 @@ describe('Rooms API Endpoints', () => {
       // Get room details to verify TTL
       const listResponse = await server.inject({
         method: 'GET',
-        url: '/api/rooms',
+        url: '/admin/api/rooms',
       });
 
       const rooms = JSON.parse(listResponse.body);
@@ -132,7 +132,7 @@ describe('Rooms API Endpoints', () => {
     it('should return correct response format: { roomId, password, shareLink }', async () => {
       const response = await server.inject({
         method: 'POST',
-        url: '/api/rooms',
+        url: '/admin/api/rooms',
         payload: {
           targetUrl: 'https://example.com/video',
         },
@@ -155,7 +155,7 @@ describe('Rooms API Endpoints', () => {
 
       const response = await server.inject({
         method: 'POST',
-        url: '/api/rooms',
+        url: '/admin/api/rooms',
         payload: {
           targetUrl: 'https://example.com/video',
         },
@@ -178,7 +178,7 @@ describe('Rooms API Endpoints', () => {
 
       const response = await testServer.inject({
         method: 'POST',
-        url: '/api/rooms',
+        url: '/admin/api/rooms',
         payload: {
           targetUrl: 'https://example.com/video',
         },
@@ -196,7 +196,7 @@ describe('Rooms API Endpoints', () => {
     it('should accept request body with ttl and targetUrl', async () => {
       const response = await server.inject({
         method: 'POST',
-        url: '/api/rooms',
+        url: '/admin/api/rooms',
         payload: {
           ttl: 3600,
           targetUrl: 'https://example.com/video',
@@ -211,7 +211,7 @@ describe('Rooms API Endpoints', () => {
     it('should reject invalid ttl (negative)', async () => {
       const response = await server.inject({
         method: 'POST',
-        url: '/api/rooms',
+        url: '/admin/api/rooms',
         payload: {
           ttl: -1,
         },
@@ -223,7 +223,7 @@ describe('Rooms API Endpoints', () => {
     it('should reject invalid ttl (non-number)', async () => {
       const response = await server.inject({
         method: 'POST',
-        url: '/api/rooms',
+        url: '/admin/api/rooms',
         payload: {
           ttl: 'not-a-number',
         },
@@ -235,7 +235,7 @@ describe('Rooms API Endpoints', () => {
     it('should reject invalid targetUrl (non-string)', async () => {
       const response = await server.inject({
         method: 'POST',
-        url: '/api/rooms',
+        url: '/admin/api/rooms',
         payload: {
           targetUrl: 12345,
         },
@@ -247,7 +247,7 @@ describe('Rooms API Endpoints', () => {
     it('should use default TTL from config if not provided', async () => {
       const response = await server.inject({
         method: 'POST',
-        url: '/api/rooms',
+        url: '/admin/api/rooms',
         payload: {
           targetUrl: 'https://example.com/video',
         },
@@ -259,7 +259,7 @@ describe('Rooms API Endpoints', () => {
       // Get room details
       const listResponse = await server.inject({
         method: 'GET',
-        url: '/api/rooms',
+        url: '/admin/api/rooms',
       });
 
       const rooms = JSON.parse(listResponse.body);
@@ -271,10 +271,10 @@ describe('Rooms API Endpoints', () => {
       expect(Math.abs(createdRoom.expiresAt - expectedExpiresAt)).toBeLessThan(1000);
     });
 
-    it('should make room appear in GET /api/rooms list after creation', async () => {
+    it('should make room appear in GET /admin/api/rooms list after creation', async () => {
       const createResponse = await server.inject({
         method: 'POST',
-        url: '/api/rooms',
+        url: '/admin/api/rooms',
         payload: {
           targetUrl: 'https://example.com/video',
         },
@@ -285,7 +285,7 @@ describe('Rooms API Endpoints', () => {
 
       const listResponse = await server.inject({
         method: 'GET',
-        url: '/api/rooms',
+        url: '/admin/api/rooms',
       });
 
       const rooms = JSON.parse(listResponse.body);
@@ -296,7 +296,7 @@ describe('Rooms API Endpoints', () => {
     it('should allow multiple rooms to be created independently', async () => {
       const response1 = await server.inject({
         method: 'POST',
-        url: '/api/rooms',
+        url: '/admin/api/rooms',
         payload: {
           targetUrl: 'https://example.com/video1',
         },
@@ -304,7 +304,7 @@ describe('Rooms API Endpoints', () => {
 
       const response2 = await server.inject({
         method: 'POST',
-        url: '/api/rooms',
+        url: '/admin/api/rooms',
         payload: {
           targetUrl: 'https://example.com/video2',
         },
@@ -318,7 +318,7 @@ describe('Rooms API Endpoints', () => {
 
       const listResponse = await server.inject({
         method: 'GET',
-        url: '/api/rooms',
+        url: '/admin/api/rooms',
       });
 
       const rooms = JSON.parse(listResponse.body);
@@ -330,13 +330,13 @@ describe('Rooms API Endpoints', () => {
     });
   });
 
-  describe('GET /api/rooms', () => {
+  describe('GET /admin/api/rooms', () => {
     it('should return empty array when no rooms exist', async () => {
       // Note: This test assumes we can clear rooms or start with empty state
       // In a real scenario, we might need a test helper to clear rooms
       const response = await server.inject({
         method: 'GET',
-        url: '/api/rooms',
+        url: '/admin/api/rooms',
       });
 
       expect(response.statusCode).toBe(200);
@@ -348,7 +348,7 @@ describe('Rooms API Endpoints', () => {
       // Create a room first
       const createResponse = await server.inject({
         method: 'POST',
-        url: '/api/rooms',
+        url: '/admin/api/rooms',
         payload: {
           targetUrl: 'https://example.com/video',
         },
@@ -359,7 +359,7 @@ describe('Rooms API Endpoints', () => {
 
       const listResponse = await server.inject({
         method: 'GET',
-        url: '/api/rooms',
+        url: '/admin/api/rooms',
       });
 
       expect(listResponse.statusCode).toBe(200);
@@ -381,7 +381,7 @@ describe('Rooms API Endpoints', () => {
     it('should return correct participantCount (0 for new rooms)', async () => {
       const createResponse = await server.inject({
         method: 'POST',
-        url: '/api/rooms',
+        url: '/admin/api/rooms',
         payload: {
           targetUrl: 'https://example.com/video',
         },
@@ -391,7 +391,7 @@ describe('Rooms API Endpoints', () => {
 
       const listResponse = await server.inject({
         method: 'GET',
-        url: '/api/rooms',
+        url: '/admin/api/rooms',
       });
 
       const rooms = JSON.parse(listResponse.body);
@@ -403,7 +403,7 @@ describe('Rooms API Endpoints', () => {
     it('should return correct last_state from room.state', async () => {
       const createResponse = await server.inject({
         method: 'POST',
-        url: '/api/rooms',
+        url: '/admin/api/rooms',
         payload: {
           targetUrl: 'https://example.com/video',
         },
@@ -413,7 +413,7 @@ describe('Rooms API Endpoints', () => {
 
       const listResponse = await server.inject({
         method: 'GET',
-        url: '/api/rooms',
+        url: '/admin/api/rooms',
       });
 
       const rooms = JSON.parse(listResponse.body);
@@ -433,7 +433,7 @@ describe('Rooms API Endpoints', () => {
       // Create a room with very short TTL
       const createResponse = await server.inject({
         method: 'POST',
-        url: '/api/rooms',
+        url: '/admin/api/rooms',
         payload: {
           ttl: 1,
           targetUrl: 'https://example.com/video',
@@ -448,7 +448,7 @@ describe('Rooms API Endpoints', () => {
 
       const listResponse = await server.inject({
         method: 'GET',
-        url: '/api/rooms',
+        url: '/admin/api/rooms',
       });
 
       const rooms = JSON.parse(listResponse.body);
@@ -461,7 +461,7 @@ describe('Rooms API Endpoints', () => {
       // Create a room with 2 second TTL
       const createResponse = await server.inject({
         method: 'POST',
-        url: '/api/rooms',
+        url: '/admin/api/rooms',
         payload: {
           ttl: 2,
           targetUrl: 'https://example.com/video',
@@ -475,7 +475,7 @@ describe('Rooms API Endpoints', () => {
       // Verify room exists immediately after creation
       const listResponseBefore = await server.inject({
         method: 'GET',
-        url: '/api/rooms',
+        url: '/admin/api/rooms',
       });
 
       const roomsBefore = JSON.parse(listResponseBefore.body);
@@ -489,7 +489,7 @@ describe('Rooms API Endpoints', () => {
       // Verify room has been removed/filtered out
       const listResponseAfter = await server.inject({
         method: 'GET',
-        url: '/api/rooms',
+        url: '/admin/api/rooms',
       });
 
       const roomsAfter = JSON.parse(listResponseAfter.body);
@@ -499,7 +499,7 @@ describe('Rooms API Endpoints', () => {
     });
   });
 
-  describe('GET /api/rooms/:roomId', () => {
+  describe('GET /admin/api/rooms/:roomId', () => {
     beforeEach(() => {
       // Clear rooms before each test for isolation
       clearAllRooms();
@@ -509,7 +509,7 @@ describe('Rooms API Endpoints', () => {
       // Create a room first
       const createResponse = await server.inject({
         method: 'POST',
-        url: '/api/rooms',
+        url: '/admin/api/rooms',
         payload: {
           targetUrl: 'https://example.com/video',
         },
@@ -521,7 +521,7 @@ describe('Rooms API Endpoints', () => {
       // Get room details
       const response = await server.inject({
         method: 'GET',
-        url: `/api/rooms/${roomId}`,
+        url: `/admin/api/rooms/${roomId}`,
       });
 
       expect(response.statusCode).toBe(200);
@@ -541,7 +541,7 @@ describe('Rooms API Endpoints', () => {
     it('should return room details with correct state structure', async () => {
       const createResponse = await server.inject({
         method: 'POST',
-        url: '/api/rooms',
+        url: '/admin/api/rooms',
         payload: {
           targetUrl: 'https://example.com/video',
         },
@@ -552,7 +552,7 @@ describe('Rooms API Endpoints', () => {
 
       const response = await server.inject({
         method: 'GET',
-        url: `/api/rooms/${roomId}`,
+        url: `/admin/api/rooms/${roomId}`,
       });
 
       const body = JSON.parse(response.body);
@@ -576,7 +576,7 @@ describe('Rooms API Endpoints', () => {
     it('should return empty connectedClients array for room with no clients', async () => {
       const createResponse = await server.inject({
         method: 'POST',
-        url: '/api/rooms',
+        url: '/admin/api/rooms',
         payload: {
           targetUrl: 'https://example.com/video',
         },
@@ -587,7 +587,7 @@ describe('Rooms API Endpoints', () => {
 
       const response = await server.inject({
         method: 'GET',
-        url: `/api/rooms/${roomId}`,
+        url: `/admin/api/rooms/${roomId}`,
       });
 
       const body = JSON.parse(response.body);
@@ -599,7 +599,7 @@ describe('Rooms API Endpoints', () => {
     it('should return empty recentEvents array for room with no events', async () => {
       const createResponse = await server.inject({
         method: 'POST',
-        url: '/api/rooms',
+        url: '/admin/api/rooms',
         payload: {
           targetUrl: 'https://example.com/video',
         },
@@ -610,7 +610,7 @@ describe('Rooms API Endpoints', () => {
 
       const response = await server.inject({
         method: 'GET',
-        url: `/api/rooms/${roomId}`,
+        url: `/admin/api/rooms/${roomId}`,
       });
 
       const body = JSON.parse(response.body);
@@ -622,7 +622,7 @@ describe('Rooms API Endpoints', () => {
     it('should exclude passwordHash from response (security)', async () => {
       const createResponse = await server.inject({
         method: 'POST',
-        url: '/api/rooms',
+        url: '/admin/api/rooms',
         payload: {
           targetUrl: 'https://example.com/video',
         },
@@ -633,7 +633,7 @@ describe('Rooms API Endpoints', () => {
 
       const response = await server.inject({
         method: 'GET',
-        url: `/api/rooms/${roomId}`,
+        url: `/admin/api/rooms/${roomId}`,
       });
 
       const body = JSON.parse(response.body);
@@ -647,7 +647,7 @@ describe('Rooms API Endpoints', () => {
 
       const response = await server.inject({
         method: 'GET',
-        url: `/api/rooms/${nonExistentRoomId}`,
+        url: `/admin/api/rooms/${nonExistentRoomId}`,
       });
 
       expect(response.statusCode).toBe(404);
@@ -657,7 +657,7 @@ describe('Rooms API Endpoints', () => {
       // Create a room with very short TTL
       const createResponse = await server.inject({
         method: 'POST',
-        url: '/api/rooms',
+        url: '/admin/api/rooms',
         payload: {
           ttl: 1,
           targetUrl: 'https://example.com/video',
@@ -672,7 +672,7 @@ describe('Rooms API Endpoints', () => {
 
       const response = await server.inject({
         method: 'GET',
-        url: `/api/rooms/${roomId}`,
+        url: `/admin/api/rooms/${roomId}`,
       });
 
       expect(response.statusCode).toBe(404);
@@ -683,7 +683,7 @@ describe('Rooms API Endpoints', () => {
 
       const response = await server.inject({
         method: 'GET',
-        url: `/api/rooms/${invalidRoomId}`,
+        url: `/admin/api/rooms/${invalidRoomId}`,
       });
 
       expect(response.statusCode).toBe(400);
@@ -693,7 +693,7 @@ describe('Rooms API Endpoints', () => {
       const ttl = 3600; // 1 hour
       const createResponse = await server.inject({
         method: 'POST',
-        url: '/api/rooms',
+        url: '/admin/api/rooms',
         payload: {
           ttl: ttl,
           targetUrl: 'https://example.com/video',
@@ -705,7 +705,7 @@ describe('Rooms API Endpoints', () => {
 
       const response = await server.inject({
         method: 'GET',
-        url: `/api/rooms/${roomId}`,
+        url: `/admin/api/rooms/${roomId}`,
       });
 
       const body = JSON.parse(response.body);
@@ -717,7 +717,7 @@ describe('Rooms API Endpoints', () => {
     });
   });
 
-  describe('DELETE /api/rooms/:roomId', () => {
+  describe('DELETE /admin/api/rooms/:roomId', () => {
     beforeEach(() => {
       // Clear rooms before each test for isolation
       clearAllRooms();
@@ -726,7 +726,7 @@ describe('Rooms API Endpoints', () => {
     it('should return 200/204 on successful deletion', async () => {
       const createResponse = await server.inject({
         method: 'POST',
-        url: '/api/rooms',
+        url: '/admin/api/rooms',
         payload: {
           targetUrl: 'https://example.com/video',
         },
@@ -737,17 +737,17 @@ describe('Rooms API Endpoints', () => {
 
       const response = await server.inject({
         method: 'DELETE',
-        url: `/api/rooms/${roomId}`,
+        url: `/admin/api/rooms/${roomId}`,
       });
 
       // Accept either 200 or 204
       expect([200, 204]).toContain(response.statusCode);
     });
 
-    it('should remove room from storage (verify via GET /api/rooms)', async () => {
+    it('should remove room from storage (verify via GET /admin/api/rooms)', async () => {
       const createResponse = await server.inject({
         method: 'POST',
-        url: '/api/rooms',
+        url: '/admin/api/rooms',
         payload: {
           targetUrl: 'https://example.com/video',
         },
@@ -759,7 +759,7 @@ describe('Rooms API Endpoints', () => {
       // Verify room exists before deletion
       const listBeforeResponse = await server.inject({
         method: 'GET',
-        url: '/api/rooms',
+        url: '/admin/api/rooms',
       });
 
       const roomsBefore = JSON.parse(listBeforeResponse.body);
@@ -769,7 +769,7 @@ describe('Rooms API Endpoints', () => {
       // Delete the room
       const deleteResponse = await server.inject({
         method: 'DELETE',
-        url: `/api/rooms/${roomId}`,
+        url: `/admin/api/rooms/${roomId}`,
       });
 
       expect([200, 204]).toContain(deleteResponse.statusCode);
@@ -777,7 +777,7 @@ describe('Rooms API Endpoints', () => {
       // Verify room no longer exists
       const listAfterResponse = await server.inject({
         method: 'GET',
-        url: '/api/rooms',
+        url: '/admin/api/rooms',
       });
 
       const roomsAfter = JSON.parse(listAfterResponse.body);
@@ -790,7 +790,7 @@ describe('Rooms API Endpoints', () => {
 
       const response = await server.inject({
         method: 'DELETE',
-        url: `/api/rooms/${nonExistentRoomId}`,
+        url: `/admin/api/rooms/${nonExistentRoomId}`,
       });
 
       expect(response.statusCode).toBe(404);
@@ -800,7 +800,7 @@ describe('Rooms API Endpoints', () => {
       // Create a room with very short TTL
       const createResponse = await server.inject({
         method: 'POST',
-        url: '/api/rooms',
+        url: '/admin/api/rooms',
         payload: {
           ttl: 1,
           targetUrl: 'https://example.com/video',
@@ -815,7 +815,7 @@ describe('Rooms API Endpoints', () => {
 
       const response = await server.inject({
         method: 'DELETE',
-        url: `/api/rooms/${roomId}`,
+        url: `/admin/api/rooms/${roomId}`,
       });
 
       expect(response.statusCode).toBe(404);
@@ -826,7 +826,7 @@ describe('Rooms API Endpoints', () => {
 
       const response = await server.inject({
         method: 'DELETE',
-        url: `/api/rooms/${invalidRoomId}`,
+        url: `/admin/api/rooms/${invalidRoomId}`,
       });
 
       expect(response.statusCode).toBe(400);
@@ -835,7 +835,7 @@ describe('Rooms API Endpoints', () => {
     it('should allow deletion of room with no connected clients', async () => {
       const createResponse = await server.inject({
         method: 'POST',
-        url: '/api/rooms',
+        url: '/admin/api/rooms',
         payload: {
           targetUrl: 'https://example.com/video',
         },
@@ -850,7 +850,7 @@ describe('Rooms API Endpoints', () => {
 
       const response = await server.inject({
         method: 'DELETE',
-        url: `/api/rooms/${roomId}`,
+        url: `/admin/api/rooms/${roomId}`,
       });
 
       expect([200, 204]).toContain(response.statusCode);
@@ -860,7 +860,7 @@ describe('Rooms API Endpoints', () => {
       // Create a room
       const createResponse = await server.inject({
         method: 'POST',
-        url: '/api/rooms',
+        url: '/admin/api/rooms',
         payload: {
           targetUrl: 'https://example.com/video',
         },
@@ -905,7 +905,7 @@ describe('Rooms API Endpoints', () => {
         // Delete the room
         const response = await server.inject({
           method: 'DELETE',
-          url: `/api/rooms/${roomId}`,
+          url: `/admin/api/rooms/${roomId}`,
         });
 
         expect([200, 204]).toContain(response.statusCode);

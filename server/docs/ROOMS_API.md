@@ -20,7 +20,7 @@ Rooms are stored **in memory only**. All rooms are lost when the server restarts
 
 ## Base Paths
 
-• Admin API: `/api/rooms/*`
+• Admin API: `/admin/api/rooms/*`
 • Public share endpoint: `/:roomId`
 • Health check: `/healthz`
 • Metrics: `/metrics`
@@ -33,7 +33,7 @@ Rooms are stored **in memory only**. All rooms are lost when the server restarts
 
 The server does **not** implement authentication for admin endpoints.
 
-In production, you **must** protect `/api/rooms/*` at the reverse‑proxy layer (Traefik, Nginx, Caddy, etc.) using an external auth provider such as Authentik, Authelia, OAuth2‑Proxy, or Keycloak.
+In production, you **must** protect `/admin/api/rooms/*` at the reverse‑proxy layer (Traefik, Nginx, Caddy, etc.) using an external auth provider such as Authentik, Authelia, OAuth2‑Proxy, or Keycloak.
 
 ### Public Share Endpoint
 
@@ -49,7 +49,7 @@ Always use HTTPS in production.
 
 ## Room Lifecycle
 
-1. Room is created via `POST /api/rooms`
+1. Room is created via `POST /admin/api/rooms`
 2. Room remains active until TTL expiration or explicit deletion
 3. Expired rooms are automatically removed
 4. Deleted or expired rooms return `404 Not Found`
@@ -62,7 +62,7 @@ TTL is defined in seconds and converted internally to an expiration timestamp.
 
 ### Create Room
 
-**POST `/api/rooms`**
+**POST `/admin/api/rooms`**
 
 Creates a new playback room.
 
@@ -87,7 +87,7 @@ The plaintext password is **never stored** and **never returned again**.
 
 ### List Rooms
 
-**GET `/api/rooms`**
+**GET `/admin/api/rooms`**
 
 Returns all currently active rooms. Expired rooms are filtered automatically.
 
@@ -109,7 +109,7 @@ If no rooms exist, an empty array is returned.
 
 ### Get Room Details
 
-**GET `/api/rooms/:roomId`**
+**GET `/admin/api/rooms/:roomId`**
 
 Returns detailed information about a single room.
 
@@ -131,7 +131,7 @@ This endpoint is **administrative** and does not perform redirects.
 
 ### Delete Room
 
-**DELETE `/api/rooms/:roomId`**
+**DELETE `/admin/api/rooms/:roomId`**
 
 Immediately destroys a room and disconnects all clients.
 

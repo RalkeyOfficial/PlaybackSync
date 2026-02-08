@@ -300,7 +300,7 @@ export function setupWebSocketServer(server: {
 
 /**
  * Close all WebSocket connections for a specific room
- * Used when a room is deleted via DELETE /api/rooms/:roomId
+ * Used when a room is deleted via DELETE /admin/api/rooms/:roomId
  * @param roomId - Room identifier
  */
 export function closeConnectionsForRoom(roomId: RoomId): void {

@@ -76,7 +76,7 @@ describe('Public Share Endpoint', () => {
       // Create a room first
       const createResponse = await server.inject({
         method: 'POST',
-        url: '/api/rooms',
+        url: '/admin/api/rooms',
         payload: {
           targetUrl: 'https://example.com/video',
         },
@@ -99,7 +99,7 @@ describe('Public Share Endpoint', () => {
       // Create a room first
       const createResponse = await server.inject({
         method: 'POST',
-        url: '/api/rooms',
+        url: '/admin/api/rooms',
         payload: {
           targetUrl: 'https://example.com/video',
         },
@@ -122,7 +122,7 @@ describe('Public Share Endpoint', () => {
       // Create a room first
       const createResponse = await server.inject({
         method: 'POST',
-        url: '/api/rooms',
+        url: '/admin/api/rooms',
         payload: {
           targetUrl: 'https://example.com/video',
         },
@@ -154,7 +154,7 @@ describe('Public Share Endpoint', () => {
       // Create a room first
       const createResponse = await server.inject({
         method: 'POST',
-        url: '/api/rooms',
+        url: '/admin/api/rooms',
         payload: {
           targetUrl: 'https://example.com/video',
         },
@@ -181,7 +181,7 @@ describe('Public Share Endpoint', () => {
       // Create a room first
       const createResponse = await server.inject({
         method: 'POST',
-        url: '/api/rooms',
+        url: '/admin/api/rooms',
         payload: {
           targetUrl: 'https://example.com/video',
         },
@@ -219,7 +219,7 @@ describe('Public Share Endpoint', () => {
         // Create a room first
         const createResponse = await testServer.inject({
           method: 'POST',
-          url: '/api/rooms',
+          url: '/admin/api/rooms',
           payload: {
             targetUrl: 'https://example.com/video',
           },
@@ -275,7 +275,7 @@ describe('Public Share Endpoint', () => {
         // Create a room first
         const createResponse = await testServer.inject({
           method: 'POST',
-          url: '/api/rooms',
+          url: '/admin/api/rooms',
           payload: {
             targetUrl: 'https://netflix.com/watch/12345',
           },
@@ -319,7 +319,7 @@ describe('Public Share Endpoint', () => {
       // Create a room first
       const createResponse = await server.inject({
         method: 'POST',
-        url: '/api/rooms',
+        url: '/admin/api/rooms',
         payload: {
           targetUrl: 'https://example.com/video',
         },
@@ -364,7 +364,7 @@ describe('Public Share Endpoint', () => {
         // Create a room first
         const createResponse = await testServer.inject({
           method: 'POST',
-          url: '/api/rooms',
+          url: '/admin/api/rooms',
           payload: {
             targetUrl: 'https://example.com/video',
           },
@@ -410,7 +410,7 @@ describe('Public Share Endpoint', () => {
       // Create a room with targetUrl that has query parameters
       const createResponse = await server.inject({
         method: 'POST',
-        url: '/api/rooms',
+        url: '/admin/api/rooms',
         payload: {
           targetUrl: 'https://example.com/video?episode=5&season=2',
         },
@@ -450,7 +450,7 @@ describe('Public Share Endpoint', () => {
       // Create a room first
       const createResponse = await server.inject({
         method: 'POST',
-        url: '/api/rooms',
+        url: '/admin/api/rooms',
         payload: {
           targetUrl: 'https://example.com/video',
         },
@@ -490,7 +490,7 @@ describe('Public Share Endpoint', () => {
       // Create a room first
       const createResponse = await server.inject({
         method: 'POST',
-        url: '/api/rooms',
+        url: '/admin/api/rooms',
         payload: {
           targetUrl: 'https://example.com/video',
         },
@@ -518,7 +518,7 @@ describe('Public Share Endpoint', () => {
       // Create a room
       const createResponse = await server.inject({
         method: 'POST',
-        url: '/api/rooms',
+        url: '/admin/api/rooms',
         payload: {
           targetUrl: 'https://example.com/video',
         },
@@ -543,11 +543,11 @@ describe('Public Share Endpoint', () => {
       expect(shareResponse.headers['www-authenticate']).toBeDefined();
     });
 
-    it('should be separate from admin endpoint GET /api/rooms/:roomId', async () => {
+    it('should be separate from admin endpoint GET /admin/api/rooms/:roomId', async () => {
       // Create a room
       const createResponse = await server.inject({
         method: 'POST',
-        url: '/api/rooms',
+        url: '/admin/api/rooms',
         payload: {
           targetUrl: 'https://example.com/video',
         },
@@ -562,10 +562,10 @@ describe('Public Share Endpoint', () => {
         url: `/${roomId}`,
       });
 
-      // Admin endpoint (GET /api/rooms/:roomId) - returns JSON
+      // Admin endpoint (GET /admin/api/rooms/:roomId) - returns JSON
       const adminResponse = await server.inject({
         method: 'GET',
-        url: `/api/rooms/${roomId}`,
+        url: `/admin/api/rooms/${roomId}`,
       });
 
       // Share endpoint should return 401 (Basic Auth challenge)

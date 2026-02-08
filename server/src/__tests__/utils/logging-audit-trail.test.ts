@@ -41,7 +41,7 @@ describe('Enhanced Logging & Audit Trail Logic', () => {
       // Spy on logger.info
       const loggerSpy = jest.spyOn(logger, 'info');
 
-      // Simulate room creation logging (as done in routes/rooms.ts POST /api/rooms)
+      // Simulate room creation logging (as done in routes/rooms.ts POST /admin/api/rooms)
       logger.info(
         {
           roomId,
@@ -77,7 +77,7 @@ describe('Enhanced Logging & Audit Trail Logic', () => {
       // Spy on logger.info
       const loggerSpy = jest.spyOn(logger, 'info');
 
-      // Simulate room deletion logging (as done in routes/rooms.ts DELETE /api/rooms/:roomId)
+      // Simulate room deletion logging (as done in routes/rooms.ts DELETE /admin/api/rooms/:roomId)
       logger.info(
         {
           roomId: roomId,

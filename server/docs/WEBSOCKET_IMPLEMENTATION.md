@@ -247,7 +247,7 @@ const connectionsByRoom = new Map<RoomId, Set<ExtendedWebSocket>>();
 
 ### Room Deletion
 
-When a room is deleted via `DELETE /api/rooms/:roomId`:
+When a room is deleted via `DELETE /admin/api/rooms/:roomId`:
 
 ```typescript
 closeConnectionsForRoom(roomId: RoomId)

@@ -271,12 +271,12 @@ Add standard process metrics (heap, cpu) from `prom-client`.
 Protected by external auth (Authelia); server does not implement user auth.
 
 Endpoints (JSON REST):
-- `POST /api/rooms` → create room
+- `POST /admin/api/rooms` → create room
   - body: `{ "ttl": 86400, "targetUrl": "https://..." }`
   - server generates `roomId` and `password` and returns share link and password one-time in response
-- `DELETE /api/rooms/:roomId` → revoke (immediately destroy room and close connections)
-- `GET /api/rooms` → list rooms (id, createdAt, participantCount, last_state)
-- `GET /api/rooms/:roomId` → room details and recent events
+- `DELETE /admin/api/rooms/:roomId` → revoke (immediately destroy room and close connections)
+- `GET /admin/api/rooms` → list rooms (id, createdAt, participantCount, last_state)
+- `GET /admin/api/rooms/:roomId` → room details and recent events
 - `GET /healthz` → return 200 if server running
 - `GET /metrics` → Prometheus metrics
 

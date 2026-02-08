@@ -58,7 +58,7 @@ function buildShareLink(roomId: string, shareHostname?: string): string {
 }
 
 /**
- * Request body schema for POST /api/rooms
+ * Request body schema for POST /admin/api/rooms
  */
 const createRoomSchema = {
   type: 'object',
@@ -77,7 +77,7 @@ const createRoomSchema = {
 } as const;
 
 /**
- * Response schema for POST /api/rooms
+ * Response schema for POST /admin/api/rooms
  */
 const createRoomResponseSchema = {
   type: 'object',
@@ -90,7 +90,7 @@ const createRoomResponseSchema = {
 } as const;
 
 /**
- * Response schema for GET /api/rooms
+ * Response schema for GET /admin/api/rooms
  */
 const listRoomsResponseSchema = {
   type: 'array',
@@ -128,7 +128,7 @@ const listRoomsResponseSchema = {
 } as const;
 
 /**
- * Response schema for GET /api/rooms/:roomId
+ * Response schema for GET /admin/api/rooms/:roomId
  */
 const getRoomDetailsResponseSchema = {
   type: 'object',
@@ -204,10 +204,10 @@ const roomsPlugin: FastifyPluginAsync = async fastify => {
   const config = getConfig();
 
   /**
-   * POST /api/rooms - Create a new room
+   * POST /admin/api/rooms - Create a new room
    */
   fastify.post<{ Body: { ttl?: number; targetUrl: string } }>(
-    '/api/rooms',
+    '/admin/api/rooms',
     {
       schema: {
         body: createRoomSchema,
@@ -260,10 +260,10 @@ const roomsPlugin: FastifyPluginAsync = async fastify => {
   );
 
   /**
-   * GET /api/rooms - List all active rooms
+   * GET /admin/api/rooms - List all active rooms
    */
   fastify.get(
-    '/api/rooms',
+    '/admin/api/rooms',
     {
       schema: {
         response: {
@@ -289,10 +289,10 @@ const roomsPlugin: FastifyPluginAsync = async fastify => {
   );
 
   /**
-   * GET /api/rooms/:roomId - Get room details
+   * GET /admin/api/rooms/:roomId - Get room details
    */
   fastify.get<{ Params: { roomId: string } }>(
-    '/api/rooms/:roomId',
+    '/admin/api/rooms/:roomId',
     {
       schema: {
         params: {
@@ -351,10 +351,10 @@ const roomsPlugin: FastifyPluginAsync = async fastify => {
   );
 
   /**
-   * DELETE /api/rooms/:roomId - Delete room and close connections
+   * DELETE /admin/api/rooms/:roomId - Delete room and close connections
    */
   fastify.delete<{ Params: { roomId: string } }>(
-    '/api/rooms/:roomId',
+    '/admin/api/rooms/:roomId',
     {
       schema: {
         params: {
