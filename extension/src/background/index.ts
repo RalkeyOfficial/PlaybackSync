@@ -8,17 +8,17 @@ import type { ContentMessage, BackgroundMessage } from '../types/messages';
  */
 const logger = {
   info: (message: string, data?: Record<string, unknown>) => {
-    console.log(`[PlaybackSync] ${message}`, data || {});
+    console.log(`[PlaybackSync Background] ${message}`, data || {});
   },
   warn: (message: string, data?: Record<string, unknown>) => {
-    console.warn(`[PlaybackSync] ${message}`, data || {});
+    console.warn(`[PlaybackSync Background] ${message}`, data || {});
   },
   error: (message: string, error?: Error | unknown, data?: Record<string, unknown>) => {
     const errorData =
       error instanceof Error
         ? { error: error.message, stack: error.stack, ...data }
         : { error, ...data };
-    console.error(`[PlaybackSync] ${message}`, errorData);
+    console.error(`[PlaybackSync Background] ${message}`, errorData);
   },
 };
 

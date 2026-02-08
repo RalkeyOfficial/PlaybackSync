@@ -10,20 +10,20 @@
     "alarms"
   ],
   "host_permissions": [
-    "https://miruro.tv/*",
-    "https://miruro.to/*"
+    "https://www.miruro.tv/*",
+    "https://www.miruro.to/*"
   ],
   "background": {
-    "service_worker": "background/index.js",
+    "service_worker": "background.js",
     "type": "module"
   },
   "content_scripts": [
     {
       "matches": [
-        "https://miruro.tv/*",
-        "https://miruro.to/*"
+        "https://www.miruro.tv/*",
+        "https://www.miruro.to/*"
       ],
-      "js": ["content/index.js"],
+      "js": ["content.js"],
       "run_at": "document_idle"
     }
   ],

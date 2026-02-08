@@ -3,29 +3,28 @@
     "version": "0.1.0",
     "description": "PlaybackSync browser extension",
     "scripts": {
-        "build": "npm run build:background && npm run build:content && npm run build:injected",
-        "build:background": "tsc -p tsconfig.background.json",
-        "build:content": "tsc -p tsconfig.content.json",
-        "build:injected": "tsc -p tsconfig.injected.json",
-        "dev": "npm run dev:background & npm run dev:content & npm run dev:injected",
-        "dev:background": "tsc -p tsconfig.background.json --watch",
-        "dev:content": "tsc -p tsconfig.content.json --watch",
-        "dev:injected": "tsc -p tsconfig.injected.json --watch",
+        "build": "webpack --config webpack.prod.ts",
+        "dev": "webpack --watch --config webpack.dev.ts",
         "test": "jest",
-        "lint": "eslint src --ext .ts",
-        "postbuild": "node copy-static.mjs"
+        "lint": "eslint src --ext .ts"
     },
-    "dependencies": {},
     "devDependencies": {
+        "@tsconfig/recommended": "^1.0.13",
         "@types/chrome": "^0.0.258",
         "@types/jest": "^29.5.0",
         "@types/node": "^20.11.0",
         "@typescript-eslint/eslint-plugin": "^6.19.0",
         "@typescript-eslint/parser": "^6.19.0",
+        "copy-webpack-plugin": "^13.0.1",
         "eslint": "^8.56.0",
         "jest": "^29.7.0",
         "jest-environment-jsdom": "^29.7.0",
         "ts-jest": "^29.1.0",
-        "typescript": "^5.3.3"
+        "ts-loader": "^9.5.4",
+        "ts-node": "^10.9.2",
+        "typescript": "^5.9.3",
+        "webpack": "^5.105.0",
+        "webpack-cli": "^6.0.1",
+        "webpack-merge": "^6.0.1"
     }
 }
