@@ -1,10 +1,10 @@
 {
   "extends": "./tsconfig.json",
   "compilerOptions": {
-    "outDir": "./dist/injected",
-    "rootDir": "./src/injected",
+    "outDir": "./dist",
+    "rootDir": "./src",
     "lib": ["ES2022", "DOM"]
   },
   "include": ["src/injected/**/*"],
-  "exclude": ["node_modules", "dist", "**/*.test.ts", "**/*.spec.ts"]
+  "exclude": ["node_modules", "dist", "**/*.test.ts", "**/*.spec.ts", "src/types/**/*"]
 }

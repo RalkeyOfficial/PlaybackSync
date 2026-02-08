@@ -1,11 +1,11 @@
 {
   "extends": "./tsconfig.json",
   "compilerOptions": {
-    "outDir": "./dist/content",
-    "rootDir": "./src/content",
+    "outDir": "./dist",
+    "rootDir": "./src",
     "lib": ["ES2022", "DOM"],
     "types": ["chrome"]
   },
   "include": ["src/content/**/*"],
-  "exclude": ["node_modules", "dist", "**/*.test.ts", "**/*.spec.ts"]
+  "exclude": ["node_modules", "dist", "**/*.test.ts", "**/*.spec.ts", "src/types/**/*"]
 }
