@@ -12,7 +12,8 @@
         "dev:content": "tsc -p tsconfig.content.json --watch",
         "dev:injected": "tsc -p tsconfig.injected.json --watch",
         "test": "jest",
-        "lint": "eslint src --ext .ts"
+        "lint": "eslint src --ext .ts",
+        "postbuild": "node copy-static.mjs"
     },
     "dependencies": {},
     "devDependencies": {

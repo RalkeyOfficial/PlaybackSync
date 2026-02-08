@@ -9,6 +9,8 @@
     ],
     "scripts": {
         "build": "npm run build --workspaces",
+        "build:extension": "npm run build --workspace=extension",
+        "build:server": "npm run build --workspace=server",
         "test": "npm run test --workspaces",
         "lint": "npm run lint --workspaces",
         "format": "prettier --write \"**/*.{ts,js,json,md}\"",

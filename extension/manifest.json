@@ -1,0 +1,35 @@
+{
+  "manifest_version": 3,
+  "name": "PlaybackSync",
+  "version": "0.1.0",
+  "description": "Synchronize video playback across multiple devices",
+  "permissions": [
+    "storage",
+    "tabs",
+    "scripting",
+    "alarms"
+  ],
+  "host_permissions": [
+    "https://miruro.tv/*",
+    "https://miruro.to/*"
+  ],
+  "background": {
+    "service_worker": "background/index.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://miruro.tv/*",
+        "https://miruro.to/*"
+      ],
+      "js": ["content/index.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "icons": {
+    "16": "public/icons/icon16.png",
+    "48": "public/icons/icon48.png",
+    "128": "public/icons/icon128.png"
+  }
+}
