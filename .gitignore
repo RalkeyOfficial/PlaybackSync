@@ -3,6 +3,11 @@ node_modules/
 .pnp
 .pnp.js
 
+# Nextcloud app build output
+js/
+css/
+vendor/
+
 # Build outputs
 dist/
 build/
