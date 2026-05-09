@@ -12,6 +12,8 @@
 		"lint:fix": "eslint src --fix",
 		"stylelint": "stylelint src",
 		"stylelint:fix": "stylelint src --fix",
+		"test:php": "docker exec -u www-data master-nextcloud-1 sh -c 'cd /var/www/html/apps-extra/playbacksync && phpunit'",
+		"test:php:testdox": "docker exec -u www-data master-nextcloud-1 sh -c 'cd /var/www/html/apps-extra/playbacksync && phpunit --testdox'",
 		"watch": "vite --mode development build --watch"
 	},
 	"browserslist": [
