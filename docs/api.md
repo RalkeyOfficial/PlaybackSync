@@ -12,6 +12,7 @@ All endpoints live under the prefix `/apps/playbacksync/api/v1/rooms`. The `v1` 
 | `GET`    | `/rooms`                | List the caller's active rooms           | `200 OK`           | Logged in    |
 | `GET`    | `/rooms/{uuid}`         | Fetch one of the caller's rooms          | `200 OK`           | Logged in    |
 | `DELETE` | `/rooms/{uuid}`         | Permanently delete one of caller's rooms | `204 No Content`   | Logged in    |
+| `GET`    | `/ws/status`            | Whether the WebSocket sync service is installed and configured | `200 OK` | Logged in |
 
 [¹] Subject to the `restrict_to_admins` `IAppConfig` toggle — see [Authentication and authorization](#authentication-and-authorization).
 
@@ -242,6 +243,41 @@ curl -u alice:alice \
   -H 'OCS-APIRequest: true' \
   -X DELETE \
   'https://nextcloud.example/index.php/apps/playbacksync/api/v1/rooms/5a66524f-5ba1-4f3d-8897-7c5838c0bd80'
+```
+
+### WebSocket service status
+
+Tells the caller whether the WebSocket sync service is installed and configured on this Nextcloud instance. Use it to decide whether to expose sync UI in the client; the WS connection itself will surface any *liveness* issue when the client tries to open the socket.
+
+```
+GET /apps/playbacksync/api/v1/ws/status
+```
+
+#### Success response
+
+`200 OK`
+
+```json
+{ "available": true }
+```
+
+`available` is `true` only if both:
+
+- The daemon's Composer dependencies (Ratchet) are loadable in the PHP runtime — i.e., somebody ran `composer install` in the app directory.
+- Both `ws_host` and `ws_port` `IAppConfig` keys are non-empty.
+
+The check is intentionally local-only — it does not reach across the network to probe the daemon process, because in containerised setups the PHP container often can't reach the daemon's bind address regardless of whether the daemon is running. Treat `available: true` as "the admin has set up sync"; treat WS connection failures at the client as "sync is configured but currently unreachable".
+
+#### Failure modes
+
+This endpoint has none beyond the global authentication check. It always returns `200`.
+
+#### Example
+
+```bash
+curl -u alice:alice \
+  -H 'OCS-APIRequest: true' \
+  'https://nextcloud.example/index.php/apps/playbacksync/api/v1/ws/status'
 ```
 
 ## A note on `OCS-APIRequest`
