@@ -2,6 +2,20 @@
 
 The frontend lives under [`src/`](../src/) and is a small Vue 3 single-page application bundled by Vite. It is intentionally simple: there is no router, no view-layer state machine, no internationalization framework beyond what Nextcloud provides, and exactly one Pinia store. The whole UI is essentially "a list, a button, and two dialogs", which is why splitting it into anything more elaborate would be over-engineering. This document walks through the moving parts in roughly the order Vue would touch them on a fresh page load.
 
+## Files at a glance
+
+| File                                                                        | Role                          | Talks to store? | Talks to API? |
+|-----------------------------------------------------------------------------|-------------------------------|-----------------|---------------|
+| [`src/index.ts`](../src/index.ts)                                           | Bundle entry, Vue mount       | No              | No            |
+| [`src/App.vue`](../src/App.vue)                                             | Root layout (`NcContent`)     | No              | No            |
+| [`src/components/RoomsPanel.vue`](../src/components/RoomsPanel.vue)         | Orchestrator / state owner    | **Yes**         | No            |
+| [`src/components/RoomList.vue`](../src/components/RoomList.vue)             | Presentational list           | No              | No            |
+| [`src/components/RoomCreateDialog.vue`](../src/components/RoomCreateDialog.vue)   | Create form               | **Yes**         | No            |
+| [`src/components/RoomCreatedDialog.vue`](../src/components/RoomCreatedDialog.vue) | One-time password dialog  | No (props only) | No            |
+| [`src/stores/rooms.ts`](../src/stores/rooms.ts)                             | Pinia store (single source)   | —               | **Yes**       |
+| [`src/services/roomsApi.ts`](../src/services/roomsApi.ts)                   | Typed `axios` wrappers        | No              | **Yes**       |
+| [`src/types/room.ts`](../src/types/room.ts)                                 | TypeScript types              | —               | —             |
+
 ## Bundle entry and mounting
 
 The bundle's entry point is [`src/index.ts`](../src/index.ts). It does three things and only three things: it creates a Pinia instance, it creates a Vue app from `App.vue`, it installs Pinia, and it mounts the app on `#playbacksync-root`. That mount target is the empty `<div>` rendered by `templates/index.php` from the PHP page response, so there is a clean boundary between Nextcloud's HTML shell (which provides the page chrome, dark theme, top bar, user menu) and the part the Vue app owns (everything inside that div).
@@ -30,7 +44,28 @@ When mounted, it kicks off `store.load()` to fetch the current user's rooms. Whi
 
 ## The Pinia store
 
-[`src/stores/rooms.ts`](../src/stores/rooms.ts) is the single source of truth for everything room-related on the client side. The shape is simple: a `rooms` array holding the current user's rooms, a couple of boolean flags for loading and creating states, a `loaded` flag that flips true after the first successful list fetch, and a `lastCreated` field that holds the most recently created room *with* its plaintext password attached. The `lastCreated` field is the mechanism by which the create flow shows the password to the user exactly once: when create succeeds, the store sets `lastCreated`, the `RoomsPanel` watches that field, the password dialog opens with the value, and the user dismisses it via `dismissLastCreated()` which clears the field back to `null`.
+[`src/stores/rooms.ts`](../src/stores/rooms.ts) is the single source of truth for everything room-related on the client side.
+
+### Store state
+
+| Field          | Type                          | Resets when?                                              | Role                                                                                              |
+|----------------|-------------------------------|-----------------------------------------------------------|---------------------------------------------------------------------------------------------------|
+| `rooms`        | `Room[]`                      | On every successful `load()`; mutated by `create`/`remove`| The current user's active rooms, newest first.                                                    |
+| `loading`      | `boolean`                     | After every `load()` settles                              | True while a list request is in flight. Drives the loading spinner.                               |
+| `creating`     | `boolean`                     | After every `create()` settles                            | True while a create request is in flight. Disables form submission, blocks dialog dismissal.      |
+| `loaded`       | `boolean`                     | First successful `load()` flips it to `true` permanently  | Distinguishes the cold-start spinner from soft-refresh in-place loads.                            |
+| `lastCreated`  | `CreatedRoom \| null`         | Cleared by `dismissLastCreated()`                         | Holds the just-created room **including** the plaintext password, for the one-time-password dialog.|
+
+### Store actions
+
+| Action                       | Calls                              | Side effects on success                                                                  | Side effects on failure                                                |
+|------------------------------|------------------------------------|------------------------------------------------------------------------------------------|------------------------------------------------------------------------|
+| `load()`                     | `roomsApi.listRooms()`             | Replaces `rooms`; sets `loaded = true`.                                                  | Logs via `@nextcloud/logger`; shows generic error toast.               |
+| `create(payload)`            | `roomsApi.createRoom(payload)`     | Prepends to `rooms`; sets `lastCreated` (with password).                                 | Surfaces server-supplied `error` text in toast when present, generic otherwise. |
+| `remove(uuid)`               | `roomsApi.deleteRoom(uuid)`        | Filters the room out of `rooms`.                                                         | Logs and shows generic error toast.                                    |
+| `dismissLastCreated()`       | none                               | Clears `lastCreated` back to `null`.                                                     | —                                                                      |
+
+The `lastCreated` field is the mechanism by which the create flow shows the password to the user exactly once: when create succeeds, the store sets `lastCreated`, the `RoomsPanel` watches that field, the password dialog opens with the value, and the user dismisses it via `dismissLastCreated()` which clears the field back to `null`. After that, the plaintext password is unrecoverable — there is no "show me again" path.
 
 The actions follow a small, consistent pattern. They wrap the async work in try/catch, surface failures via `@nextcloud/dialogs`'s `showError` toast, log the underlying error through `@nextcloud/logger`, and (where applicable) update the local `rooms` array optimistically — for example, `remove` filters the deleted room out of the array immediately so the UI feels instant, and `create` prepends the new room. There is no rollback logic if the optimistic update turns out to be wrong, which is a deliberate simplification: the friend-group threat model doesn't justify the complexity, and a refresh would correct any inconsistency anyway.
 
@@ -40,7 +75,13 @@ The `extractErrorMessage` helper at the bottom of the file is a small but import
 
 [`src/services/roomsApi.ts`](../src/services/roomsApi.ts) is just three exported functions and a private URL helper, but it earns its own file because it is the single place the frontend speaks HTTP. Every component goes through the store; the store goes through this service; the service is the only thing that actually imports `axios` and `generateUrl`. If we ever want to add a request interceptor — say, to inject a request ID, log timings, or retry on flaky networks — this is the only file that needs to change.
 
-The functions are typed: `listRooms` returns `Promise<Room[]>`, `createRoom` returns `Promise<CreatedRoom>` (which is `Room` plus the plaintext password), `deleteRoom` returns `Promise<void>`. The types are defined in [`src/types/room.ts`](../src/types/room.ts) and are the same shape the backend's `serializeRoom` produces. Keeping the API service strongly typed means TypeScript catches it immediately if the backend or the frontend drift apart on the field set.
+| Function               | Verb     | Path                              | Argument type           | Returns                  |
+|------------------------|----------|-----------------------------------|-------------------------|--------------------------|
+| `listRooms()`          | `GET`    | `/api/v1/rooms`                   | —                       | `Promise<Room[]>`        |
+| `createRoom(payload)`  | `POST`   | `/api/v1/rooms`                   | `CreateRoomPayload`     | `Promise<CreatedRoom>`   |
+| `deleteRoom(uuid)`     | `DELETE` | `/api/v1/rooms/{uuid}`            | `string`                | `Promise<void>`          |
+
+The types are defined in [`src/types/room.ts`](../src/types/room.ts) and match the shape the backend's `serializeRoom` produces. Keeping the API service strongly typed means TypeScript catches it immediately if the backend or the frontend drift apart on the field set.
 
 ## The dialogs
 
@@ -58,7 +99,18 @@ The dialog binds its open state via `v-model:open` to its parent `RoomsPanel`, a
 
 Every user-facing string in the app goes through `translate()` from `@nextcloud/l10n`, imported as `t` in every component that needs it. The first argument is the app slug `'playbacksync'` (which is what tells Nextcloud which translations bundle to look in), and the second is the source-language English string. Nextcloud's translation tooling looks for these calls at build time and harvests the strings into the `l10n/*.js` files, where translators can replace them with localized versions.
 
-Two language files exist today: [`l10n/en.js`](../l10n/en.js) (the source-language English) and [`l10n/nl.js`](../l10n/nl.js) (Dutch, since the maintainer speaks Dutch). When you add a new string to a component, add it to both files. The shape of these files is dictated by Nextcloud (`OC.L10N.register` followed by a key-value map), so don't try to be clever with bundlers or generators — keep the files plain JS the way Nextcloud expects them.
+| Helper           | Import from         | Signature                                                  | Use for                                                            |
+|------------------|---------------------|------------------------------------------------------------|--------------------------------------------------------------------|
+| `translate`      | `@nextcloud/l10n`   | `(app, source, params?) => string`                         | All static UI strings. Aliased as `t` everywhere.                  |
+| `translatePlural`| `@nextcloud/l10n`   | `(app, singular, plural, n, params?) => string`            | Plural-aware strings. Not used yet, but worth knowing about.       |
+| `getLoggerBuilder` | `@nextcloud/logger` | `() => LoggerBuilder`                                    | Structured client-side logging. Replaces `console.log`/`console.error`. |
+
+| Locale file                          | Language          | Add new keys here?         |
+|--------------------------------------|-------------------|----------------------------|
+| [`l10n/en.js`](../l10n/en.js)        | English (source)  | **Yes** — always.          |
+| [`l10n/nl.js`](../l10n/nl.js)        | Dutch             | Yes if you can translate; mirror the English key otherwise. |
+
+The shape of these files is dictated by Nextcloud (`OC.L10N.register('playbacksync', { ... }, 'nplurals=2; plural=(n != 1);')`), so don't try to be clever with bundlers or generators — keep the files plain JavaScript the way Nextcloud expects them.
 
 ## Why no router
 

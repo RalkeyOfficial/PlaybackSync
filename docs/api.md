@@ -4,6 +4,17 @@ This document is the contract between the PHP backend and any client that wants 
 
 All endpoints live under the prefix `/apps/playbacksync/api/v1/rooms`. The `v1` segment is the explicit version marker for the API — when (if) we ever introduce a backwards-incompatible change to the shape, it will be a `v2` and the `v1` routes will continue to work for as long as we want to support older clients. Every endpoint speaks JSON, both directions; nothing here uses the OCS XML envelope.
 
+## Endpoints at a glance
+
+| Method   | Path                    | Purpose                                  | Success status     | Auth         |
+|----------|-------------------------|------------------------------------------|--------------------|--------------|
+| `POST`   | `/rooms`                | Create a new room (returns one-time pwd) | `201 Created`      | Logged in[¹] |
+| `GET`    | `/rooms`                | List the caller's active rooms           | `200 OK`           | Logged in    |
+| `GET`    | `/rooms/{uuid}`         | Fetch one of the caller's rooms          | `200 OK`           | Logged in    |
+| `DELETE` | `/rooms/{uuid}`         | Permanently delete one of caller's rooms | `204 No Content`   | Logged in    |
+
+[¹] Subject to the `restrict_to_admins` `IAppConfig` toggle — see [Authentication and authorization](#authentication-and-authorization).
+
 ## Authentication and authorization
 
 Every endpoint requires an authenticated Nextcloud user. The session cookie set by Nextcloud's web login satisfies this, and so does HTTP Basic authentication with a username and password (or an app password). Unauthenticated requests get an HTTP 401 response with a JSON body.
@@ -12,19 +23,41 @@ There is no per-endpoint role check — every method is annotated with `#[NoAdmi
 
 Authorization for individual rooms is by *ownership*. The `oc_playbacksync_rooms` table records the Nextcloud user ID that created each room in the `owner_user_id` column, and the controller enforces that only the owner can see or mutate their rooms. A request from user A asking about user B's room responds with the same 404 as a request for a UUID that does not exist at all, because returning a distinct status would leak the existence of someone else's room.
 
-## Common response shape
+## The Room object
 
-A room as returned by the API has six fields plus the optional one-time password. The fields are:
+Every successful response that includes a room (or rooms) uses the same field shape, with one variation: the `password` field appears *only* on the response from the create endpoint, and only on that one occasion in the room's lifetime. After that, the plaintext is unrecoverable; the database stores only an `argon2id` hash and there is no API surface that returns it.
 
-- `uuid` — the public room identifier as a UUIDv4 string. This is what every other endpoint takes as a path parameter.
-- `name` — the optional human-friendly nickname the owner gave the room, or `null` if they didn't.
-- `targetUrl` — the URL participants will eventually be redirected to when they join. Required at creation, never modified after.
-- `createdAt` — unix milliseconds when the row was inserted.
-- `expiresAt` — unix milliseconds at which the room becomes invalid. After this point, the row may still physically exist (it's pruned hourly) but the listing endpoint filters it out and the show endpoint returns 404 for it.
-- `shareLink` — an absolute URL that, in a future phase, will resolve to a public Basic-Auth-gated entry point for participants. In the MVP it is a placeholder URL that does not yet resolve to anything; clients should still surface it (so users get used to copying it) but should not assume it works yet.
-- `password` *(only on the create response)* — the plaintext one-time password. Returned exactly once. Never recoverable. The hash is what's stored in the database; the plaintext is fundamentally lost the moment the response leaves the controller.
+| Field        | Type             | Nullable | When present | Description                                                                                                                                                                                                                                                                                                |
+|--------------|------------------|----------|--------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `uuid`       | string (UUID v4) | No       | Always       | Public room identifier. Used as the path parameter for every other endpoint.                                                                                                                                                                                                                               |
+| `name`       | string \| `null` | Yes      | Always       | Human-friendly nickname the owner picked at creation. `null` if the owner did not supply one.                                                                                                                                                                                                              |
+| `targetUrl`  | string (URL)     | No       | Always       | Absolute `http://` or `https://` URL participants will eventually be redirected to. Required at creation, never modified after.                                                                                                                                                                            |
+| `createdAt`  | integer (ms)     | No       | Always       | Unix timestamp in **milliseconds** at which the room was created.                                                                                                                                                                                                                                          |
+| `expiresAt`  | integer (ms)     | No       | Always       | Unix timestamp in **milliseconds** at which the room becomes invalid. After this point the row is invisible to API callers and is physically deleted by the prune job within the next hour.                                                                                                               |
+| `shareLink`  | string (URL)     | No       | Always       | Absolute URL that *will* resolve to the public Basic-Auth join endpoint in Phase 2. In the MVP it is a forward-looking placeholder; clients should display and copy it, but it does not yet resolve to anything.                                                                                          |
+| `password`   | string           | No       | Create only  | The 16-character plaintext one-time password, returned exactly once at creation time. Only ever appears on the `201` response from `POST /rooms`. The list, show, and delete endpoints never include it.                                                                                                  |
 
-Errors come back as a JSON object with a single `error` field containing a human-readable message. The HTTP status code is the primary signal; the message is for surfacing to the user when it makes sense to do so. Validation errors in particular are designed to be safely showable verbatim ("targetUrl must be a valid http(s) URL.").
+### Error response shape
+
+Failures use a uniform JSON shape: a single `error` field with a human-readable message. The HTTP status code is the primary signal; the message is for surfacing to the user when it makes sense to do so. Validation errors in particular are designed to be safely showable verbatim — for example, `"targetUrl must be a valid http(s) URL."` is exactly the string the frontend can display in a toast.
+
+```json
+{
+  "error": "Room creation is restricted to administrators."
+}
+```
+
+### Status codes used across the API
+
+| Status code         | Meaning in this API                                                                                       |
+|---------------------|-----------------------------------------------------------------------------------------------------------|
+| `200 OK`            | Successful read (list or single room).                                                                    |
+| `201 Created`       | Successful create. Body includes the one-time `password` field.                                           |
+| `204 No Content`    | Successful delete. No body.                                                                               |
+| `400 Bad Request`   | Validation failure — invalid URL, name too long, TTL out of range. The `error` message is user-safe.      |
+| `401 Unauthorized`  | No authenticated Nextcloud user. Pass a session cookie or HTTP Basic credentials.                         |
+| `403 Forbidden`     | `restrict_to_admins` is enabled and the caller is not an admin. Only ever raised by `POST /rooms`.        |
+| `404 Not Found`     | Room not yours, expired, or genuinely unknown. The three are deliberately collapsed into the same error.  |
 
 ## Endpoints
 
@@ -34,9 +67,51 @@ Errors come back as a JSON object with a single `error` field containing a human
 POST /apps/playbacksync/api/v1/rooms
 ```
 
-Creates a new room owned by the currently-authenticated user, generates a one-time password, and returns the room details with that password attached. This is the only request in the entire API where the plaintext password is ever exposed.
+Creates a new room owned by the currently-authenticated user, generates a one-time password, and returns the room details with that password attached. This is the only request in the entire API where the plaintext password is ever exposed — the moment the `201` response leaves the server, the plaintext is gone forever.
 
-The body is a JSON object with one required field and two optional ones. `targetUrl` is the absolute URL participants will be redirected to and must be a valid `http://` or `https://` URL — anything else gets a 400. `name` is an optional human-friendly nickname up to 100 characters; if present it must be non-empty after trimming, otherwise it's treated as absent. `ttl` is an optional time-to-live in seconds and must be between 1 and 86400 (one day) inclusive; if absent, the configured default (24 hours unless an admin changed it) is used.
+#### Request body
+
+```json
+{
+  "targetUrl": "https://example.com/watch/123",
+  "name":      "Friday movie",
+  "ttl":       21600
+}
+```
+
+| Field        | Type    | Required | Constraints                                                                              | Default                               |
+|--------------|---------|----------|------------------------------------------------------------------------------------------|---------------------------------------|
+| `targetUrl`  | string  | Yes      | Must be a valid `http://` or `https://` URL.                                             | —                                     |
+| `name`       | string  | No       | Max 100 characters after trimming. Empty/whitespace is treated as omitted.               | `null`                                |
+| `ttl`        | integer | No       | Time-to-live in **seconds**. Must satisfy `1 ≤ ttl ≤ 86400` (one day).                    | `default_ttl_seconds` IAppConfig key, 86400 if unset |
+
+#### Success response
+
+`HTTP 201 Created`. The body is the standard Room object plus the one-time `password` field:
+
+```json
+{
+  "uuid":      "5a66524f-5ba1-4f3d-8897-7c5838c0bd80",
+  "name":      "Friday movie",
+  "targetUrl": "https://example.com/watch/123",
+  "createdAt": 1778325445000,
+  "expiresAt": 1778347045000,
+  "shareLink": "https://nextcloud.example/index.php/apps/playbacksync/r/5a66524f-...",
+  "password":  "UIjND2muufTfrrel"
+}
+```
+
+#### Failure modes
+
+| Status | Trigger                                                                                                  | Example `error` message                                  |
+|--------|----------------------------------------------------------------------------------------------------------|----------------------------------------------------------|
+| 400    | `targetUrl` missing, malformed, or not http(s).                                                          | `targetUrl must be a valid http(s) URL.`                 |
+| 400    | `name` longer than 100 characters.                                                                       | `name exceeds maximum length.`                           |
+| 400    | `ttl` outside the `[1, 86400]` range.                                                                    | `ttl must be between 1 and 86400 seconds.`               |
+| 401    | No authenticated Nextcloud user on the request.                                                          | `Authentication required.`                               |
+| 403    | `restrict_to_admins` is enabled and the caller is not an admin.                                          | `Room creation is restricted to administrators.`         |
+
+#### Example
 
 ```bash
 curl -u alice:alice \
@@ -46,22 +121,6 @@ curl -u alice:alice \
   -d '{"targetUrl":"https://example.com/watch/123","name":"Friday movie","ttl":21600}'
 ```
 
-A successful response is HTTP 201 with the full room representation including the plaintext password:
-
-```json
-{
-  "uuid": "5a66524f-5ba1-4f3d-8897-7c5838c0bd80",
-  "name": "Friday movie",
-  "targetUrl": "https://example.com/watch/123",
-  "createdAt": 1778325445000,
-  "expiresAt": 1778347045000,
-  "shareLink": "https://nextcloud.example/index.php/apps/playbacksync/r/5a66524f-...",
-  "password": "UIjND2muufTfrrel"
-}
-```
-
-Possible failures: 400 for invalid input (bad URL, name too long, TTL out of range), 401 for unauthenticated, 403 if `restrict_to_admins` is enabled and the caller is not an admin.
-
 ### List your rooms
 
 ```
@@ -70,20 +129,16 @@ GET /apps/playbacksync/api/v1/rooms
 
 Returns the active (non-expired) rooms owned by the currently-authenticated user, newest first. Other users' rooms are never returned — there is no way to enumerate rooms across owners through this endpoint, even for admins.
 
-```bash
-curl -u alice:alice \
-  -H 'OCS-APIRequest: true' \
-  'https://nextcloud.example/index.php/apps/playbacksync/api/v1/rooms'
-```
+#### Success response
 
-A successful response is HTTP 200 with a JSON object containing a `rooms` array. Each entry is a room object *without* the `password` field, since plaintext passwords are not stored and so cannot be returned later.
+`HTTP 200 OK`. Body is a JSON object with a single `rooms` key containing an array of Room objects (without `password`). If the user has no active rooms, the array is empty rather than the response being a 404 — `{"rooms":[]}` is the canonical "empty" reply.
 
 ```json
 {
   "rooms": [
     {
-      "uuid": "5a66524f-5ba1-4f3d-8897-7c5838c0bd80",
-      "name": "Friday movie",
+      "uuid":      "5a66524f-5ba1-4f3d-8897-7c5838c0bd80",
+      "name":      "Friday movie",
       "targetUrl": "https://example.com/watch/123",
       "createdAt": 1778325445000,
       "expiresAt": 1778347045000,
@@ -93,7 +148,19 @@ A successful response is HTTP 200 with a JSON object containing a `rooms` array.
 }
 ```
 
-If the user has no active rooms, the array is empty — the response is `{"rooms":[]}` with status 200. Possible failures: 401 for unauthenticated.
+#### Failure modes
+
+| Status | Trigger                                              |
+|--------|------------------------------------------------------|
+| 401    | No authenticated Nextcloud user on the request.      |
+
+#### Example
+
+```bash
+curl -u alice:alice \
+  -H 'OCS-APIRequest: true' \
+  'https://nextcloud.example/index.php/apps/playbacksync/api/v1/rooms'
+```
 
 ### Get a single room
 
@@ -103,13 +170,43 @@ GET /apps/playbacksync/api/v1/rooms/{uuid}
 
 Returns the room with the given UUID, provided it exists, has not expired, and is owned by the caller. There is no version of this endpoint that exposes someone else's room.
 
+#### Path parameters
+
+| Parameter | Type             | Description                              |
+|-----------|------------------|------------------------------------------|
+| `uuid`    | string (UUID v4) | The `uuid` field of an existing room.    |
+
+#### Success response
+
+`HTTP 200 OK`. Body is a Room object (no `password` field).
+
+```json
+{
+  "uuid":      "5a66524f-5ba1-4f3d-8897-7c5838c0bd80",
+  "name":      "Friday movie",
+  "targetUrl": "https://example.com/watch/123",
+  "createdAt": 1778325445000,
+  "expiresAt": 1778347045000,
+  "shareLink": "https://nextcloud.example/index.php/apps/playbacksync/r/5a66524f-..."
+}
+```
+
+#### Failure modes
+
+| Status | Trigger                                                                                  |
+|--------|------------------------------------------------------------------------------------------|
+| 401    | No authenticated Nextcloud user on the request.                                          |
+| 404    | UUID does not exist, room is past `expiresAt`, **or** room is owned by a different user. |
+
+The 404 surface deliberately collapses three distinct cases into one. An attacker probing UUIDs cannot tell "this UUID is unused" from "this UUID belongs to a different user", which is the property we want.
+
+#### Example
+
 ```bash
 curl -u alice:alice \
   -H 'OCS-APIRequest: true' \
   'https://nextcloud.example/index.php/apps/playbacksync/api/v1/rooms/5a66524f-5ba1-4f3d-8897-7c5838c0bd80'
 ```
-
-A successful response is HTTP 200 with the same shape as one entry from the list endpoint. Possible failures: 401 for unauthenticated, 404 in any of the three "not yours" cases (does not exist, expired, owned by someone else). The 404 surface is deliberately unified: an attacker probing UUIDs cannot distinguish between "this UUID is unused" and "this UUID belongs to a different user".
 
 ### Delete a room
 
@@ -119,6 +216,27 @@ DELETE /apps/playbacksync/api/v1/rooms/{uuid}
 
 Permanently deletes the room. There is no soft-delete or undo; the row is gone immediately. In a future phase where a WebSocket sync server is involved, this will also forcibly disconnect any active participants.
 
+#### Path parameters
+
+| Parameter | Type             | Description                              |
+|-----------|------------------|------------------------------------------|
+| `uuid`    | string (UUID v4) | The `uuid` field of an existing room.    |
+
+#### Success response
+
+`HTTP 204 No Content`. The body is empty.
+
+#### Failure modes
+
+| Status | Trigger                                                                                  |
+|--------|------------------------------------------------------------------------------------------|
+| 401    | No authenticated Nextcloud user on the request.                                          |
+| 404    | UUID does not exist, room is past `expiresAt`, or room is owned by a different user.     |
+
+Calling delete twice on the same UUID returns `204` the first time and `404` the second time. That is intended — the second call legitimately can't find the room — and is fine for idempotency-tolerant clients that just want "make sure this is gone".
+
+#### Example
+
 ```bash
 curl -u alice:alice \
   -H 'OCS-APIRequest: true' \
@@ -126,18 +244,21 @@ curl -u alice:alice \
   'https://nextcloud.example/index.php/apps/playbacksync/api/v1/rooms/5a66524f-5ba1-4f3d-8897-7c5838c0bd80'
 ```
 
-A successful response is HTTP 204 with no body. Possible failures: 401 for unauthenticated, 404 in the same "not yours" cases as the show endpoint. Calling delete twice on the same UUID returns 200 the first time and 404 the second time, which is fine for idempotency-tolerant clients.
-
 ## A note on `OCS-APIRequest`
 
 You'll notice every example above passes `-H 'OCS-APIRequest: true'`. This is technically not required for our endpoints (we are not OCS endpoints), but Nextcloud's CSRF middleware treats the presence of that header as a signal that the request is coming from a programmatic client rather than a browser form, which is exactly the situation `curl` invocations are in. Including it is a habit that prevents intermittent CSRF failures on GET-after-state-change scenarios. The frontend's axios calls don't need it because `@nextcloud/axios` automatically injects the CSRF token cookie value.
 
 ## Forward-looking: what changes in Phase 2
 
-When the WebSocket sync server lands, two things will be added:
+When the WebSocket sync server lands, the API surface grows in two additive ways. Neither change breaks the `v1` contract documented above — that's exactly why the prefix is `v1` and not just `api`.
 
-A new public endpoint at `GET /apps/playbacksync/r/{uuid}` will gate access via HTTP Basic Auth against the room password and redirect successful joiners to the room's `targetUrl` with the WebSocket connection URL appended as a query parameter. That endpoint will be entirely separate from the management API documented here; it lives at a different path, doesn't require Nextcloud login, and is the only place where unauthenticated traffic interacts with PlaybackSync.
+| Change                     | Today (MVP)                                          | Phase 2                                                                                                       |
+|----------------------------|------------------------------------------------------|---------------------------------------------------------------------------------------------------------------|
+| `shareLink` resolves       | No (placeholder URL, returns 404 if visited)         | Yes (`GET /apps/playbacksync/r/{uuid}` gates on Basic Auth against the room password, then redirects)         |
+| Public unauthenticated path| None                                                 | Exactly one: the share endpoint above. All other endpoints stay Nextcloud-login-gated.                        |
+| `lastState` field          | Absent — column does not exist                        | Present on rooms that have had playback activity. Carries paused flag, current time, provider, episode.       |
+| WebSocket connection URL   | N/A                                                  | Appended to the redirect target as a query parameter so the browser extension can pick it up                  |
 
-The existing room representation will gain a `lastState` field carrying the cached playback state (paused/playing flag, current time, provider, episode). That field will be optional and omitted on rooms that have never had any playback events, so existing API clients are unaffected by its addition. The MVP omits the column entirely to avoid storing a field that has no source.
+The share endpoint is intentionally separate from the management API. It lives at a different path (`/r/{uuid}` rather than `/api/v1/rooms/{uuid}`), it doesn't require a Nextcloud login, and it's the only place where unauthenticated traffic interacts with PlaybackSync. Keeping it cordoned off makes it easy to reason about the public attack surface in isolation.
 
-Neither change breaks the v1 contract documented here. They are additive — new endpoints and new fields — which is why the prefix is `v1` and not just `api`.
+The `lastState` field will be optional on the response — omitted entirely on rooms that have never had any playback events — so existing API clients are unaffected by its addition. The MVP omits the database column for the same reason: there is no source for the data yet, and adding the column now would just be an empty `NULL`.

@@ -14,6 +14,19 @@ The bootstrap class is intentionally short. Most apps grow a `register()` method
 
 The schema is defined by a single migration at [`lib/Migration/Version0001Date20260509120000.php`](../lib/Migration/Version0001Date20260509120000.php). It creates one table — `oc_playbacksync_rooms` — and three indexes. The structure is small and deliberate: every column there earns its place.
 
+| Column           | Type           | Null | Default | Notes                                                                                                |
+|------------------|----------------|------|---------|------------------------------------------------------------------------------------------------------|
+| `id`             | `BIGINT` PK    | No   | auto    | Internal surrogate key. Never exposed externally; we always reference rooms by `uuid`.               |
+| `uuid`           | `VARCHAR(36)`  | No   | —       | Public room identifier (UUID v4). Has a unique index — every API call looks up by this column.       |
+| `owner_user_id`  | `VARCHAR(64)`  | No   | —       | Nextcloud user ID of the creator. Indexed for the "list my rooms" query.                             |
+| `name`           | `VARCHAR(100)` | Yes  | `NULL`  | Optional human-friendly nickname.                                                                    |
+| `target_url`     | `LONGTEXT`     | No   | —       | URL participants will eventually be redirected to.                                                   |
+| `password_hash`  | `VARCHAR(255)` | No   | —       | `IHasher->hash()` output (currently `argon2id`). Never the plaintext.                                |
+| `created_at`     | `BIGINT`       | No   | —       | Unix milliseconds at insert time.                                                                    |
+| `expires_at`     | `BIGINT`       | No   | —       | Unix milliseconds when the room becomes invalid. Indexed for the prune job and read-side filtering.  |
+
+The three indexes the migration declares — `playbacksync_rooms_uuid_ix` (unique on `uuid`), `playbacksync_rooms_owner_ix` (on `owner_user_id`), `playbacksync_rooms_exp_ix` (on `expires_at`) — directly correspond to the three queries the mapper exposes. There is one index per query path, no extras and no redundancies.
+
 The `id` column is the standard auto-incrementing surrogate key that Nextcloud's mappers expect. We never expose this number to anything external — it lives purely as the row identity inside the database. The `uuid` column is the public identifier we use everywhere else: in URLs, in API responses, in share links. It has a unique index because we look rooms up by UUID on every API call.
 
 The `owner_user_id` column stores a Nextcloud user ID, which is a string up to 64 characters. It has its own non-unique index, which is what makes the "list my rooms" query fast: the controller filters by `owner_user_id` and `expires_at > now`, and the index satisfies the first half of that filter cheaply. The `expires_at` column also has its own index, which the prune job uses to find expired rows in O(log n) time even on a hypothetically-large table.
@@ -28,9 +41,15 @@ The `created_at` and `expires_at` columns are unsigned 64-bit integers holding *
 
 The constructor calls `addType()` for every column whose type is not "string", which is how the entity tells Nextcloud's hydration code to coerce strings into integers when reading from the database. SQLite, MariaDB, and PostgreSQL all return numeric columns as strings to PHP unless you ask, and `addType('createdAt', Types::BIGINT)` is what makes `getCreatedAt()` actually return an `int`.
 
-[`lib/Db/RoomMapper.php`](../lib/Db/RoomMapper.php) extends `QBMapper<Room>`. It exposes three named queries that match the three things any layer above it might want to do: `findByUuid`, `findActiveByOwner`, and `deleteExpired`. The mapper is deliberately small — it does not expose generic CRUD methods because no caller in the app needs them. If a future feature needs a new query, it gets added here as a named method rather than callers reaching into the query builder themselves.
+[`lib/Db/RoomMapper.php`](../lib/Db/RoomMapper.php) extends `QBMapper<Room>`. It exposes three named queries that match the three things any layer above it might want to do, and nothing else. The mapper is deliberately small — there are no generic CRUD methods because no caller in the app needs them. If a future feature needs a new query, it gets added here as a named method rather than callers reaching into the query builder themselves.
 
-`findByUuid` throws `DoesNotExistException` if no row matches. The service layer catches that and rewraps it into a `RoomNotFoundException` so HTTP-layer code never has to know about Nextcloud's DB exceptions. `findActiveByOwner` filters by `owner_user_id = $userId AND expires_at > $now`, which keeps expired rows out of the listing without needing the prune job to have run yet. `deleteExpired` is a single bulk DELETE the prune job calls hourly.
+| Method                                      | Returns      | Used by                                  | Behavior                                                                                          |
+|---------------------------------------------|--------------|------------------------------------------|---------------------------------------------------------------------------------------------------|
+| `findByUuid(string $uuid)`                  | `Room`       | `RoomService::getOwnedRoom`              | Single-row lookup by `uuid`. Throws `DoesNotExistException` when no row matches.                 |
+| `findActiveByOwner(string $userId, int $now)` | `Room[]`   | `RoomService::listForOwner`              | Filters by `owner_user_id = ?` AND `expires_at > ?`, ordered `created_at DESC`.                  |
+| `deleteExpired(int $now)`                   | `int`        | `PruneExpiredRoomsJob::run`              | Bulk `DELETE WHERE expires_at <= ?`. Returns the number of rows removed.                         |
+
+`findByUuid` throws `DoesNotExistException` rather than returning `null` because that's the convention `QBMapper` ships with; the service layer catches it and rewraps into `RoomNotFoundException` so HTTP-layer code never has to know about Nextcloud's DB exceptions. `findActiveByOwner`'s read-side filter on `expires_at > $now` is what keeps expired rows out of the listing even when the prune job hasn't yet run — users never see expired rooms in their UI regardless of the prune cadence.
 
 ## The domain service
 
@@ -52,7 +71,16 @@ Every method has the `#[NoAdminRequired]` PHP attribute, which tells Nextcloud's
 
 The `?string $userId` parameter in the constructor is auto-injected by Nextcloud's DI container and reflects the currently-authenticated user. It is `null` for unauthenticated requests, which is why every method has an early `if ($this->userId === null)` guard returning 401. The `[NoAdminRequired]` attribute does not imply "logged in" — it implies "doesn't require admin" — so we need that explicit check.
 
-Domain exceptions thrown by the service are caught at the controller boundary and translated into the appropriate HTTP responses. `RoomNotFoundException` becomes a 404, `CreateRestrictedException` becomes a 403, `InvalidRoomInputException` becomes a 400. The error message in the response body comes straight from the exception, which is fine because every domain exception is constructed with a message the user can safely see (no internals, no SQL, no stack traces).
+Domain exceptions thrown by the service are caught at the controller boundary and translated into the appropriate HTTP responses. The mapping is one-to-one and lives entirely in the controller's `catch` blocks:
+
+| Exception                       | HTTP status         | When it fires                                                                          |
+|---------------------------------|---------------------|----------------------------------------------------------------------------------------|
+| `RoomNotFoundException`         | `404 Not Found`     | UUID unknown, room past `expires_at`, or room owned by a different user.               |
+| `CreateRestrictedException`     | `403 Forbidden`     | `restrict_to_admins` is on and the caller is not an admin. Only `POST /rooms` raises.  |
+| `InvalidRoomInputException`     | `400 Bad Request`   | `targetUrl` invalid, `name` too long, `ttl` out of range. Only `POST /rooms` raises.   |
+| (caller is unauthenticated)     | `401 Unauthorized`  | Guarded directly in each method via `if ($this->userId === null)`; no exception used.  |
+
+The error message in the response body comes straight from the exception, which is fine because every domain exception is constructed with a message the user can safely see (no internals, no SQL, no stack traces).
 
 The `serializeRoom` helper at the bottom of the controller is the contract between the backend and the frontend. It picks the fields we want to expose and renames `passwordHash` to nothing (we never expose it) and computes the `shareLink`. When you add a new column, this is where you decide whether the frontend gets to see it.
 

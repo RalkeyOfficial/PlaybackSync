@@ -26,6 +26,11 @@ Disabling does *not* delete the rooms table or any of its rows. The data is stil
 
 The app exposes two settings via Nextcloud's `IAppConfig` mechanism. There is no admin settings UI for them yet (that's deliberately deferred from the MVP), so today they are managed exclusively through `occ config:app:*` commands.
 
+| Key                    | Type     | Default if unset                          | Effect                                                                                                |
+|------------------------|----------|-------------------------------------------|-------------------------------------------------------------------------------------------------------|
+| `restrict_to_admins`   | boolean  | `false`                                   | If `true`, only users in the `admin` group can call `POST /rooms`. Existing rooms are not affected.   |
+| `default_ttl_seconds`  | integer  | `86400` (24 hours)                        | Default TTL applied when a `POST /rooms` request omits `ttl`. Out-of-range values silently fall back. |
+
 ### `restrict_to_admins`
 
 This boolean flag controls who is allowed to *create* rooms. By default it is unset, which the service treats as `false`, and any logged-in Nextcloud user can create a room. When set to `'true'` (the string `'true'`, since `IAppConfig` values are strings), only users whose Nextcloud account is in the `admin` group can create rooms — non-admin users get an HTTP 403 with the message "Room creation is restricted to administrators."
@@ -60,7 +65,9 @@ The maximum TTL — the upper bound on what an end user can request via the `ttl
 
 The app declares one background job, [`PruneExpiredRoomsJob`](../lib/BackgroundJob/PruneExpiredRoomsJob.php), in the `<background-jobs>` section of [`appinfo/info.xml`](../appinfo/info.xml). When you enable the app, Nextcloud reads that section and adds the job to its global job list (the `oc_jobs` table). When you disable the app, the job is removed.
 
-The job runs every hour (`setInterval(3600)`) and does exactly one thing: ask the rooms mapper to delete every row whose `expires_at` is in the past. The job is idempotent — running it twice in a row, or running it when there are no expired rows, is a no-op.
+| Job                       | Interval | What it does                                                       | Idempotent? |
+|---------------------------|----------|--------------------------------------------------------------------|-------------|
+| `PruneExpiredRoomsJob`    | 3600 s   | `DELETE FROM oc_playbacksync_rooms WHERE expires_at <= now`        | Yes         |
 
 You can list and inspect background jobs with:
 
@@ -80,19 +87,34 @@ If your Nextcloud instance does not have the cron worker running (i.e. you're on
 
 ## The development build loop
 
-The frontend uses Vite, and there are three relevant npm scripts in [`package.json`](../package.json):
+The frontend uses Vite. The relevant scripts are declared in [`package.json`](../package.json) and break down by intent as follows:
 
-- `npm run build` produces a production bundle. Minified, tree-shaken, with inlined CSS. This is what you run before testing inside Nextcloud, and what gets committed alongside any frontend change. The output goes to `js/playbacksync-main.mjs` plus a couple of license artifacts.
-- `npm run dev` produces a development bundle. It's a one-shot build (not a watcher), useful when you just want to rebuild after a single change. The output is unminified and easier to debug in browser devtools.
-- `npm run watch` is the long-running development bundle, with file watching enabled. This is what you typically use during active development: edit a file, save, the bundle rebuilds in a couple of seconds, the next page reload picks up the change.
+| Script              | What it does                                                          | When to use                                                                                  |
+|---------------------|-----------------------------------------------------------------------|----------------------------------------------------------------------------------------------|
+| `npm run build`     | Production bundle: minified, tree-shaken, CSS inlined.                | Before committing, before manually testing inside Nextcloud, before any release.            |
+| `npm run dev`       | Development one-shot build. Unminified, easier to debug.              | Quick rebuild after a single edit when you don't want a long-running watcher.                |
+| `npm run watch`     | Development build with file watching.                                  | The default during active feature work — edit, save, reload page.                            |
+| `npm run lint`      | Runs ESLint over `src/`.                                              | CLI sanity check; editor integrations usually surface the same warnings live.                |
+| `npm run lint:fix`  | Same as `lint` but applies auto-fixes for fixable issues.             | Cleaning up after a refactor where import order or formatting drifted.                      |
+| `npm run stylelint` | Runs Stylelint over `src/` `<style>` blocks.                          | CSS/SCSS hygiene check. Rarely needed because most styles are scoped and tiny.               |
+| `npm run stylelint:fix` | Stylelint with auto-fixes.                                       | Same trigger as `lint:fix` but for stylesheets.                                              |
+
+The `build` output goes to `js/playbacksync-main.mjs` plus a couple of license artifacts. Those files are committed to the repository, because Nextcloud expects to find pre-built bundles at install time — there is no "build on install" step in the Nextcloud app deployment model.
 
 The Nextcloud PHP side does not have an equivalent watcher because PHP files are picked up on the next request — there is nothing to compile. After editing a PHP file, the next API call or page load will execute the new code automatically, with one caveat: if you change autoloading (new namespaces, new class files), Nextcloud's classmap may need to be regenerated by disabling and re-enabling the app, or by running `occ maintenance:repair`. In practice, just adding new methods to existing classes never needs that.
 
-The lint and stylelint scripts (`npm run lint`, `npm run stylelint`) wrap the project's ESLint and Stylelint configurations. They are mostly used by editor integrations but can be run from the command line if you want a sanity check before pushing.
-
 ## Manual end-to-end testing
 
-For the API surface, `curl` plus HTTP Basic auth (`-u username:password`) is the simplest way to exercise endpoints from outside the browser. The pre-seeded users in the dev environment include `admin:admin`, `alice:alice`, and several `userN:userN` accounts; using a non-admin user is essential for testing the `restrict_to_admins` flow. See [api.md](api.md) for end-to-end examples of each endpoint.
+For the API surface, `curl` plus HTTP Basic auth (`-u username:password`) is the simplest way to exercise endpoints from outside the browser. The dev environment ships with a handful of pre-seeded users; the ones most relevant to PlaybackSync testing are:
+
+| Username    | Password    | Role        | What it's good for                                              |
+|-------------|-------------|-------------|-----------------------------------------------------------------|
+| `admin`     | `admin`     | Admin       | Default smoke test; bypasses `restrict_to_admins`.              |
+| `alice`     | `alice`     | Normal user | Default non-admin path; testing 403 under `restrict_to_admins`. |
+| `bob`, `jane` | (= name)  | Normal user | Cross-user isolation tests (B can't see A's room).              |
+| `user1`–`user6` | (= name) | Normal user | Bulk-data scenarios when you need many independent accounts.   |
+
+See [api.md](api.md) for end-to-end examples of each endpoint.
 
 For the database side, the dev environment runs MariaDB in a separate container:
 

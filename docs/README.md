@@ -8,18 +8,39 @@ This documentation is aimed at the developer maintaining the app — the kind of
 
 Start with [architecture.md](architecture.md) if you want the big picture: what the layers are, how a request flows from a button click in the browser all the way to a row in the database, and where the boundaries are between PlaybackSync code, Nextcloud platform code, and third-party libraries. Once you have that map in your head, the layer-specific documents will make a lot more sense.
 
-If you are diving into a specific change — fixing a bug in the create-room flow, adding a new API endpoint, tweaking the dialog UX — go to the layer-specific document directly. The [backend.md](backend.md) document covers everything that runs server-side in PHP, organized by the same layered structure you'd see in `lib/`. The [frontend.md](frontend.md) document covers the Vue 3 single-page app under `src/`, including how the Pinia store coordinates the dialogs and how the components are split.
+If you are diving into a specific change — fixing a bug in the create-room flow, adding a new API endpoint, tweaking the dialog UX — go to the layer-specific document directly. The shortest path to whatever you're looking for is typically the table below.
 
-The [api.md](api.md) document is the reference for the HTTP surface — endpoints, payloads, status codes, and worked-out `curl` examples. It is also the contract that both the backend controller and the frontend API service have to honor; if you change one, this is where you reconcile them.
+| Document                                     | Best for…                                                                                                                                  |
+|----------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------|
+| [architecture.md](architecture.md)           | The system overview, layer responsibilities, end-to-end request flow, where Phase 2 (WebSocket) and Phase 3 (extension) will plug in.      |
+| [backend.md](backend.md)                     | PHP code under `lib/`: bootstrap, DB schema, entity & mapper, service rules, controller, routes, background job.                            |
+| [frontend.md](frontend.md)                   | Vue code under `src/`: bundle entry, App layout, Pinia store, API service, dialogs, l10n, the `inlineCSS: true` Vite rationale.            |
+| [api.md](api.md)                             | The HTTP REST contract: every endpoint with request/response shape tables, status codes, and `curl` examples.                              |
+| [configuration.md](configuration.md)         | Operations: enabling the app, `IAppConfig` keys, `occ` commands, the prune background job, the npm scripts, dev-environment users.         |
 
-Finally, [configuration.md](configuration.md) covers the operational side: what `IAppConfig` keys exist, how to set them with `occ`, how the background job that prunes expired rooms is wired up, and the basic dev-loop workflow inside the Nextcloud Docker dev environment.
+If you came here looking for product-level material — the mission, the roadmap, individual feature specs — those live separately. See the next section.
 
 ## Where the docs end and other things begin
 
-Anything project-shaping — the mission, the roadmap, individual feature specs — lives under [`agent-os/`](../agent-os/) rather than here. The [agent-os/product/](../agent-os/product/) folder has the mission, target users, and roadmap; the [agent-os/specs/](../agent-os/specs/) folder has per-feature shape documents that explain *why a particular slice of the codebase exists and what alternatives were considered*. Those documents are the historical record; the docs in this folder describe what the code currently is.
+Project-shaping documents — the mission, the roadmap, individual feature specs — live separately, alongside the legacy implementation that's being rewritten. Each lives in a different folder with a different purpose:
 
-The legacy Node.js implementation lives untouched under [`OLD_CODE/`](../OLD_CODE/). It is a useful reference for the WebSocket protocol design and the playback-state model, both of which will be ported into the Nextcloud app in a later phase. The [`OLD_CODE/docs/`](../OLD_CODE/docs/) folder in particular has the protocol diagrams and the drift-correction algorithm; treat those as the design intent for Phase 2.
+| Folder                                       | Purpose                                                                                                       | When to read it                                                       |
+|----------------------------------------------|---------------------------------------------------------------------------------------------------------------|-----------------------------------------------------------------------|
+| [`docs/`](.)                                 | What the code currently is. Reference material organized by layer.                                            | When implementing or maintaining a feature.                            |
+| [`agent-os/product/`](../agent-os/product/)  | Mission, target users, roadmap. The "why we are doing this" file set.                                          | When planning a feature or arguing about scope.                        |
+| [`agent-os/specs/`](../agent-os/specs/)      | Per-feature shape documents. The historical record of what was decided and what alternatives were considered.   | When you've forgotten *why* a particular slice of code exists that way.|
+| [`OLD_CODE/`](../OLD_CODE/)                  | The archived legacy Node.js implementation, including the WebSocket protocol design and drift-correction algorithm. | When implementing Phase 2 (WebSocket sync) — treat as design intent.   |
 
 ## Current status, briefly
 
-The MVP foundation is in place: users can create, list, and delete rooms through the Nextcloud UI; rooms persist in the Nextcloud database; expired rooms are cleaned up by a background job. There is no WebSocket sync server yet, no public participant join flow, and no browser extension — those are deliberately deferred so each can be built and verified in isolation. See [`agent-os/product/roadmap.md`](../agent-os/product/roadmap.md) for what is planned next.
+The MVP foundation is in place. Users can create, list, and delete rooms through the Nextcloud UI; rooms persist in the Nextcloud database; expired rooms are cleaned up by a background job. There is no WebSocket sync server yet, no public participant join flow, and no browser extension — those are deliberately deferred so each can be built and verified in isolation.
+
+| Phase   | Capability                                  | Status      |
+|---------|---------------------------------------------|-------------|
+| Phase 1 | Owner-only room CRUD via Nextcloud UI       | **Shipped** |
+| Phase 1 | Persistent rooms with TTL + hourly prune job| **Shipped** |
+| Phase 2 | WebSocket sync server (drift correction etc.) | Planned   |
+| Phase 2 | Public Basic-Auth-gated share endpoint      | Planned     |
+| Phase 3 | Browser extension for streaming sites       | Planned     |
+
+See [`agent-os/product/roadmap.md`](../agent-os/product/roadmap.md) for the canonical roadmap and what specifically is on deck next.
