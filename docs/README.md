@@ -18,6 +18,7 @@ If you are diving into a specific change — fixing a bug in the create-room flo
 | [api.md](api.md)                             | The HTTP REST contract: every endpoint with request/response shape tables, status codes, and `curl` examples.                              |
 | [configuration.md](configuration.md)         | Operations: enabling the app, `IAppConfig` keys, `occ` commands, the prune background job, the npm scripts, dev-environment users.         |
 | [ws-sync-server.md](ws-sync-server.md)       | Operator guide for the WebSocket sync daemon: starting it, sample systemd unit, Apache/nginx proxy snippets, app-config keys.              |
+| [install-without-script.md](install-without-script.md) | Step-by-step manual install of the daemon for when the installer script fails or your environment is non-standard. Covers bare-metal and Docker, multiple proxies, common failure modes.            |
 | [ws-protocol.md](ws-protocol.md)             | Wire-format contract for the WebSocket sync server: every message, every field, error codes, sequence diagrams.                            |
 
 If you came here looking for product-level material — the mission, the roadmap, individual feature specs — those live separately. See the next section.

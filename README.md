@@ -35,118 +35,49 @@ PlaybackSync has two pieces an administrator installs:
 1. The **Nextcloud app** (this repo) — handles the rooms UI, the database, and the REST API.
 2. The **WebSocket sync daemon** — a long-running PHP process launched by `occ`, responsible for real-time playback events.
 
-Both live in the same repository. Most of the work is one-time configuration.
+Both live in the same repository.
 
-### 1. Install the app
+### Quick install (recommended)
 
-Drop the repo into your Nextcloud's `apps-extra/` (or `apps/`) directory:
+The installer handles both bare-metal and Docker setups; pick the one that matches yours.
+
+**Bare-metal (Debian, Ubuntu, RHEL/Rocky, openSUSE):**
 
 ```bash
 cd /var/www/nextcloud/apps-extra
 git clone https://github.com/RalkeyOfficial/PlaybackSync.git playbacksync
-cd playbacksync
-composer install --no-dev
+sudo bash playbacksync/scripts/install-ws-daemon.sh
 ```
 
-Enable it:
+It auto-detects the Nextcloud path, web server (nginx or Apache), vhost config, and init system, and does everything: `composer install`, `occ app:enable`, the `IAppConfig` keys, the systemd unit, the reverse-proxy snippet (idempotent, marker-bracketed), web-server reload, service start, and a WebSocket handshake to verify.
+
+**Docker (single-container, multi-container with separate proxy, jwilder/nginx-proxy, traefik, custom):**
+
+Clone the repo into your apps directory inside the Nextcloud container's mounted code path, then run on the host:
 
 ```bash
-sudo -u www-data php /var/www/nextcloud/occ app:enable playbacksync
+bash playbacksync/scripts/install-ws-daemon.sh --docker
 ```
 
-The migration creates `oc_playbacksync_rooms`. Logged-in users can now create rooms from the navigation entry.
+It auto-detects the Nextcloud container, the reverse-proxy container, the compose project, and replicates all NC mounts into a sidecar service. It picks the right proxy strategy: `vhost.d` drop-in for nginx-proxy (no reload), edit-on-host for bind-mounted configs, `docker cp` as a last resort with a clear "this won't survive a rebuild" warning.
 
-By default any logged-in user can create rooms. To restrict creation to admins:
+If detection finds multiple candidates it prompts; pass `--container NAME` / `--proxy-container NAME` to skip the prompts. If your stack is unrecognisable, the script prints the snippet and tells you exactly where to put it.
+
+**Common flags:**
 
 ```bash
-sudo -u www-data php /var/www/nextcloud/occ config:app:set playbacksync restrict_to_admins --value true
+bash scripts/install-ws-daemon.sh --dry-run     # see the plan, change nothing
+bash scripts/install-ws-daemon.sh --uninstall   # cleanly reverse the install
+bash scripts/install-ws-daemon.sh --help        # all flags
 ```
 
-### 2. Run the WebSocket sync daemon
+### Manual install
 
-The daemon binds a local TCP port (default `127.0.0.1:8765`). Your existing Nextcloud reverse proxy (Apache or nginx) forwards `/apps/playbacksync/ws/` to that port.
+If you'd rather do it by hand, the auto-detect doesn't fit your setup, or the script failed and you want explicit step-by-step instructions, follow **[docs/install-without-script.md](docs/install-without-script.md)**.
 
-**A. Sample systemd unit** — `/etc/systemd/system/playbacksync-ws.service`:
+It covers bare-metal (Debian/Ubuntu/RHEL families with systemd) and Docker (single-container `nextcloud:latest`, multi-container with named volumes, jwilder/nginx-proxy, Caddy, Traefik), with copy-paste commands for every step and a "common failures and fixes" section.
 
-```ini
-[Unit]
-Description=PlaybackSync WebSocket sync server
-After=network-online.target mariadb.service redis.service
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=www-data
-Group=www-data
-WorkingDirectory=/var/www/nextcloud
-ExecStart=/usr/bin/php /var/www/nextcloud/occ playbacksync:ws-serve
-Restart=on-failure
-RestartSec=5
-RuntimeMaxSec=7d
-
-[Install]
-WantedBy=multi-user.target
-```
-
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable --now playbacksync-ws.service
-```
-
-**B. Reverse-proxy snippet** — for nginx, add **above** the catch-all `location /` in the server block already serving Nextcloud:
-
-```nginx
-location ^~ /apps/playbacksync/ws/ {
-    proxy_pass http://127.0.0.1:8765;
-    proxy_http_version 1.1;
-    proxy_set_header Upgrade $http_upgrade;
-    proxy_set_header Connection "upgrade";
-    proxy_set_header Host $host;
-    proxy_read_timeout 3600s;
-    proxy_send_timeout 3600s;
-}
-```
-
-For Apache (`mod_proxy_wstunnel`):
-
-```apache
-ProxyPass        "/apps/playbacksync/ws/" "ws://127.0.0.1:8765/apps/playbacksync/ws/"
-ProxyPassReverse "/apps/playbacksync/ws/" "ws://127.0.0.1:8765/apps/playbacksync/ws/"
-```
-
-Reload your web server. Clients can now connect to `wss://your-host/index.php/apps/playbacksync/ws/{roomUuid}`.
-
-### 3. Verify
-
-A WebSocket handshake without any client tooling:
-
-```bash
-curl -sS -i --max-time 3 -N \
-  -H "Connection: Upgrade" -H "Upgrade: websocket" \
-  -H "Host: $(hostname)" \
-  -H "Sec-WebSocket-Version: 13" \
-  -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" \
-  https://$(hostname)/apps/playbacksync/ws/probe
-```
-
-Expect `HTTP/1.1 101 Switching Protocols`. Anything else is the proxy, not the daemon.
-
-For a fuller end-to-end check using `websocat`:
-
-```bash
-websocat 'wss://your-host/apps/playbacksync/ws/<roomUuid>'
-> {"type":"JOIN","password":"<plaintext-password-from-creation-dialog>"}
-< {"type":"ROOM_STATE","clientId":"…","playerState":"paused","videoPos":0,…}
-```
-
-### 4. Tune (optional)
-
-All daemon parameters are `IAppConfig` keys with sensible defaults. The full table — drift thresholds, tombstone window, idle timeout, rate limits — is in [docs/ws-sync-server.md](docs/ws-sync-server.md).
-
-```bash
-# Example: bind 0.0.0.0 instead of loopback
-sudo -u www-data php /var/www/nextcloud/occ config:app:set playbacksync ws_host --value 0.0.0.0
-```
+For tunable parameters (drift thresholds, tombstone window, rate limits, etc.), see [docs/ws-sync-server.md](docs/ws-sync-server.md).
 
 ---
 
