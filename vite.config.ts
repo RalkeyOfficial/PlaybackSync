@@ -7,7 +7,7 @@ export default createAppConfig({
 	extractLicenseInformation: {
 		includeSourceMaps: true,
 	},
-	thirdPartyLicense: false,
+	thirdPartyLicense: undefined,
 	createEmptyCSSEntryPoints: true,
 	emptyOutputDirectory: {
 		additionalDirectories: ['css'],

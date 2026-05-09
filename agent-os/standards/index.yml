@@ -1,0 +1,13 @@
+# Agent OS Standards Index
+
+backend:
+  php-conventions:
+    description: Nextcloud PHP conventions: strict types, IBootstrap, OCP imports, controller annotations
+
+frontend:
+  vue-conventions:
+    description: Vue 3 SFC patterns: script setup, @nextcloud/vue imports, l10n, icons, Pinia
+
+tooling:
+  build:
+    description: Vite build setup, npm scripts, engine requirements, ESLint config

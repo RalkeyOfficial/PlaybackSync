@@ -1,18 +1,22 @@
 {
 	"name": "playbacksync",
-	"description": "Synchronized video playback for groups",
 	"version": "0.1.0",
-	"license": "AGPL-3.0-or-later",
 	"private": true,
+	"description": "Synchronized video playback for groups",
+	"license": "AGPL-3.0-or-later",
+	"type": "module",
 	"scripts": {
 		"build": "vite --mode production build",
 		"dev": "vite --mode development build",
-		"watch": "vite --mode development build --watch",
 		"lint": "eslint src",
 		"lint:fix": "eslint src --fix",
 		"stylelint": "stylelint src",
-		"stylelint:fix": "stylelint src --fix"
+		"stylelint:fix": "stylelint src --fix",
+		"watch": "vite --mode development build --watch"
 	},
+	"browserslist": [
+		"extends @nextcloud/browserslist-config"
+	],
 	"dependencies": {
 		"@nextcloud/axios": "^2.5.2",
 		"@nextcloud/dialogs": "^7.3.0",
@@ -34,9 +38,6 @@
 		"typescript": "^6.0.2",
 		"vite": "^7.3.1"
 	},
-	"browserslist": [
-		"extends @nextcloud/browserslist-config"
-	],
 	"engines": {
 		"node": "^24.0.0",
 		"npm": "^11.3.0"

@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 320" width="400" height="320" role="img" aria-label="PlaybackSync vertical logo lockup">
+  <title>PlaybackSync</title>
+  <desc>Logo mark stacked above PlaybackSync wordmark.</desc>
+  <g transform="translate(100,20)">
+    <polygon points="20,20 20,180 160,100" fill="#06B6D4" opacity="0.35"/>
+    <polygon points="40,20 40,180 180,100" fill="#0EA5E9" opacity="0.6"/>
+    <polygon points="60,20 60,180 200,100" fill="#2563EB"/>
+  </g>
+  <text x="200" y="280" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="44" font-weight="600" letter-spacing="-1" fill="#0F172A">Playback<tspan fill="#2563EB" font-weight="500">Sync</tspan></text>
+</svg>

@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 200" width="240" height="200" role="img" aria-label="PlaybackSync logo mark, monochrome dark">
+  <title>PlaybackSync</title>
+  <desc>Monochrome dark variant for use on light backgrounds.</desc>
+  <polygon points="20,20 20,180 160,100" fill="#0F172A" opacity="0.35"/>
+  <polygon points="40,20 40,180 180,100" fill="#0F172A" opacity="0.6"/>
+  <polygon points="60,20 60,180 200,100" fill="#0F172A"/>
+</svg>

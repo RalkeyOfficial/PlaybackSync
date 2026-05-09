@@ -1,0 +1,850 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PlaybackSync — Design System</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400;500&family=Geist:wght@300;400;500;600;700&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet">
+<style>
+  :root {
+    /* Brand colors */
+    --brand-cyan: #06B6D4;
+    --brand-sky: #0EA5E9;
+    --brand-blue: #2563EB;
+    --brand-indigo: #1E40AF;
+
+    /* Surface / neutrals */
+    --ink: #0F172A;
+    --ink-2: #1E293B;
+    --ink-3: #334155;
+    --slate: #64748B;
+    --slate-2: #94A3B8;
+    --paper: #F8FAFC;
+    --paper-2: #F1F5F9;
+    --line: #E2E8F0;
+
+    /* Semantic */
+    --success: #10B981;
+    --warning: #F59E0B;
+    --danger:  #EF4444;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    font-family: 'Geist', -apple-system, sans-serif;
+    background: var(--ink);
+    color: var(--paper);
+    line-height: 1.6;
+    font-weight: 400;
+    -webkit-font-smoothing: antialiased;
+    overflow-x: hidden;
+  }
+
+  /* ============ HERO ============ */
+  .hero {
+    min-height: 100vh;
+    padding: 60px 8vw 80px;
+    position: relative;
+    border-bottom: 1px solid rgba(255,255,255,0.08);
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    overflow: hidden;
+  }
+
+  .hero::before {
+    content: '';
+    position: absolute;
+    top: -200px; right: -200px;
+    width: 700px; height: 700px;
+    background: radial-gradient(circle, rgba(37,99,235,0.25) 0%, transparent 60%);
+    pointer-events: none;
+  }
+  .hero::after {
+    content: '';
+    position: absolute;
+    bottom: -100px; left: -100px;
+    width: 500px; height: 500px;
+    background: radial-gradient(circle, rgba(6,182,212,0.18) 0%, transparent 60%);
+    pointer-events: none;
+  }
+
+  .top-bar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-family: 'Geist Mono', monospace;
+    font-size: 12px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--slate-2);
+    position: relative;
+    z-index: 2;
+  }
+  .top-bar .dot {
+    display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+    background: var(--success); margin-right: 8px;
+    box-shadow: 0 0 8px var(--success);
+  }
+
+  .hero-content {
+    position: relative;
+    z-index: 2;
+    margin-top: 8vh;
+  }
+
+  .eyebrow {
+    font-family: 'Geist Mono', monospace;
+    font-size: 13px;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--brand-cyan);
+    margin-bottom: 24px;
+  }
+
+  .hero h1 {
+    font-family: 'Geist', sans-serif;
+    font-size: clamp(56px, 9vw, 140px);
+    line-height: 0.95;
+    letter-spacing: -0.04em;
+    font-weight: 600;
+    margin-bottom: 32px;
+  }
+
+  .hero h1 em {
+    font-family: 'Instrument Serif', serif;
+    font-style: italic;
+    font-weight: 400;
+    color: var(--brand-cyan);
+  }
+
+  .hero-tagline {
+    font-size: 22px;
+    color: var(--slate-2);
+    max-width: 640px;
+    line-height: 1.5;
+    font-weight: 300;
+  }
+
+  .hero-meta {
+    display: flex;
+    gap: 48px;
+    margin-top: 60px;
+    font-family: 'Geist Mono', monospace;
+    font-size: 12px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--slate-2);
+    flex-wrap: wrap;
+    position: relative;
+    z-index: 2;
+  }
+  .hero-meta strong {
+    display: block;
+    color: var(--paper);
+    font-size: 14px;
+    margin-top: 4px;
+    font-weight: 500;
+    text-transform: none;
+    letter-spacing: 0;
+    font-family: 'Geist', sans-serif;
+  }
+
+  /* Floating logo mark in hero */
+  .hero-mark {
+    position: absolute;
+    right: 8vw;
+    top: 50%;
+    transform: translateY(-50%);
+    opacity: 0.85;
+    z-index: 1;
+  }
+  @media (max-width: 1100px) { .hero-mark { display: none; } }
+
+  /* ============ SECTIONS ============ */
+  section {
+    padding: 120px 8vw;
+    border-bottom: 1px solid rgba(255,255,255,0.08);
+    position: relative;
+  }
+
+  .section-head {
+    display: grid;
+    grid-template-columns: 200px 1fr;
+    gap: 40px;
+    margin-bottom: 80px;
+    align-items: start;
+  }
+  @media (max-width: 800px) { .section-head { grid-template-columns: 1fr; gap: 12px; } }
+
+  .section-num {
+    font-family: 'Geist Mono', monospace;
+    font-size: 12px;
+    letter-spacing: 0.2em;
+    color: var(--slate);
+    text-transform: uppercase;
+    padding-top: 14px;
+    border-top: 1px solid rgba(255,255,255,0.15);
+    width: 160px;
+  }
+  .section-title h2 {
+    font-size: clamp(40px, 5vw, 64px);
+    font-weight: 500;
+    letter-spacing: -0.025em;
+    line-height: 1.05;
+    margin-bottom: 24px;
+  }
+  .section-title h2 em {
+    font-family: 'Instrument Serif', serif;
+    font-style: italic;
+    font-weight: 400;
+    color: var(--brand-sky);
+  }
+  .section-title p {
+    font-size: 18px;
+    color: var(--slate-2);
+    max-width: 600px;
+    line-height: 1.6;
+  }
+
+  /* ============ LOGO GALLERY ============ */
+  .logo-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 1px;
+    background: rgba(255,255,255,0.08);
+    border: 1px solid rgba(255,255,255,0.08);
+  }
+  @media (max-width: 800px) { .logo-grid { grid-template-columns: 1fr; } }
+
+  .logo-cell {
+    background: var(--paper);
+    padding: 60px 40px;
+    min-height: 280px;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    position: relative;
+  }
+  .logo-cell.dark { background: var(--ink-2); }
+  .logo-cell.indigo { background: var(--brand-indigo); }
+  .logo-cell.cyan { background: #ECFEFF; }
+
+  .logo-cell svg { max-width: 100%; height: auto; }
+  .logo-cell .logo-display {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px 0;
+  }
+
+  .logo-meta {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-family: 'Geist Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--slate);
+  }
+  .logo-cell.dark .logo-meta { color: var(--slate-2); }
+  .logo-cell.indigo .logo-meta { color: rgba(255,255,255,0.7); }
+
+  .logo-meta a {
+    color: inherit;
+    text-decoration: none;
+    border-bottom: 1px solid currentColor;
+    padding-bottom: 2px;
+  }
+
+  /* ============ COLORS ============ */
+  .palette-group { margin-bottom: 80px; }
+  .palette-group:last-child { margin-bottom: 0; }
+
+  .palette-label {
+    font-family: 'Geist Mono', monospace;
+    font-size: 12px;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--slate);
+    margin-bottom: 24px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid rgba(255,255,255,0.1);
+  }
+
+  .swatch-row {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 16px;
+  }
+  @media (max-width: 900px) { .swatch-row { grid-template-columns: repeat(2, 1fr); } }
+  @media (max-width: 500px) { .swatch-row { grid-template-columns: 1fr; } }
+
+  .swatch {
+    border-radius: 8px;
+    overflow: hidden;
+    border: 1px solid rgba(255,255,255,0.08);
+    transition: transform 0.2s ease;
+  }
+  .swatch:hover { transform: translateY(-4px); }
+
+  .swatch-color {
+    height: 140px;
+    position: relative;
+  }
+  .swatch-color::after {
+    content: attr(data-name);
+    position: absolute;
+    top: 16px; left: 16px;
+    font-family: 'Geist', sans-serif;
+    font-size: 16px;
+    font-weight: 500;
+    color: rgba(255,255,255,0.95);
+    mix-blend-mode: difference;
+  }
+  .swatch-meta {
+    background: var(--ink-2);
+    padding: 16px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-family: 'Geist Mono', monospace;
+    font-size: 12px;
+  }
+  .swatch-meta .hex { color: var(--paper); font-weight: 500; }
+  .swatch-meta .var { color: var(--slate); font-size: 11px; }
+
+  /* ============ TYPE ============ */
+  .type-spec {
+    display: grid;
+    grid-template-columns: 200px 1fr;
+    gap: 40px;
+    padding: 40px 0;
+    border-top: 1px solid rgba(255,255,255,0.08);
+    align-items: baseline;
+  }
+  .type-spec:last-child { border-bottom: 1px solid rgba(255,255,255,0.08); }
+  @media (max-width: 700px) { .type-spec { grid-template-columns: 1fr; gap: 16px; } }
+
+  .type-label {
+    font-family: 'Geist Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: var(--slate);
+  }
+  .type-label strong {
+    display: block;
+    color: var(--paper);
+    font-size: 13px;
+    margin-bottom: 4px;
+    text-transform: none;
+    letter-spacing: 0;
+    font-weight: 500;
+    font-family: 'Geist', sans-serif;
+  }
+  .type-sample-display {
+    font-family: 'Geist', sans-serif;
+    font-size: 64px;
+    font-weight: 600;
+    letter-spacing: -0.025em;
+    line-height: 1;
+  }
+  .type-sample-display em {
+    font-family: 'Instrument Serif', serif;
+    font-style: italic;
+    font-weight: 400;
+    color: var(--brand-cyan);
+  }
+  .type-sample-body {
+    font-family: 'Geist', sans-serif;
+    font-size: 18px;
+    line-height: 1.6;
+    color: var(--slate-2);
+    max-width: 580px;
+  }
+  .type-sample-mono {
+    font-family: 'Geist Mono', monospace;
+    font-size: 14px;
+    color: var(--brand-cyan);
+    background: rgba(6,182,212,0.1);
+    padding: 8px 14px;
+    border-radius: 6px;
+    display: inline-block;
+  }
+  .type-sample-serif {
+    font-family: 'Instrument Serif', serif;
+    font-style: italic;
+    font-size: 36px;
+    color: var(--paper);
+    line-height: 1.2;
+  }
+
+  /* ============ USAGE ============ */
+  .usage-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 24px;
+  }
+  @media (max-width: 800px) { .usage-grid { grid-template-columns: 1fr; } }
+
+  .usage-card {
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 12px;
+    padding: 32px;
+    background: rgba(255,255,255,0.02);
+  }
+  .usage-card.do { border-left: 3px solid var(--success); }
+  .usage-card.dont { border-left: 3px solid var(--danger); }
+
+  .usage-tag {
+    font-family: 'Geist Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    margin-bottom: 16px;
+    display: inline-block;
+  }
+  .usage-card.do .usage-tag { color: var(--success); }
+  .usage-card.dont .usage-tag { color: var(--danger); }
+
+  .usage-card h3 {
+    font-size: 22px;
+    font-weight: 500;
+    letter-spacing: -0.01em;
+    margin-bottom: 12px;
+  }
+  .usage-card p {
+    color: var(--slate-2);
+    font-size: 15px;
+    line-height: 1.6;
+  }
+
+  /* ============ MOTION / SYNC STATE ============ */
+  .state-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+  }
+  @media (max-width: 800px) { .state-grid { grid-template-columns: 1fr; } }
+
+  .state-card {
+    background: var(--ink-2);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 12px;
+    padding: 32px;
+    position: relative;
+    overflow: hidden;
+  }
+  .state-card .indicator {
+    position: absolute;
+    top: 24px; right: 24px;
+    width: 10px; height: 10px;
+    border-radius: 50%;
+  }
+  .state-card.synced .indicator { background: var(--success); box-shadow: 0 0 12px var(--success); }
+  .state-card.buffering .indicator { background: var(--warning); box-shadow: 0 0 12px var(--warning); }
+  .state-card.desynced .indicator { background: var(--danger); box-shadow: 0 0 12px var(--danger); }
+
+  .state-name {
+    font-family: 'Geist Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--slate);
+    margin-bottom: 12px;
+  }
+  .state-card h4 {
+    font-size: 24px;
+    font-weight: 500;
+    letter-spacing: -0.01em;
+    margin-bottom: 8px;
+  }
+  .state-card p {
+    color: var(--slate-2);
+    font-size: 14px;
+    line-height: 1.5;
+  }
+
+  /* ============ FOOTER ============ */
+  footer {
+    padding: 80px 8vw 60px;
+    border-top: 1px solid rgba(255,255,255,0.08);
+    display: flex;
+    justify-content: space-between;
+    align-items: end;
+    flex-wrap: wrap;
+    gap: 32px;
+  }
+  footer .wordmark {
+    font-size: 32px;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+  }
+  footer .wordmark span { color: var(--brand-sky); font-weight: 500; }
+  footer .meta {
+    font-family: 'Geist Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: var(--slate);
+    text-align: right;
+  }
+
+  /* Subtle pulse animation for sync indicators */
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+  }
+  .pulse { animation: pulse 2s ease-in-out infinite; }
+
+</style>
+</head>
+<body>
+
+<!-- ============ HERO ============ -->
+<section class="hero">
+  <div class="top-bar">
+    <span><span class="dot pulse"></span>v0.1 — Brand System</span>
+    <span>PlaybackSync / Identity Guidelines</span>
+  </div>
+
+  <svg class="hero-mark" viewBox="0 0 240 200" width="280" aria-hidden="true">
+    <polygon points="20,20 20,180 160,100" fill="#06B6D4" opacity="0.35"/>
+    <polygon points="40,20 40,180 180,100" fill="#0EA5E9" opacity="0.6"/>
+    <polygon points="60,20 60,180 200,100" fill="#2563EB"/>
+  </svg>
+
+  <div class="hero-content">
+    <div class="eyebrow">Brand &amp; Design System</div>
+    <h1>In sync,<br>without the <em>stream</em>.</h1>
+    <p class="hero-tagline">PlaybackSync coordinates playback across viewers — three triangles converging into one moment, the way our service brings rooms into alignment.</p>
+  </div>
+
+  <div class="hero-meta">
+    <div>Established<strong>2026</strong></div>
+    <div>System version<strong>0.1.0</strong></div>
+    <div>Primary use<strong>Web · Extension · Marketing</strong></div>
+  </div>
+</section>
+
+<!-- ============ LOGO ============ -->
+<section id="logo">
+  <div class="section-head">
+    <div class="section-num">01 · The Mark</div>
+    <div class="section-title">
+      <h2>A play button, <em>echoed</em>.</h2>
+      <p>Three offset triangles read left-to-right as motion converging into alignment. The silhouette stays a recognizable play button — the layered echoes carry the <em>sync</em> meaning. All variants below are vector-native and scale cleanly from 16px favicons to billboards.</p>
+    </div>
+  </div>
+
+  <div class="logo-grid">
+
+    <div class="logo-cell">
+      <div class="logo-display">
+        <svg viewBox="0 0 240 200" width="220" aria-label="Primary logo mark">
+          <polygon points="20,20 20,180 160,100" fill="#06B6D4" opacity="0.35"/>
+          <polygon points="40,20 40,180 180,100" fill="#0EA5E9" opacity="0.6"/>
+          <polygon points="60,20 60,180 200,100" fill="#2563EB"/>
+        </svg>
+      </div>
+      <div class="logo-meta">
+        <span>01 · Primary mark</span>
+        <span>logo-mark.svg</span>
+      </div>
+    </div>
+
+    <div class="logo-cell">
+      <div class="logo-display">
+        <svg viewBox="0 0 720 200" width="100%" style="max-width:520px" aria-label="Logo lockup">
+          <polygon points="20,20 20,180 160,100" fill="#06B6D4" opacity="0.35"/>
+          <polygon points="40,20 40,180 180,100" fill="#0EA5E9" opacity="0.6"/>
+          <polygon points="60,20 60,180 200,100" fill="#2563EB"/>
+          <text x="240" y="125" font-family="Geist, sans-serif" font-size="64" font-weight="600" letter-spacing="-1.5" fill="#0F172A">Playback<tspan fill="#2563EB" font-weight="500">Sync</tspan></text>
+        </svg>
+      </div>
+      <div class="logo-meta">
+        <span>02 · Horizontal lockup</span>
+        <span>logo-lockup.svg</span>
+      </div>
+    </div>
+
+    <div class="logo-cell dark">
+      <div class="logo-display">
+        <svg viewBox="0 0 240 200" width="220" aria-label="Monochrome light variant">
+          <polygon points="20,20 20,180 160,100" fill="#FFFFFF" opacity="0.35"/>
+          <polygon points="40,20 40,180 180,100" fill="#FFFFFF" opacity="0.6"/>
+          <polygon points="60,20 60,180 200,100" fill="#FFFFFF"/>
+        </svg>
+      </div>
+      <div class="logo-meta">
+        <span>03 · Mono on dark</span>
+        <span>logo-mark-mono-light.svg</span>
+      </div>
+    </div>
+
+    <div class="logo-cell cyan">
+      <div class="logo-display">
+        <svg viewBox="0 0 240 200" width="220" aria-label="Monochrome dark variant">
+          <polygon points="20,20 20,180 160,100" fill="#0F172A" opacity="0.35"/>
+          <polygon points="40,20 40,180 180,100" fill="#0F172A" opacity="0.6"/>
+          <polygon points="60,20 60,180 200,100" fill="#0F172A"/>
+        </svg>
+      </div>
+      <div class="logo-meta">
+        <span>04 · Mono on light</span>
+        <span>logo-mark-mono-dark.svg</span>
+      </div>
+    </div>
+
+    <div class="logo-cell indigo">
+      <div class="logo-display">
+        <svg viewBox="0 0 128 128" width="100" aria-label="Browser extension icon">
+          <rect width="128" height="128" rx="24" fill="#0F172A"/>
+          <g transform="translate(20,28)">
+            <polygon points="6,6 6,66 56,36" fill="#06B6D4" opacity="0.45"/>
+            <polygon points="18,6 18,66 68,36" fill="#0EA5E9" opacity="0.7"/>
+            <polygon points="30,6 30,66 80,36" fill="#3B82F6"/>
+          </g>
+        </svg>
+      </div>
+      <div class="logo-meta">
+        <span>05 · Extension icon</span>
+        <span>extension-icon.svg</span>
+      </div>
+    </div>
+
+    <div class="logo-cell">
+      <div class="logo-display" style="gap: 24px; flex-direction: row;">
+        <svg viewBox="0 0 32 32" width="64" aria-label="Favicon at 64px">
+          <rect width="32" height="32" rx="6" fill="#2563EB"/>
+          <polygon points="11,9 11,23 23,16" fill="#FFFFFF"/>
+        </svg>
+        <svg viewBox="0 0 32 32" width="32" aria-label="Favicon at 32px">
+          <rect width="32" height="32" rx="6" fill="#2563EB"/>
+          <polygon points="11,9 11,23 23,16" fill="#FFFFFF"/>
+        </svg>
+        <svg viewBox="0 0 32 32" width="16" aria-label="Favicon at 16px">
+          <rect width="32" height="32" rx="6" fill="#2563EB"/>
+          <polygon points="11,9 11,23 23,16" fill="#FFFFFF"/>
+        </svg>
+      </div>
+      <div class="logo-meta">
+        <span>06 · Favicon (64/32/16)</span>
+        <span>favicon.svg</span>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<!-- ============ COLORS ============ -->
+<section id="colors">
+  <div class="section-head">
+    <div class="section-num">02 · Color</div>
+    <div class="section-title">
+      <h2>Cyan to blue, <em>plus the dark</em>.</h2>
+      <p>The brand ramp goes cool-cyan to deep-blue — three steps that map directly to the three triangles in the mark. Indigo is held back as an accent for surfaces and CTAs. Dark slate carries the rest of the system.</p>
+    </div>
+  </div>
+
+  <div class="palette-group">
+    <div class="palette-label">Brand · Primary ramp</div>
+    <div class="swatch-row">
+      <div class="swatch">
+        <div class="swatch-color" data-name="Cyan" style="background:#06B6D4"></div>
+        <div class="swatch-meta"><span class="hex">#06B6D4</span><span class="var">--brand-cyan</span></div>
+      </div>
+      <div class="swatch">
+        <div class="swatch-color" data-name="Sky" style="background:#0EA5E9"></div>
+        <div class="swatch-meta"><span class="hex">#0EA5E9</span><span class="var">--brand-sky</span></div>
+      </div>
+      <div class="swatch">
+        <div class="swatch-color" data-name="Blue" style="background:#2563EB"></div>
+        <div class="swatch-meta"><span class="hex">#2563EB</span><span class="var">--brand-blue</span></div>
+      </div>
+      <div class="swatch">
+        <div class="swatch-color" data-name="Indigo" style="background:#1E40AF"></div>
+        <div class="swatch-meta"><span class="hex">#1E40AF</span><span class="var">--brand-indigo</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="palette-group">
+    <div class="palette-label">Surface · Neutrals</div>
+    <div class="swatch-row">
+      <div class="swatch">
+        <div class="swatch-color" data-name="Ink" style="background:#0F172A"></div>
+        <div class="swatch-meta"><span class="hex">#0F172A</span><span class="var">--ink</span></div>
+      </div>
+      <div class="swatch">
+        <div class="swatch-color" data-name="Ink 2" style="background:#1E293B"></div>
+        <div class="swatch-meta"><span class="hex">#1E293B</span><span class="var">--ink-2</span></div>
+      </div>
+      <div class="swatch">
+        <div class="swatch-color" data-name="Slate" style="background:#64748B"></div>
+        <div class="swatch-meta"><span class="hex">#64748B</span><span class="var">--slate</span></div>
+      </div>
+      <div class="swatch">
+        <div class="swatch-color" data-name="Paper" style="background:#F8FAFC"></div>
+        <div class="swatch-meta"><span class="hex">#F8FAFC</span><span class="var">--paper</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="palette-group">
+    <div class="palette-label">Semantic · Status (sync state)</div>
+    <div class="swatch-row">
+      <div class="swatch">
+        <div class="swatch-color" data-name="Success" style="background:#10B981"></div>
+        <div class="swatch-meta"><span class="hex">#10B981</span><span class="var">--success</span></div>
+      </div>
+      <div class="swatch">
+        <div class="swatch-color" data-name="Warning" style="background:#F59E0B"></div>
+        <div class="swatch-meta"><span class="hex">#F59E0B</span><span class="var">--warning</span></div>
+      </div>
+      <div class="swatch">
+        <div class="swatch-color" data-name="Danger" style="background:#EF4444"></div>
+        <div class="swatch-meta"><span class="hex">#EF4444</span><span class="var">--danger</span></div>
+      </div>
+      <div class="swatch">
+        <div class="swatch-color" data-name="Line" style="background:#E2E8F0"></div>
+        <div class="swatch-meta"><span class="hex">#E2E8F0</span><span class="var">--line</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ SYNC STATES ============ -->
+<section id="states">
+  <div class="section-head">
+    <div class="section-num">03 · States</div>
+    <div class="section-title">
+      <h2>Three signals, <em>one indicator</em>.</h2>
+      <p>The extension and room UI use three sync states. Each maps to a semantic color and a small dot — paired with text, never color alone.</p>
+    </div>
+  </div>
+
+  <div class="state-grid">
+    <div class="state-card synced">
+      <span class="indicator pulse"></span>
+      <div class="state-name">State 01</div>
+      <h4>Synced</h4>
+      <p>All viewers in the room are within 250ms of the master timestamp. Steady-state. The status dot pulses gently.</p>
+    </div>
+    <div class="state-card buffering">
+      <span class="indicator pulse"></span>
+      <div class="state-name">State 02</div>
+      <h4>Buffering</h4>
+      <p>One or more viewers are catching up. Other peers wait at the last shared timestamp until everyone is ready.</p>
+    </div>
+    <div class="state-card desynced">
+      <span class="indicator"></span>
+      <div class="state-name">State 03</div>
+      <h4>Desynced</h4>
+      <p>A viewer drifted beyond tolerance and could not auto-correct. Surface a manual resync action with a clear CTA.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============ TYPOGRAPHY ============ -->
+<section id="type">
+  <div class="section-head">
+    <div class="section-num">04 · Type</div>
+    <div class="section-title">
+      <h2>Geist for product, <em>Instrument</em> for voice.</h2>
+      <p>Geist Sans handles all interface and body copy — neutral, technical, legible at any size. Instrument Serif Italic appears sparingly for editorial moments and brand voice. Geist Mono carries metadata, status, and code.</p>
+    </div>
+  </div>
+
+  <div class="type-spec">
+    <div class="type-label"><strong>Display</strong>Geist · 600 · -2.5%</div>
+    <div class="type-sample-display">In sync, <em>without the stream</em>.</div>
+  </div>
+
+  <div class="type-spec">
+    <div class="type-label"><strong>Editorial accent</strong>Instrument Serif · italic</div>
+    <div class="type-sample-serif">A play button, echoed three times.</div>
+  </div>
+
+  <div class="type-spec">
+    <div class="type-label"><strong>Body</strong>Geist · 400 · 18/29</div>
+    <div class="type-sample-body">PlaybackSync runs in the background of your browser. Drop into a room, navigate to YouTube or any supported player, and your playback locks to the room's timeline. No video stream, no extra latency — just coordinated state.</div>
+  </div>
+
+  <div class="type-spec">
+    <div class="type-label"><strong>Mono</strong>Geist Mono · 14px</div>
+    <div><span class="type-sample-mono">room.timestamp = 00:14:32.480</span></div>
+  </div>
+</section>
+
+<!-- ============ USAGE ============ -->
+<section id="usage">
+  <div class="section-head">
+    <div class="section-num">05 · Usage</div>
+    <div class="section-title">
+      <h2>Keep the <em>echo</em> intact.</h2>
+      <p>The mark's meaning lives in the offset and the ramp. Don't flatten, recolor, or compress the spacing — that's where the <em>sync</em> reading comes from.</p>
+    </div>
+  </div>
+
+  <div class="usage-grid">
+    <div class="usage-card do">
+      <div class="usage-tag">✓ Do</div>
+      <h3>Maintain the 20px offset</h3>
+      <p>The horizontal step between triangles is what reads as motion converging. Keep it proportional at every scale. Below 32px, drop to the single-triangle favicon variant instead of compressing.</p>
+    </div>
+
+    <div class="usage-card dont">
+      <div class="usage-tag">✗ Don't</div>
+      <h3>Recolor outside the ramp</h3>
+      <p>The cyan → sky → blue progression carries meaning. Don't make all three the same color, don't reverse the order, don't substitute unrelated hues. Use the monochrome variants when color isn't available.</p>
+    </div>
+
+    <div class="usage-card do">
+      <div class="usage-tag">✓ Do</div>
+      <h3>Pair the wordmark exactly</h3>
+      <p>"PlaybackSync" is one word with a tonal split: "Playback" in primary text color, "Sync" in --brand-blue. The split is the wordmark — never break it or change the colored half.</p>
+    </div>
+
+    <div class="usage-card dont">
+      <div class="usage-tag">✗ Don't</div>
+      <h3>Add effects or rotate</h3>
+      <p>No drop shadows, glows, gradients on the triangles, or rotation. The mark is flat and oriented one way. Effects undermine the precision the brand stands for.</p>
+    </div>
+
+    <div class="usage-card do">
+      <div class="usage-tag">✓ Do</div>
+      <h3>Give it air</h3>
+      <p>Clear space around the mark equals the height of the front triangle's vertical edge. Don't crowd the mark with adjacent UI; let it breathe.</p>
+    </div>
+
+    <div class="usage-card dont">
+      <div class="usage-tag">✗ Don't</div>
+      <h3>Place on busy backgrounds</h3>
+      <p>The translucent rear triangles need a clean surface to read. On photo or video backgrounds, drop a solid surface behind the mark — or use the favicon variant.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============ FOOTER ============ -->
+<footer>
+  <div>
+    <div class="wordmark">Playback<span>Sync</span></div>
+    <div style="color: var(--slate-2); font-size: 14px; margin-top: 8px;">Brand &amp; identity system, v0.1.0</div>
+  </div>
+  <div class="meta">
+    Designed for sync<br>
+    Built for rooms
+  </div>
+</footer>
+
+</body>
+</html>
