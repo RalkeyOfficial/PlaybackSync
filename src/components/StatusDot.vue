@@ -46,12 +46,12 @@ withDefaults(defineProps<{
 }
 
 .status-dot--success {
-	background-color: var(--color-success, #46ba61);
+	background-color: var(--color-element-success, #2ea043);
 	animation: status-dot-pulse 1.8s ease-out infinite;
 }
 
 .status-dot--error {
-	background-color: var(--color-error, #e9322d);
+	background-color: var(--color-element-error, #cf2d2d);
 }
 
 .status-dot--neutral {
@@ -64,7 +64,7 @@ withDefaults(defineProps<{
 }
 
 @keyframes status-dot-pulse {
-	0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-success, #46ba61) 55%, transparent); }
+	0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-element-success, #2ea043) 55%, transparent); }
 	70% { box-shadow: 0 0 0 6px transparent; }
 	100% { box-shadow: 0 0 0 0 transparent; }
 }
