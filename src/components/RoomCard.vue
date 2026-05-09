@@ -1,10 +1,10 @@
 <template>
 	<article class="room-card" :class="{ 'room-card--expired': isExpired }">
 		<header class="room-card__header">
-			<span
-				class="room-card__status"
-				:class="{ 'room-card__status--off': isExpired }"
-				:aria-label="isExpired ? t('playbacksync', 'Expired') : t('playbacksync', 'Live')" />
+			<StatusDot
+				:variant="isExpired ? 'neutral' : 'success'"
+				:size="10"
+				:ariaLabel="isExpired ? t('playbacksync', 'Expired') : t('playbacksync', 'Live')" />
 			<h3 class="room-card__title" :class="{ 'room-card__title--mono': !room.name }">
 				{{ room.name || shortUuid }}
 			</h3>
@@ -73,6 +73,7 @@ import IconCheck from 'vue-material-design-icons/Check.vue'
 import IconCopy from 'vue-material-design-icons/ContentCopy.vue'
 import IconDelete from 'vue-material-design-icons/Delete.vue'
 import IconLink from 'vue-material-design-icons/LinkVariant.vue'
+import StatusDot from './StatusDot.vue'
 import { useNow } from '../composables/useNow.ts'
 
 const props = defineProps<{
@@ -205,42 +206,6 @@ async function copyShareLink() {
 	align-items: center;
 	gap: 8px;
 	min-width: 0;
-}
-
-.room-card__status {
-	flex: 0 0 auto;
-	width: 10px;
-	height: 10px;
-	border-radius: 50%;
-	background-color: var(--color-success, #46ba61);
-	box-shadow: 0 0 0 0 var(--color-success, #46ba61);
-	animation: room-card-pulse 1.8s ease-out infinite;
-}
-
-.room-card__status--off {
-	background-color: var(--color-text-maxcontrast, #888);
-	box-shadow: none;
-	animation: none;
-}
-
-@keyframes room-card-pulse {
-	0% {
-		box-shadow: 0 0 0 0 rgba(70, 186, 97, 0.55);
-	}
-
-	70% {
-		box-shadow: 0 0 0 8px rgba(70, 186, 97, 0);
-	}
-
-	100% {
-		box-shadow: 0 0 0 0 rgba(70, 186, 97, 0);
-	}
-}
-
-@media (prefers-reduced-motion: reduce) {
-	.room-card__status {
-		animation: none;
-	}
 }
 
 .room-card__title {

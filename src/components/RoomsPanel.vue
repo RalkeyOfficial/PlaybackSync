@@ -1,7 +1,12 @@
 <template>
 	<div class="rooms-panel">
 		<header class="rooms-panel__header">
-			<NcButton variant="primary" @click="createDialogOpen = true">
+			<WsStatusBadge />
+			<NcButton
+				variant="primary"
+				:disabled="wsStatus.isUnavailable"
+				:title="createButtonTooltip"
+				@click="createDialogOpen = true">
 				<template #icon>
 					<IconPlus :size="20" />
 				</template>
@@ -21,7 +26,11 @@
 					<IconSync :size="64" />
 				</template>
 				<template #action>
-					<NcButton variant="primary" @click="createDialogOpen = true">
+					<NcButton
+						variant="primary"
+						:disabled="wsStatus.isUnavailable"
+						:title="createButtonTooltip"
+						@click="createDialogOpen = true">
 						<template #icon>
 							<IconPlus :size="20" />
 						</template>
@@ -41,7 +50,7 @@
 import type { Room } from '../types/room.ts'
 
 import { translate as t } from '@nextcloud/l10n'
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import NcButton from '@nextcloud/vue/components/NcButton'
 import NcEmptyContent from '@nextcloud/vue/components/NcEmptyContent'
 import NcLoadingIcon from '@nextcloud/vue/components/NcLoadingIcon'
@@ -50,13 +59,23 @@ import IconSync from 'vue-material-design-icons/Sync.vue'
 import RoomCreatedDialog from './RoomCreatedDialog.vue'
 import RoomCreateDialog from './RoomCreateDialog.vue'
 import RoomList from './RoomList.vue'
+import WsStatusBadge from './WsStatusBadge.vue'
 import { useRoomsStore } from '../stores/rooms.ts'
+import { useWsStatusStore } from '../stores/wsStatus.ts'
 
 const store = useRoomsStore()
+const wsStatus = useWsStatusStore()
 const createDialogOpen = ref(false)
+
+const createButtonTooltip = computed(() => (
+	wsStatus.isUnavailable
+		? t('playbacksync', 'The WebSocket sync service is not installed. Ask an administrator to set it up.')
+		: ''
+))
 
 onMounted(() => {
 	store.load()
+	wsStatus.load()
 })
 
 /**
@@ -87,8 +106,9 @@ async function onDelete(room: Room) {
 .rooms-panel__header {
 	display: flex;
 	align-items: center;
-	justify-content: flex-end;
+	justify-content: space-between;
 	gap: 12px;
+	flex-wrap: wrap;
 }
 
 .rooms-panel__body {
