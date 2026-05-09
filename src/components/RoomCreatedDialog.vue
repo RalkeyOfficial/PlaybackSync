@@ -12,32 +12,23 @@
 
 			<div class="field">
 				<span class="field__label">{{ t('playbacksync', 'Password') }}</span>
-				<div class="field__row">
-					<code class="field__value field__value--mono">{{ room.password }}</code>
-					<NcButton :aria-label="t('playbacksync', 'Copy password')" @click="copy(room.password, 'password')">
-						<template #icon>
-							<IconCheck v-if="copied === 'password'" :size="20" />
-							<IconCopy v-else :size="20" />
-						</template>
-					</NcButton>
-				</div>
+				<code class="field__value field__value--mono">{{ room.password }}</code>
 			</div>
 
 			<div class="field">
 				<span class="field__label">{{ t('playbacksync', 'Share link') }}</span>
-				<div class="field__row">
-					<code class="field__value">{{ room.shareLink }}</code>
-					<NcButton :aria-label="t('playbacksync', 'Copy share link')" @click="copy(room.shareLink, 'link')">
-						<template #icon>
-							<IconCheck v-if="copied === 'link'" :size="20" />
-							<IconCopy v-else :size="20" />
-						</template>
-					</NcButton>
-				</div>
+				<code class="field__value">{{ room.shareLink }}</code>
 			</div>
 		</div>
 
 		<template #actions>
+			<NcButton @click="copyForDiscord">
+				<template #icon>
+					<IconCheck v-if="copied" :size="20" />
+					<IconCopy v-else :size="20" />
+				</template>
+				{{ t('playbacksync', 'Copy for Discord') }}
+			</NcButton>
 			<NcButton variant="primary" @click="onOpenChange(false)">
 				{{ t('playbacksync', 'Done') }}
 			</NcButton>
@@ -68,26 +59,24 @@ const emit = defineEmits<{
 
 const logger = getLoggerBuilder().setApp('playbacksync').detectUser().build()
 
-const copied = ref<'password' | 'link' | null>(null)
+const copied = ref(false)
 
 /**
- * Copy the password or share link to the clipboard and briefly mark the
- * corresponding button as "copied" so the user gets visual feedback.
- *
- * @param value the string to write to the clipboard
- * @param kind which field is being copied; drives the toast text and the icon swap
+ * Copy a Discord-friendly block containing the share link and password to the
+ * clipboard. The link is wrapped in `<…>` to suppress Discord's link preview,
+ * and the password is fenced as inline code so it is easy to select.
  */
-async function copy(value: string, kind: 'password' | 'link') {
+async function copyForDiscord() {
+	if (!props.room) {
+		return
+	}
+	const text = `**PlaybackSync Room**\n🔗 <${props.room.shareLink}>\n🔑 \`${props.room.password}\``
 	try {
-		await navigator.clipboard.writeText(value)
-		copied.value = kind
-		showSuccess(kind === 'password'
-			? t('playbacksync', 'Password copied')
-			: t('playbacksync', 'Share link copied'))
+		await navigator.clipboard.writeText(text)
+		copied.value = true
+		showSuccess(t('playbacksync', 'Room details copied'))
 		setTimeout(() => {
-			if (copied.value === kind) {
-				copied.value = null
-			}
+			copied.value = false
 		}, 1500)
 	} catch (error) {
 		logger.error('Clipboard write failed', { error })
