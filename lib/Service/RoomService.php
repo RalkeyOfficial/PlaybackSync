@@ -111,6 +111,17 @@ class RoomService {
 		$this->mapper->delete($room);
 	}
 
+	/**
+	 * Verify a plaintext password against a room's stored hash.
+	 *
+	 * Used by the WebSocket layer on `JOIN` so it doesn't have to reach for
+	 * IHasher directly. Returns false on mismatch and true on match — never
+	 * throws — so the caller can shape its own error response.
+	 */
+	public function verifyPassword(Room $room, string $plainPassword): bool {
+		return $this->hasher->verify($plainPassword, $room->getPasswordHash());
+	}
+
 	private function getDefaultTtlSeconds(): int {
 		$configured = $this->appConfig->getValueInt(Application::APP_ID, 'default_ttl_seconds', self::DEFAULT_TTL_SECONDS);
 		if ($configured < 1 || $configured > self::MAX_TTL_SECONDS) {

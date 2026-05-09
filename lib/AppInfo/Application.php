@@ -4,19 +4,37 @@ declare(strict_types=1);
 
 namespace OCA\PlaybackSync\AppInfo;
 
+use OCA\PlaybackSync\WebSocket\RoomRegistry;
+use OCA\PlaybackSync\WebSocket\WsConfig;
 use OCP\AppFramework\App;
 use OCP\AppFramework\Bootstrap\IBootContext;
 use OCP\AppFramework\Bootstrap\IBootstrap;
 use OCP\AppFramework\Bootstrap\IRegistrationContext;
+use OCP\IAppConfig;
+use Psr\Container\ContainerInterface;
 
 class Application extends App implements IBootstrap {
 	public const APP_ID = 'playbacksync';
 
 	public function __construct() {
+		$autoload = __DIR__ . '/../../vendor/autoload.php';
+		if (file_exists($autoload)) {
+			require_once $autoload;
+		}
+
 		parent::__construct(self::APP_ID);
 	}
 
 	public function register(IRegistrationContext $context): void {
+		// WsConfig is a snapshot of IAppConfig values; build it via factory so
+		// the int constructor params don't trip up auto-wiring.
+		$context->registerService(WsConfig::class, static function (ContainerInterface $c): WsConfig {
+			return WsConfig::fromAppConfig($c->get(IAppConfig::class));
+		});
+
+		$context->registerService(RoomRegistry::class, static function (ContainerInterface $c): RoomRegistry {
+			return new RoomRegistry($c->get(WsConfig::class)->eventLogSize);
+		});
 	}
 
 	public function boot(IBootContext $context): void {

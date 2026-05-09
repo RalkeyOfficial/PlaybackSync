@@ -21,6 +21,10 @@
 		<job>OCA\PlaybackSync\BackgroundJob\PruneExpiredRoomsJob</job>
 	</background-jobs>
 
+	<commands>
+		<command>OCA\PlaybackSync\Command\WsServe</command>
+	</commands>
+
 	<navigations>
 		<navigation>
 			<name>PlaybackSync</name>

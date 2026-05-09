@@ -1,0 +1,22 @@
+{
+    "name": "nextcloud/playbacksync",
+    "description": "Synchronized video playback for groups",
+    "type": "project",
+    "license": "AGPL-3.0-or-later",
+    "config": {
+        "platform": {
+            "php": "8.1"
+        },
+        "sort-packages": true,
+        "optimize-autoloader": true
+    },
+    "require": {
+        "php": "^8.1",
+        "cboden/ratchet": "^0.4.4"
+    },
+    "autoload": {
+        "psr-4": {
+            "OCA\\PlaybackSync\\": "lib/"
+        }
+    }
+}
