@@ -1,9 +1,6 @@
 <template>
 	<div class="rooms-panel">
 		<header class="rooms-panel__header">
-			<h2 class="rooms-panel__title">
-				{{ t('playbacksync', 'Rooms') }}
-			</h2>
 			<NcButton variant="primary" @click="createDialogOpen = true">
 				<template #icon>
 					<IconPlus :size="20" />
@@ -90,14 +87,8 @@ async function onDelete(room: Room) {
 .rooms-panel__header {
 	display: flex;
 	align-items: center;
-	justify-content: space-between;
+	justify-content: flex-end;
 	gap: 12px;
-}
-
-.rooms-panel__title {
-	margin: 0;
-	font-size: var(--default-font-size, 14px);
-	font-weight: bold;
 }
 
 .rooms-panel__body {
