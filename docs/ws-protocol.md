@@ -316,6 +316,71 @@ A          Server          B          (B is already JOINed)
 |              |--STATE----->|
 ```
 
+## Admin HTTP
+
+In addition to the WebSocket port, the daemon binds a **loopback-only** HTTP endpoint that lets the Nextcloud rooms API surface live presence and playback state. This section documents the wire format. **Browser clients (Vue, browser extension) do not call this endpoint** — only the PHP request layer running on the same host does.
+
+### Endpoint
+
+```
+GET http://<ws_admin_host>:<ws_admin_port>/admin/rooms/presence?uuids=<csv>
+```
+
+Defaults: `127.0.0.1:8766`. The `uuids` query parameter is a comma-separated list of room UUIDv4 values. UUIDs the daemon doesn't currently hold a runtime for are silently absent from the response.
+
+### Authentication
+
+Every request must carry an `X-PBSync-Admin` header:
+
+```
+X-PBSync-Admin: t=<unix-ms>,sig=<hex>
+```
+
+- `t` — current time in milliseconds since epoch. Requests outside ±30 s of the daemon's clock are rejected with 401.
+- `sig` — `hmac_sha256(ws_admin_secret, "{method}\n{requestTarget}\n{t}")`. `requestTarget` is the path with query string exactly as it appears on the wire — tampering with `?uuids=…` invalidates the signature.
+
+If `ws_admin_secret` is empty the daemon refuses to start the admin endpoint.
+
+### Response (200)
+
+```json
+{
+  "rooms": {
+    "<roomUuid>": {
+      "connectedCount": 3,
+      "clients": [
+        { "clientId": "5c4df08c…", "isBuffering": false, "lastSeenMs": 1700000005000 },
+        { "clientId": "9a7e1bf2…", "isBuffering": true,  "lastSeenMs": 1700000004500 }
+      ],
+      "playerState": "playing",
+      "videoPos": 42.71,
+      "contentIdentity": {
+        "providerId": "netflix",
+        "episodeId": "S01E03",
+        "pageUrl": "https://www.example.com/watch/12345",
+        "contentKey": "fc4…"
+      },
+      "lastActivityMs": 1700000005000
+    }
+  }
+}
+```
+
+- `connectedCount` is the true total of currently-connected clients in the room. The `clients` array is capped at 50 entries; `connectedCount` may exceed `clients.length`.
+- `videoPos` is the server-extrapolated position right now (same definition as `ROOM_STATE.videoPos`), not the last-stored value.
+- `contentIdentity` is `null` until the first JOIN with content fields establishes one.
+- `lastActivityMs` is the latest of (a) any client's `lastSeenMs` and (b) the most recent event's `ts`. `null` for a runtime that has never had a client.
+
+### Error codes
+
+| Status | Body | Meaning |
+|---|---|---|
+| `400` | `{"error":"missing_request"}` | The HTTP frame couldn't be parsed. |
+| `401` | `{"error":"unauthorized"}` | Missing, malformed, expired, or wrong-signature `X-PBSync-Admin` header. |
+| `404` | `{"error":"not_found"}` | Path other than `/admin/rooms/presence`. |
+| `405` | `{"error":"method_not_allowed"}` | Verb other than `GET`. |
+| `500` | `{"error":"internal_error"}` | Unexpected daemon-side failure (also logged). |
+
 ## Sequence: A drops, reconnects, replays missed events
 
 ```

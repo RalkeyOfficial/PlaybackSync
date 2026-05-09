@@ -61,6 +61,27 @@ class RoomRuntime {
 	}
 
 	/**
+	 * Wall-clock timestamp of the most recent activity in this room, in
+	 * milliseconds. Defined as the latest of (a) any client's `lastSeenMs`
+	 * and (b) the most recent event's `ts`. Returns `null` for a room that
+	 * has never had a client (i.e. the runtime was created speculatively
+	 * but no one ever joined) — callers can render that as "no activity".
+	 */
+	public function lastActivityMs(): ?int {
+		$max = null;
+		foreach ($this->clients as $client) {
+			if ($max === null || $client->lastSeenMs > $max) {
+				$max = $client->lastSeenMs;
+			}
+		}
+		$tail = end($this->eventLog);
+		if ($tail !== false && ($max === null || $tail['ts'] > $max)) {
+			$max = $tail['ts'];
+		}
+		return $max;
+	}
+
+	/**
 	 * Append an event to the ring buffer. The buffer never exceeds
 	 * `eventLogSize` entries — older events are dropped silently because any
 	 * client that needed them missed its tombstone window anyway.

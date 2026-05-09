@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace OCA\PlaybackSync\Command;
 
 use OCA\PlaybackSync\AppInfo\Application;
+use OCA\PlaybackSync\WebSocket\Admin\PresenceHttpServer;
 use OCA\PlaybackSync\WebSocket\MessageRouter;
 use OCA\PlaybackSync\WebSocket\Tick;
 use OCP\IAppConfig;
@@ -31,6 +32,7 @@ class WsServe extends Command {
 		private readonly LoggerInterface $logger,
 		private readonly MessageRouter $router,
 		private readonly Tick $tick,
+		private readonly PresenceHttpServer $presenceHttp,
 	) {
 		parent::__construct();
 	}
@@ -64,8 +66,39 @@ class WsServe extends Command {
 		$output->writeln($msg);
 		$this->logger->info($msg);
 
+		$this->maybeStartAdminServer($loop, $output);
+
 		$server->run();
 
 		return Command::SUCCESS;
+	}
+
+	/**
+	 * Start the loopback admin HTTP server if a shared secret is configured.
+	 * Without a secret the admin endpoint would be effectively unauthenticated,
+	 * so we refuse to start it — the WS server itself is unaffected.
+	 */
+	private function maybeStartAdminServer(\React\EventLoop\LoopInterface $loop, OutputInterface $output): void {
+		$app = Application::APP_ID;
+		$secret = $this->appConfig->getValueString($app, 'ws_admin_secret', '');
+		if ($secret === '') {
+			$output->writeln('<comment>Admin HTTP server NOT started: ws_admin_secret is empty</comment>');
+			$this->logger->warning('PresenceHttpServer disabled: ws_admin_secret is not configured');
+			return;
+		}
+
+		$adminHost = $this->appConfig->getValueString($app, 'ws_admin_host', '127.0.0.1');
+		$adminPort = $this->appConfig->getValueInt($app, 'ws_admin_port', 8766);
+		$adminSocket = new SocketServer($adminHost . ':' . $adminPort, [], $loop);
+
+		new IoServer(
+			new HttpServer($this->presenceHttp),
+			$adminSocket,
+			$loop,
+		);
+
+		$msg = sprintf('PlaybackSync admin HTTP listening on %s:%d', $adminHost, $adminPort);
+		$output->writeln($msg);
+		$this->logger->info($msg);
 	}
 }

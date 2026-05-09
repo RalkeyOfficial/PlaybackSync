@@ -1,4 +1,4 @@
-import type { CreatedRoom, CreateRoomPayload, Room } from '../types/room.ts'
+import type { CreatedRoom, CreateRoomPayload, Room, RoomClientsResponse } from '../types/room.ts'
 
 import axios from '@nextcloud/axios'
 import { generateUrl } from '@nextcloud/router'
@@ -24,6 +24,20 @@ export async function listRooms(): Promise<Room[]> {
 }
 
 /**
+ * Fetch a single room by UUID. Used by the detail dialog to ensure the
+ * `live` block (presence, playback, content identity) reflects the
+ * daemon's *current* state at the moment the dialog opens, not whatever
+ * was cached in the rooms list.
+ *
+ * @param uuid the room's UUID
+ * @return the room as the server sees it right now
+ */
+export async function getRoom(uuid: string): Promise<Room> {
+	const { data } = await axios.get<Room>(apiUrl('/' + encodeURIComponent(uuid)))
+	return data
+}
+
+/**
  * Create a new room. The plaintext password is included in the response and
  * must be presented to the owner exactly once — it is not stored server-side.
  *
@@ -42,4 +56,18 @@ export async function createRoom(payload: CreateRoomPayload): Promise<CreatedRoo
  */
 export async function deleteRoom(uuid: string): Promise<void> {
 	await axios.delete(apiUrl('/' + encodeURIComponent(uuid)))
+}
+
+/**
+ * Fetch the connected-client list for a single room. A focused, lower-overhead
+ * payload than `listRooms` for callers that only need presence — e.g. a future
+ * detail panel that polls more frequently than the rooms list refreshes.
+ *
+ * @param uuid the room's UUID
+ * @return the connected count and per-client metadata, or zero/empty when the
+ *         daemon is unreachable or the room has no live state
+ */
+export async function getRoomClients(uuid: string): Promise<RoomClientsResponse> {
+	const { data } = await axios.get<RoomClientsResponse>(apiUrl('/' + encodeURIComponent(uuid) + '/clients'))
+	return data
 }

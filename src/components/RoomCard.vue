@@ -1,28 +1,44 @@
 <template>
-	<article class="room-card" :class="{ 'room-card--expired': isExpired }">
+	<article
+		class="room-card room-card--clickable"
+		:class="{ 'room-card--expired': isExpired }"
+		role="button"
+		tabindex="0"
+		:aria-label="t('playbacksync', 'Open details for room {name}', { name: title })"
+		@click="openDetail"
+		@keydown.enter.prevent="openDetail"
+		@keydown.space.prevent="openDetail">
 		<header class="room-card__header">
 			<StatusDot
 				:variant="isExpired ? 'neutral' : 'success'"
 				:size="10"
 				:ariaLabel="isExpired ? t('playbacksync', 'Expired') : t('playbacksync', 'Live')" />
 			<h3 class="room-card__title" :class="{ 'room-card__title--mono': !room.name }">
-				{{ room.name || shortUuid }}
+				{{ title }}
 			</h3>
-			<NcActions :forceMenu="true" :inline="0">
-				<NcActionButton :closeAfterClick="true" @click="copyShareLink">
-					<template #icon>
-						<IconCheck v-if="copied" :size="20" />
-						<IconLink v-else :size="20" />
-					</template>
-					{{ t('playbacksync', 'Copy share link') }}
-				</NcActionButton>
-				<NcActionButton :closeAfterClick="true" @click="emit('delete', room)">
-					<template #icon>
-						<IconDelete :size="20" />
-					</template>
-					{{ t('playbacksync', 'Delete room') }}
-				</NcActionButton>
-			</NcActions>
+			<div class="room-card__actions" @click.stop>
+				<NcActions :forceMenu="true" :inline="0">
+					<NcActionButton :closeAfterClick="true" @click="copyShareLink">
+						<template #icon>
+							<IconCheck v-if="copied" :size="20" />
+							<IconLink v-else :size="20" />
+						</template>
+						{{ t('playbacksync', 'Copy share link') }}
+					</NcActionButton>
+					<NcActionButton :closeAfterClick="true" @click="openDetail">
+						<template #icon>
+							<IconOpenInNew :size="20" />
+						</template>
+						{{ t('playbacksync', 'View details') }}
+					</NcActionButton>
+					<NcActionButton :closeAfterClick="true" @click="emit('delete', room)">
+						<template #icon>
+							<IconDelete :size="20" />
+						</template>
+						{{ t('playbacksync', 'Delete room') }}
+					</NcActionButton>
+				</NcActions>
+			</div>
 		</header>
 
 		<a
@@ -30,7 +46,8 @@
 			:href="room.targetUrl"
 			:title="room.targetUrl"
 			target="_blank"
-			rel="noopener noreferrer">
+			rel="noopener noreferrer"
+			@click.stop>
 			{{ room.targetUrl }}
 		</a>
 
@@ -42,20 +59,23 @@
 		</div>
 
 		<footer class="room-card__footer">
-			<span class="room-card__created">
-				{{ t('playbacksync', 'Created {when}', { when: createdAgo }) }}
+			<span class="room-card__meta" :title="t('playbacksync', 'Created')">
+				<IconClock :size="14" />
+				<span>{{ createdAgo }}</span>
 			</span>
-			<NcButton
-				:aria-label="t('playbacksync', 'Copy share link')"
-				size="small"
-				@click="copyShareLink">
-				<template #icon>
-					<IconCheck v-if="copied" :size="16" />
-					<IconCopy v-else :size="16" />
-				</template>
-				{{ copied ? t('playbacksync', 'Copied') : t('playbacksync', 'Copy link') }}
-			</NcButton>
+			<span
+				class="room-card__meta room-card__meta--viewers"
+				:class="{ 'room-card__meta--active': live && live.connectedCount > 0 }"
+				:title="t('playbacksync', 'Connected viewers')">
+				<IconAccountMultiple :size="14" />
+				<span>{{ viewersDisplay }}</span>
+			</span>
 		</footer>
+
+		<RoomDetailDialog
+			v-model:open="detailOpen"
+			:room="room"
+			@delete="onDeleteFromDialog" />
 	</article>
 </template>
 
@@ -68,11 +88,13 @@ import { getLoggerBuilder } from '@nextcloud/logger'
 import { computed, ref } from 'vue'
 import NcActionButton from '@nextcloud/vue/components/NcActionButton'
 import NcActions from '@nextcloud/vue/components/NcActions'
-import NcButton from '@nextcloud/vue/components/NcButton'
+import IconAccountMultiple from 'vue-material-design-icons/AccountMultiple.vue'
 import IconCheck from 'vue-material-design-icons/Check.vue'
-import IconCopy from 'vue-material-design-icons/ContentCopy.vue'
+import IconClock from 'vue-material-design-icons/ClockOutline.vue'
 import IconDelete from 'vue-material-design-icons/Delete.vue'
 import IconLink from 'vue-material-design-icons/LinkVariant.vue'
+import IconOpenInNew from 'vue-material-design-icons/OpenInNew.vue'
+import RoomDetailDialog from './RoomDetailDialog.vue'
 import StatusDot from './StatusDot.vue'
 import { useNow } from '../composables/useNow.ts'
 
@@ -88,13 +110,30 @@ const logger = getLoggerBuilder().setApp('playbacksync').detectUser().build()
 
 const now = useNow()
 const copied = ref(false)
+const detailOpen = ref(false)
 
 const shortUuid = computed(() => props.room.uuid.replace(/-/g, '').slice(0, 8))
+
+const title = computed(() => props.room.name?.trim() || shortUuid.value)
 
 const isExpired = computed(() => props.room.expiresAt <= now.value)
 
 const ttl = computed(() => formatDuration(props.room.expiresAt - now.value))
 const createdAgo = computed(() => formatRelativePast(now.value - props.room.createdAt))
+
+const live = computed(() => props.room.live)
+
+/**
+ * Footer viewers count: rendered as the live `connectedCount` when known,
+ * `0` when the daemon reachable but room empty, or `—` when live state
+ * isn't available at all (daemon offline / not configured).
+ */
+const viewersDisplay = computed(() => {
+	if (!live.value) {
+		return '—'
+	}
+	return String(live.value.connectedCount)
+})
 
 /**
  * Render a positive millisecond duration as the largest two units, e.g.
@@ -159,6 +198,23 @@ function pad(n: number): string {
 }
 
 /**
+ * Open the detail dialog for this room. Triggered both by clicking the
+ * card body and by the "View details" entry in the actions menu.
+ */
+function openDetail() {
+	detailOpen.value = true
+}
+
+/**
+ * Forward a delete request originating from the dialog to the parent.
+ *
+ * @param room the room to delete
+ */
+function onDeleteFromDialog(room: Room) {
+	emit('delete', room)
+}
+
+/**
  * Copy the room's share link to the clipboard and toggle the local
  * `copied` state for a short period so the icon swap and label confirm
  * the action.
@@ -189,12 +245,18 @@ async function copyShareLink() {
 	border-radius: var(--border-radius-large, 12px);
 	box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
 	transition: box-shadow 150ms ease, transform 150ms ease, border-color 150ms ease;
+	cursor: pointer;
 }
 
 .room-card:hover {
 	box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
 	border-color: var(--color-border-dark, var(--color-border));
 	transform: translateY(-1px);
+}
+
+.room-card:focus-visible {
+	outline: 2px solid var(--color-primary-element, var(--color-primary));
+	outline-offset: 2px;
 }
 
 .room-card--expired {
@@ -224,6 +286,10 @@ async function copyShareLink() {
 	letter-spacing: 0.05em;
 }
 
+.room-card__actions {
+	cursor: default;
+}
+
 .room-card__url {
 	display: block;
 	padding: 6px 10px;
@@ -236,6 +302,7 @@ async function copyShareLink() {
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
+	cursor: pointer;
 }
 
 .room-card__url:hover,
@@ -272,14 +339,25 @@ async function copyShareLink() {
 	justify-content: space-between;
 	gap: 8px;
 	margin-top: auto;
-	padding-top: 4px;
+	padding-top: 8px;
 	border-top: 1px solid var(--color-border);
 }
 
-.room-card__created {
-	font-family: var(--font-monospace, monospace);
-	font-size: 11px;
+.room-card__meta {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	font-size: 12px;
 	color: var(--color-text-maxcontrast);
-	letter-spacing: 0.03em;
+	font-variant-numeric: tabular-nums;
+}
+
+.room-card__meta--active {
+	color: var(--color-success-text, var(--color-main-text));
+	font-weight: 600;
+}
+
+.room-card__meta--viewers {
+	font-family: var(--font-monospace, monospace);
 }
 </style>

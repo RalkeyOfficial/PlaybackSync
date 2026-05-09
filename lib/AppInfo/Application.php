@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace OCA\PlaybackSync\AppInfo;
 
+use OCA\PlaybackSync\WebSocket\Admin\AdminAuthMiddleware;
 use OCA\PlaybackSync\WebSocket\RoomRegistry;
 use OCA\PlaybackSync\WebSocket\WsConfig;
 use OCP\AppFramework\App;
@@ -34,6 +35,16 @@ class Application extends App implements IBootstrap {
 
 		$context->registerService(RoomRegistry::class, static function (ContainerInterface $c): RoomRegistry {
 			return new RoomRegistry($c->get(WsConfig::class)->eventLogSize);
+		});
+
+		// AdminAuthMiddleware needs the configured shared secret. We read it
+		// here rather than in WsConfig because (a) it's not a hot-path tunable
+		// and (b) WsConfig is also instantiated in PHP-FPM contexts where the
+		// admin server isn't relevant.
+		$context->registerService(AdminAuthMiddleware::class, static function (ContainerInterface $c): AdminAuthMiddleware {
+			$cfg = $c->get(IAppConfig::class);
+			$secret = $cfg->getValueString(self::APP_ID, 'ws_admin_secret', '');
+			return new AdminAuthMiddleware($secret);
 		});
 	}
 

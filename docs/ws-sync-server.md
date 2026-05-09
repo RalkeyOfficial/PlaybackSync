@@ -115,8 +115,25 @@ sudo -u www-data php occ config:app:set playbacksync <key> --value <value>
 | `ws_drift_nudge_threshold_ms` | `200` | Drift below this is ignored. Above this and below the seek threshold triggers `SYNC_ADJUST mode=nudge-rate`. |
 | `ws_drift_seek_threshold_ms` | `500` | Drift at or above this triggers `SYNC_ADJUST mode=seek`. |
 | `ws_drift_cooldown_ms` | `3000` | Drift correction is suppressed for this long after every explicit `EVENT` or `EPISODE_CHANGE`. |
+| `ws_admin_host` | `127.0.0.1` | Interface for the loopback admin HTTP endpoint. **Keep on loopback** — never proxy this. |
+| `ws_admin_port` | `8766` | TCP port for the admin HTTP endpoint. |
+| `ws_admin_secret` | *(auto-generated)* | Shared secret for HMAC-signed admin requests. Auto-generated on `occ app:enable` / `occ upgrade` via a repair step — operators don't need to set this manually. If somehow empty, the daemon refuses to start the admin endpoint (the WS server itself runs regardless); re-running `occ maintenance:repair` regenerates it. |
 
 Daemon-level options (`--host`, `--port`) override the corresponding app-config keys for the current invocation, which is useful when running multiple instances in dev.
+
+### Admin HTTP setup
+
+The PHP-side rooms API queries the daemon for live presence and playback state via a small HMAC-signed HTTP endpoint co-located with the WebSocket server. The shared secret (`ws_admin_secret`) is **seeded automatically** by a repair step on `occ app:enable` and on every `occ upgrade`, so operators don't normally need to touch it.
+
+To rotate the secret manually (e.g. after a suspected leak):
+
+```bash
+sudo -u www-data php occ config:app:delete playbacksync ws_admin_secret
+sudo -u www-data php occ maintenance:repair
+sudo systemctl restart playbacksync-ws.service   # or pkill -f ws-serve
+```
+
+If `ws_admin_secret` is somehow unset the rooms API still works — every room just renders with `live: null` (presence/playback fields hidden in the UI). The admin port stays bound to `127.0.0.1` by default and **must never** be added to the reverse proxy: it has no public-facing surface, only the loopback API path. See [`ws-protocol.md`](ws-protocol.md) for the request/response shape.
 
 ## Verifying the deployment
 
