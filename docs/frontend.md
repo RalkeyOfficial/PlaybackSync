@@ -1,0 +1,65 @@
+# Frontend
+
+The frontend lives under [`src/`](../src/) and is a small Vue 3 single-page application bundled by Vite. It is intentionally simple: there is no router, no view-layer state machine, no internationalization framework beyond what Nextcloud provides, and exactly one Pinia store. The whole UI is essentially "a list, a button, and two dialogs", which is why splitting it into anything more elaborate would be over-engineering. This document walks through the moving parts in roughly the order Vue would touch them on a fresh page load.
+
+## Bundle entry and mounting
+
+The bundle's entry point is [`src/index.ts`](../src/index.ts). It does three things and only three things: it creates a Pinia instance, it creates a Vue app from `App.vue`, it installs Pinia, and it mounts the app on `#playbacksync-root`. That mount target is the empty `<div>` rendered by `templates/index.php` from the PHP page response, so there is a clean boundary between Nextcloud's HTML shell (which provides the page chrome, dark theme, top bar, user menu) and the part the Vue app owns (everything inside that div).
+
+There is deliberately nothing else in `index.ts`. We don't register global components, we don't install custom directives, we don't preload state. Pinia's lazy-store pattern means the rooms store doesn't actually exist until the first component that calls `useRoomsStore()` runs, which keeps the entry tree tiny and makes the bundle's startup cost minimal.
+
+## The Vite config and CSS
+
+[`vite.config.ts`](../vite.config.ts) uses `@nextcloud/vite-config`'s `createAppConfig` helper, which knows how to produce a bundle Nextcloud will accept (correct file naming, correct module type, correct license-extraction behavior). The one non-default we care about is `inlineCSS: true`, which makes Vite embed component styles directly into the JavaScript bundle so they get applied as soon as the bundle executes. Without that flag, Vite would emit separate hash-named CSS chunks (`main-DtQcGVuY.chunk.css` and friends) that the page never loads, because the PHP template only enqueues the JS module via `Util::addScript`. The result of *that* is a page where every `@nextcloud/vue` component renders unstyled, which is a confusing failure mode if you don't know what to look for. Inlining CSS sidesteps the whole issue at the cost of a slightly larger bundle.
+
+The other Vite settings — license extraction, third-party-license handling, the additional `css/` directory in `emptyOutputDirectory` (which doesn't actually get created in `inlineCSS: true` mode but is harmless) — are stock Nextcloud-app defaults and don't need to be changed for normal feature work.
+
+## App.vue
+
+[`src/App.vue`](../src/App.vue) is the smallest possible useful App component. It wraps the page in `NcContent` (which provides the dark-theme background and the flexbox layout the Nextcloud shell expects), then puts a single `NcAppContent` inside it, and inside *that* mounts `RoomsPanel`. There is no `NcAppNavigation` and no nav rail at all, by design: every piece of management UI lives inside the dashboard. If we ever need a second view, we will add a router and an `NcAppNavigation` together; until then, neither earns its keep.
+
+`appName="playbacksync"` on `NcContent` is what wires the component into Nextcloud's design tokens, telling it which app's icon and theming to inherit. That string is the same `APP_ID` the PHP side uses, just in lowercase.
+
+## RoomsPanel
+
+[`src/components/RoomsPanel.vue`](../src/components/RoomsPanel.vue) is the orchestrator for the entire feature. It's the only component that talks to the rooms store directly — every other component receives data through props or fires events. That keeps the data flow predictable: if you want to know "where does this room list come from?", the answer is always `RoomsPanel`, never one level deeper.
+
+When mounted, it kicks off `store.load()` to fetch the current user's rooms. While the request is in flight and we have not yet seen any data, it shows a centered loading spinner. Once data has arrived, it either renders `RoomList` (if there are rooms) or `NcEmptyContent` (if there aren't). The reason the loading state is gated on `!store.loaded` rather than just `store.loading` is that subsequent loads — for example, after a refresh action — should not blank out the UI: we want them to feel like a soft refresh, not a full re-render.
+
+`RoomsPanel` also owns the *open state* of the create dialog (a local `ref<boolean>`) and reads the *open state* of the created-room dialog from the store (`store.lastCreated`). That distinction is intentional: a fresh create-form is purely UI state with no need to survive a navigation or a store refresh, while the just-created-room information needs to persist across whatever component lifecycle decisions Vue might make and is therefore a store concern.
+
+## The Pinia store
+
+[`src/stores/rooms.ts`](../src/stores/rooms.ts) is the single source of truth for everything room-related on the client side. The shape is simple: a `rooms` array holding the current user's rooms, a couple of boolean flags for loading and creating states, a `loaded` flag that flips true after the first successful list fetch, and a `lastCreated` field that holds the most recently created room *with* its plaintext password attached. The `lastCreated` field is the mechanism by which the create flow shows the password to the user exactly once: when create succeeds, the store sets `lastCreated`, the `RoomsPanel` watches that field, the password dialog opens with the value, and the user dismisses it via `dismissLastCreated()` which clears the field back to `null`.
+
+The actions follow a small, consistent pattern. They wrap the async work in try/catch, surface failures via `@nextcloud/dialogs`'s `showError` toast, log the underlying error through `@nextcloud/logger`, and (where applicable) update the local `rooms` array optimistically — for example, `remove` filters the deleted room out of the array immediately so the UI feels instant, and `create` prepends the new room. There is no rollback logic if the optimistic update turns out to be wrong, which is a deliberate simplification: the friend-group threat model doesn't justify the complexity, and a refresh would correct any inconsistency anyway.
+
+The `extractErrorMessage` helper at the bottom of the file is a small but important detail. When the backend returns a 400 with `{ "error": "targetUrl must be a valid http(s) URL." }`, this helper picks that string out of the axios error structure so the toast can show it instead of a generic "Could not create room." fallback. Validation errors are usually the most useful kind to surface verbatim because the user needs to know exactly what is wrong with their input.
+
+## The API service
+
+[`src/services/roomsApi.ts`](../src/services/roomsApi.ts) is just three exported functions and a private URL helper, but it earns its own file because it is the single place the frontend speaks HTTP. Every component goes through the store; the store goes through this service; the service is the only thing that actually imports `axios` and `generateUrl`. If we ever want to add a request interceptor — say, to inject a request ID, log timings, or retry on flaky networks — this is the only file that needs to change.
+
+The functions are typed: `listRooms` returns `Promise<Room[]>`, `createRoom` returns `Promise<CreatedRoom>` (which is `Room` plus the plaintext password), `deleteRoom` returns `Promise<void>`. The types are defined in [`src/types/room.ts`](../src/types/room.ts) and are the same shape the backend's `serializeRoom` produces. Keeping the API service strongly typed means TypeScript catches it immediately if the backend or the frontend drift apart on the field set.
+
+## The dialogs
+
+[`src/components/RoomCreateDialog.vue`](../src/components/RoomCreateDialog.vue) is the form for creating a room. It uses `NcDialog` for the chrome, `NcTextField` for the name and target-URL inputs, and a plain native `<select>` for the TTL because none of `@nextcloud/vue`'s dropdown components map cleanly to "pick one of four predefined seconds-counts" without overcomplicating things. The validation logic is intentionally lightweight on the client — it checks that the target URL looks roughly like an http(s) URL — because the backend service is the authoritative validator. We don't want two different sources of truth telling the user different things about what's valid.
+
+The dialog binds its open state via `v-model:open` to its parent `RoomsPanel`, and it suppresses close attempts while a create request is in flight by intercepting the `update:open` event. That's a small UX detail that prevents a user from clicking "Cancel" mid-submission and ending up with a half-confused state where the server creates the room but the dialog is already gone.
+
+[`src/components/RoomCreatedDialog.vue`](../src/components/RoomCreatedDialog.vue) is the one-time password presentation. It opens whenever `store.lastCreated` is non-null and shows the password and share link side by side, each with its own copy button. The copy buttons use the standard `navigator.clipboard.writeText()` API and briefly swap their icon to a checkmark on success, so the user gets visual feedback without needing a toast. There is also an `NcNoteCard` warning that the password will not be shown again, which is the only piece of UX that hammers home the "this is your one chance" semantics — be very careful about removing or weakening that warning, because the password genuinely is unrecoverable once dismissed.
+
+## RoomList
+
+[`src/components/RoomList.vue`](../src/components/RoomList.vue) is fully presentational. It takes a `rooms` prop and emits a `delete` event when the user clicks the delete action on a row. It renders each room as an `NcListItem` with a play-icon, the room's name (or its UUID if there's no name), and a localized "Expires {date}" subname. The component knows nothing about the store, the API, or the network; you could give it a hand-crafted array of `Room` objects and it would render them just fine. That makes it easy to test or to reuse if we ever need a non-store-backed listing surface.
+
+## Internationalization
+
+Every user-facing string in the app goes through `translate()` from `@nextcloud/l10n`, imported as `t` in every component that needs it. The first argument is the app slug `'playbacksync'` (which is what tells Nextcloud which translations bundle to look in), and the second is the source-language English string. Nextcloud's translation tooling looks for these calls at build time and harvests the strings into the `l10n/*.js` files, where translators can replace them with localized versions.
+
+Two language files exist today: [`l10n/en.js`](../l10n/en.js) (the source-language English) and [`l10n/nl.js`](../l10n/nl.js) (Dutch, since the maintainer speaks Dutch). When you add a new string to a component, add it to both files. The shape of these files is dictated by Nextcloud (`OC.L10N.register` followed by a key-value map), so don't try to be clever with bundlers or generators — keep the files plain JS the way Nextcloud expects them.
+
+## Why no router
+
+A vue-router was considered during planning and was rejected because the entire app fits on one page. Routing introduces history-stack semantics, navigation guards, and a chunk of bundle size that pays for itself only when you actually have multiple distinct views. Until we do, the simplest possible answer — one `App.vue`, one `RoomsPanel`, two dialogs — is the right one. If a second view ever becomes necessary, it will be cheap to add then; pre-installing the abstraction now would be a classic case of designing for hypothetical future requirements that may never arrive.

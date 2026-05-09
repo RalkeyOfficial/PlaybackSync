@@ -5,7 +5,7 @@
 	<name>PlaybackSync</name>
 	<summary>Synchronized video playback for groups</summary>
 	<description><![CDATA[Watch videos in sync with others. Create a room, share the link, and enjoy synchronized playback across all participants.]]></description>
-	<version>0.1.0</version>
+	<version>0.2.0</version>
 	<licence>agpl</licence>
 	<namespace>PlaybackSync</namespace>
 	<category>multimedia</category>
@@ -16,6 +16,10 @@
 	<dependencies>
 		<nextcloud min-version="34" max-version="34" />
 	</dependencies>
+
+	<background-jobs>
+		<job>OCA\PlaybackSync\BackgroundJob\PruneExpiredRoomsJob</job>
+	</background-jobs>
 
 	<navigations>
 		<navigation>
