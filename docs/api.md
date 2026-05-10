@@ -15,8 +15,11 @@ All endpoints live under the prefix `/apps/playbacksync/api/v1/rooms`. The `v1` 
 | `DELETE` | `/rooms/{uuid}/clients/{clientId}` | Forcibly disconnect one connected client | `204 No Content`   | Logged in    |
 | `GET`    | `/ws/status`            | Whether the WebSocket sync service is installed and configured | `200 OK` | Logged in |
 | `GET`    | `/health`               | WebSocket sync daemon liveness + light stats | `200 OK` | Public |
+| `GET`    | `/r/{uuid}`[²]          | Public share link — Basic Auth gate, then 302 to target with sync params | `302 Found` | Public (Basic Auth password) |
 
 [¹] Subject to the `restrict_to_admins` `IAppConfig` toggle — see [Authentication and authorization](#authentication-and-authorization).
+
+[²] Lives outside the `/api/v1` prefix because it's not a JSON API call — it's a redirect target meant to be opened in a browser.
 
 ## Authentication and authorization
 
@@ -37,7 +40,7 @@ Every successful response that includes a room (or rooms) uses the same field sh
 | `targetUrl`  | string (URL)     | No       | Always       | Absolute `http://` or `https://` URL participants will eventually be redirected to. Required at creation, never modified after.                                                                                                                                                                            |
 | `createdAt`  | integer (ms)     | No       | Always       | Unix timestamp in **milliseconds** at which the room was created.                                                                                                                                                                                                                                          |
 | `expiresAt`  | integer (ms)     | No       | Always       | Unix timestamp in **milliseconds** at which the room becomes invalid. After this point the row is invisible to API callers and is physically deleted by the prune job within the next hour.                                                                                                               |
-| `shareLink`  | string (URL)     | No       | Always       | Absolute URL that *will* resolve to the public Basic-Auth join endpoint in Phase 2. In the MVP it is a forward-looking placeholder; clients should display and copy it, but it does not yet resolve to anything.                                                                                          |
+| `shareLink`  | string (URL)     | No       | Always       | Absolute URL of the public Basic-Auth join endpoint — see [Public share endpoint](#public-share-endpoint-ruuid). Clients should display and copy it; opening it in a browser triggers the password prompt.                                                                                                |
 | `password`   | string           | No       | Create only  | The 16-character plaintext one-time password, returned exactly once at creation time. Only ever appears on the `201` response from `POST /rooms`. The list, show, and delete endpoints never include it.                                                                                                  |
 
 ### Error response shape
@@ -322,6 +325,64 @@ curl -u alice:alice \
   'https://nextcloud.example/index.php/apps/playbacksync/api/v1/ws/status'
 ```
 
+### Public share endpoint (`/r/{uuid}`)
+
+```
+GET /apps/playbacksync/r/{uuid}
+```
+
+The link participants are given when an owner shares a room. This is the only path on the app that does not require a Nextcloud login — instead it gates on the room's password via HTTP Basic Auth and, on success, 302-redirects the visitor to the room's `targetUrl` with two query parameters appended (`sync_url` and `sync_password`) that downstream consumers (a browser extension, an embedded player) use to join the synchronized session.
+
+The route lives outside `/api/v1/` because it isn't a JSON API call — it's a redirect target meant to be opened in a browser. The contract intentionally mirrors the original Fastify implementation in `OLD_CODE/server/src/routes/share.ts` so existing extension code continues to work unchanged.
+
+#### Path parameters
+
+| Parameter | Type             | Description                              |
+|-----------|------------------|------------------------------------------|
+| `uuid`    | string (UUID v4) | The `uuid` field of an existing room.    |
+
+#### Authentication
+
+HTTP Basic Auth. The username is **ignored** (browsers strip user info from URLs anyway); only the password matters and is compared against the room's argon2id hash. On a missing or malformed `Authorization` header, the response is `401 Unauthorized` with `WWW-Authenticate: Basic realm="Room {uuid}"`, which triggers the browser's native password prompt.
+
+#### Brute-force protection
+
+Failed password attempts are registered with Nextcloud's `IThrottler` under the action name `playbacksync_share` and are subject to anonymous rate limiting (`#[AnonRateLimit(limit: 60, period: 60)]`). Repeated wrong-password attempts from the same IP get progressively delayed. *Missing* or malformed `Authorization` headers do not register as attempts — only verified-but-wrong passwords feed the throttler, so the very first hit (which by design has no credentials) isn't penalized.
+
+#### Success response
+
+`HTTP 302 Found`. Body is intentionally empty; the `Location` header points at the room's `targetUrl` with `sync_url` and `sync_password` merged into its query string. Existing query parameters on `targetUrl` are preserved; the URL fragment, if any, is preserved after the merged query.
+
+| Query param      | Value                                                                              |
+|------------------|------------------------------------------------------------------------------------|
+| `sync_url`       | `wss://<nextcloud-host>/apps/playbacksync/ws/{uuid}` (`ws://` for plain-HTTP setups). Derived from `IURLGenerator::getAbsoluteURL` — same host the share link was served from. |
+| `sync_password`  | The plaintext password the visitor just submitted via Basic Auth. Forwarded so the downstream consumer can present it on the WebSocket `JOIN`. |
+
+Example `Location` for a room whose `targetUrl` is `https://video.example/watch?ep=2`:
+
+```
+https://video.example/watch?ep=2&sync_url=wss%3A%2F%2Fcloud.example%2Fapps%2Fplaybacksync%2Fws%2F5a66524f-...&sync_password=UIjND2muufTfrrel
+```
+
+#### Failure modes
+
+| Status | Trigger                                                                                              | Body                          | `WWW-Authenticate` | Throttled? |
+|--------|------------------------------------------------------------------------------------------------------|-------------------------------|--------------------|------------|
+| 404    | UUID does not exist **or** room is past `expiresAt`. Collapsed deliberately — no leak.               | `{"error":"not_found"}`       | not set            | no         |
+| 401    | No `Authorization` header, header isn't `Basic`, or base64/`:` parsing fails.                        | `{"error":"unauthorized"}`    | `Basic realm="…"`  | no         |
+| 401    | Password verification failed against `Room::passwordHash`.                                            | `{"error":"unauthorized"}`    | `Basic realm="…"`  | yes (`playbacksync_share`) |
+
+#### Example
+
+```bash
+# Without a password — expect 401 + WWW-Authenticate
+curl -i 'https://nextcloud.example/index.php/apps/playbacksync/r/5a66524f-5ba1-4f3d-8897-7c5838c0bd80'
+
+# With the password — expect 302 with Location populated
+curl -i -u :UIjND2muufTfrrel \
+  'https://nextcloud.example/index.php/apps/playbacksync/r/5a66524f-5ba1-4f3d-8897-7c5838c0bd80'
+```
+
 ### WebSocket sync daemon healthcheck
 
 ```
@@ -403,13 +464,10 @@ You'll notice every example above passes `-H 'OCS-APIRequest: true'`. This is te
 
 When the WebSocket sync server lands, the API surface grows in two additive ways. Neither change breaks the `v1` contract documented above — that's exactly why the prefix is `v1` and not just `api`.
 
-| Change                     | Today (MVP)                                          | Phase 2                                                                                                       |
+| Change                     | Today                                                | Phase 2                                                                                                       |
 |----------------------------|------------------------------------------------------|---------------------------------------------------------------------------------------------------------------|
-| `shareLink` resolves       | No (placeholder URL, returns 404 if visited)         | Yes (`GET /apps/playbacksync/r/{uuid}` gates on Basic Auth against the room password, then redirects)         |
-| Public unauthenticated path| None                                                 | Exactly one: the share endpoint above. All other endpoints stay Nextcloud-login-gated.                        |
 | `lastState` field          | Absent — column does not exist                        | Present on rooms that have had playback activity. Carries paused flag, current time, provider, episode.       |
-| WebSocket connection URL   | N/A                                                  | Appended to the redirect target as a query parameter so the browser extension can pick it up                  |
 
-The share endpoint is intentionally separate from the management API. It lives at a different path (`/r/{uuid}` rather than `/api/v1/rooms/{uuid}`), it doesn't require a Nextcloud login, and it's the only place where unauthenticated traffic interacts with PlaybackSync. Keeping it cordoned off makes it easy to reason about the public attack surface in isolation.
+The share endpoint is intentionally separate from the management API. It lives at a different path (`/r/{uuid}` rather than `/api/v1/rooms/{uuid}`), it doesn't require a Nextcloud login, and it's the only place where unauthenticated traffic interacts with PlaybackSync (alongside the public `/health` probe). Keeping it cordoned off makes it easy to reason about the public attack surface in isolation.
 
 The `lastState` field will be optional on the response — omitted entirely on rooms that have never had any playback events — so existing API clients are unaffected by its addition. The MVP omits the database column for the same reason: there is no source for the data yet, and adding the column now would just be an empty `NULL`.

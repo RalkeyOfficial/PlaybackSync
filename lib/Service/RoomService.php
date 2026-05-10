@@ -108,6 +108,29 @@ class RoomService {
 		return $room;
 	}
 
+	/**
+	 * Look up a non-expired room by UUID without enforcing ownership.
+	 *
+	 * Used by the public share endpoint, which gates on the room password
+	 * rather than the caller's Nextcloud identity. Collapses unknown and
+	 * expired into the same `RoomNotFoundException` surface so the controller
+	 * cannot accidentally leak existence of an expired room.
+	 */
+	public function getActiveRoom(string $uuid): Room {
+		try {
+			$room = $this->mapper->findByUuid($uuid);
+		} catch (DoesNotExistException) {
+			throw new RoomNotFoundException('Room not found.');
+		}
+
+		$now = $this->timeFactory->getTime() * 1000;
+		if ($room->getExpiresAt() <= $now) {
+			throw new RoomNotFoundException('Room not found.');
+		}
+
+		return $room;
+	}
+
 	public function deleteOwnedRoom(string $userId, string $uuid): void {
 		$room = $this->getOwnedRoom($userId, $uuid);
 		$this->mapper->delete($room);

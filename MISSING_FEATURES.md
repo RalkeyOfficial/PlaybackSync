@@ -12,7 +12,6 @@ Comparison of features documented in `OLD_CODE/docs/` against the current `docs/
 
 ## Deferred per current roadmap (not gaps, just FYI)
 
-- **Public share endpoint** `GET /r/{uuid}` with Basic Auth gate — Phase 2 in `docs/README.md`.
 - **Participant list / live presence in API** — Phase 2 spec `agent-os/specs/2026-05-09-1900-rooms-api-live-state/`.
 - **`last_state` DB column** (cached playback state) — Phase 2 migration noted in `docs/architecture.md`.
 - **Token-based auth** (replace password-in-URL). OLD §17 future work.
@@ -38,6 +37,7 @@ Resolved since this file was first written:
 
 - **Kick endpoint** — `DELETE /api/v1/rooms/{uuid}/clients/{clientId}` is now wired end-to-end (PHP controller → HMAC loopback → daemon `KickController`) with a per-client reconnect block (`ws_kick_block_ms`, default 30 s) and a `KICKED` error frame on the way out. See `agent-os/specs/2026-05-10-1415-connected-client-kick/`.
 - **Healthcheck endpoint** — daemon now exposes unauthenticated `GET /healthz` on the loopback admin port (`ws_admin_port`, default 8766) returning aggregate counters (active rooms, connected clients, uptime, tick freshness) plus daemon version. Single-path carve-out evaluated before the HMAC check; response carries no UUIDs / client IDs / secrets. A public `GET /api/v1/health` (`#[PublicPage]`) loopback-passthrough route surfaces the same body wrapped with a reachability envelope so external probes (k8s, status pages) can hit a stable Nextcloud URL — always returns HTTP 200, daemon trouble surfaces as `status: "degraded"`. Bonus: `/api/v1/ws/status` was refactored to actually probe the daemon (it previously only checked install-state) and now distinguishes `not_installed` from `not_running` so the dashboard surfaces a warning state with restart guidance instead of misleadingly reporting "available". See `agent-os/specs/2026-05-10-1530-ws-daemon-healthcheck/`.
+- **Public share endpoint** — `GET /apps/playbacksync/r/{uuid}` is now wired end-to-end. Public route (`#[PublicPage]`, `#[NoCSRFRequired]`) gates on HTTP Basic Auth: the username is ignored, the password is verified against the room's argon2id hash via `RoomService::verifyPassword`, and on success the visitor is 302-redirected to `room.targetUrl` with `sync_url=wss://<host>/apps/playbacksync/ws/{uuid}` and `sync_password=<plaintext>` merged into the query (existing query params and fragments preserved). Failed attempts feed Nextcloud's `IThrottler` under action `playbacksync_share`; missing/malformed `Authorization` headers prompt the browser without registering as attempts. Unknown and expired rooms collapse to the same `404 {"error":"not_found"}` surface — never leaks "expired". Contract mirrors OLD_CODE Fastify route. See `agent-os/specs/2026-05-10-1615-public-share-endpoint/`.
 
 ---
 
@@ -53,7 +53,7 @@ Resolved since this file was first written:
 | Room delete/revoke | `backend_design_v1.md` §11 | Present as `DELETE /api/v1/rooms/{uuid}` |
 | Participant kick (`DELETE /rooms/:id/clients/:cid`) | `backend_design_v1.md` §11 | Present (Phase 2 — see `agent-os/specs/2026-05-10-1415-connected-client-kick/`) |
 | Room details + recent events (`GET /rooms/:id`) | `backend_design_v1.md` §11 | Partial — metadata only; presence/state in Phase 2 |
-| Public share endpoint `GET /r/{uuid}` | `backend_design_v1.md` §9.2 | Deferred to Phase 2 |
+| Public share endpoint `GET /r/{uuid}` | `backend_design_v1.md` §9.2 | Present (`agent-os/specs/2026-05-10-1615-public-share-endpoint/`) |
 
 ### 2. Playback sync protocol
 
@@ -83,7 +83,7 @@ Resolved since this file was first written:
 |---|---|---|
 | Room creation dialog | `backend_design_v1.md` §11 | Present (Phase 1) |
 | Live participant count + state | `backend_design_v1.md` §11 | Phase 2 spec (`...1900-rooms-api-live-state`) |
-| Share-link generation | `base_design_v1.md` §9.2 | Field present; gated endpoint Phase 2 |
+| Share-link generation | `base_design_v1.md` §9.2 | Present (field + `GET /r/{uuid}` Basic-Auth gated endpoint) |
 | Owner play/pause/seek controls | `base_design_v1.md` §9.1 | Out of v1 (OLD also marked deferred) |
 | Audit/event log in UI | `backend_design_v1.md` §9 | Server-side ring buffer only; not exposed |
 

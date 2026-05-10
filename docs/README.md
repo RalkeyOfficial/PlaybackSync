@@ -43,7 +43,7 @@ The MVP foundation is in place. Users can create, list, and delete rooms through
 | Phase 1 | Owner-only room CRUD via Nextcloud UI       | **Shipped** |
 | Phase 1 | Persistent rooms with TTL + hourly prune job| **Shipped** |
 | Phase 2 | WebSocket sync server (drift correction etc.) | Planned   |
-| Phase 2 | Public Basic-Auth-gated share endpoint      | Planned     |
+| Phase 2 | Public Basic-Auth-gated share endpoint      | **Shipped** |
 | Phase 3 | Browser extension for streaming sites       | Planned     |
 
 See [`agent-os/product/roadmap.md`](../agent-os/product/roadmap.md) for the canonical roadmap and what specifically is on deck next.
