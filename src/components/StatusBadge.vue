@@ -20,7 +20,7 @@ import StatusDot from './StatusDot.vue'
  */
 
 withDefaults(defineProps<{
-	variant: 'success' | 'error' | 'neutral' | 'pending'
+	variant: 'success' | 'error' | 'warning' | 'neutral' | 'pending'
 	label: string
 	tooltip?: string
 }>(), {
@@ -50,12 +50,17 @@ withDefaults(defineProps<{
 }
 
 .status-badge--success {
-	border-color: color-mix(in srgb, var(--color-success, #46ba61) 35%, transparent);
-	background-color: color-mix(in srgb, var(--color-success, #46ba61) 10%, var(--color-main-background, #fff));
+	border-color: color-mix(in srgb, var(--color-element-success, #46ba61) 35%, transparent);
+	background-color: color-mix(in srgb, var(--color-element-success, #46ba61) 10%, var(--color-main-background, #fff));
 }
 
 .status-badge--error {
-	border-color: color-mix(in srgb, var(--color-error, #e9322d) 35%, transparent);
-	background-color: color-mix(in srgb, var(--color-error, #e9322d) 10%, var(--color-main-background, #fff));
+	border-color: color-mix(in srgb, var(--color-element-error, #e9322d) 35%, transparent);
+	background-color: color-mix(in srgb, var(--color-element-error, #e9322d) 10%, var(--color-main-background, #fff));
+}
+
+.status-badge--warning {
+	border-color: color-mix(in srgb, var(--color-element-warning, #c98d00) 35%, transparent);
+	background-color: color-mix(in srgb, var(--color-element-warning, #c98d00) 10%, var(--color-main-background, #fff));
 }
 </style>

@@ -1,3 +1,5 @@
+import type { WsUnavailableReason } from '../services/wsStatusApi.ts'
+
 import { getLoggerBuilder } from '@nextcloud/logger'
 import { defineStore } from 'pinia'
 import { fetchWsStatus } from '../services/wsStatusApi.ts'
@@ -10,6 +12,10 @@ interface WsStatusState {
 	// page load shouldn't disable the create button just because the
 	// status request hasn't returned yet.
 	available: boolean | null
+	// null when available, or while we haven't asked yet. Otherwise carries
+	// the server's explanation so the UI can branch on `not_installed` vs
+	// `not_running`.
+	reason: WsUnavailableReason | null
 	loading: boolean
 	loaded: boolean
 }
@@ -17,6 +23,7 @@ interface WsStatusState {
 export const useWsStatusStore = defineStore('wsStatus', {
 	state: (): WsStatusState => ({
 		available: null,
+		reason: null,
 		loading: false,
 		loaded: false,
 	}),
@@ -26,22 +33,27 @@ export const useWsStatusStore = defineStore('wsStatus', {
 		// service is unavailable — not while we're still checking.
 		isUnavailable: (state): boolean => state.loaded && state.available === false,
 		isAvailable: (state): boolean => state.loaded && state.available === true,
+		isNotInstalled: (state): boolean => state.loaded && state.reason === 'not_installed',
+		isNotRunning: (state): boolean => state.loaded && state.reason === 'not_running',
 	},
 
 	actions: {
 		async load() {
 			this.loading = true
 			try {
-				this.available = await fetchWsStatus()
+				const status = await fetchWsStatus()
+				this.available = status.available
+				this.reason = status.reason
 				this.loaded = true
 			} catch (error) {
-				// Treat any failure to fetch the status as "unavailable" —
-				// if the endpoint is unreachable the rest of the app
-				// almost certainly is too, but we still want the badge to
-				// show a clear unavailable state instead of staying in
-				// limbo.
+				// Treat any failure to fetch the status as "not installed" —
+				// if we can't even reach our own controller, the rest of the
+				// app almost certainly isn't working either, and the install
+				// dialog's wording is the right one to surface (the running
+				// dialog talks about a daemon that we'd have to assume exists).
 				logger.error('Failed to fetch WS status', { error })
 				this.available = false
+				this.reason = 'not_installed'
 				this.loaded = true
 			} finally {
 				this.loading = false
