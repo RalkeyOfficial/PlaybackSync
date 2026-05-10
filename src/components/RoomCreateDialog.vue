@@ -32,9 +32,9 @@
 					type="number"
 					:label="t('playbacksync', 'Hours')"
 					:error="!!customTtlError"
-					:helperText="customTtlError ?? t('playbacksync', 'Between 1 minute and 24 hours.')"
+					:helperText="customTtlError ?? customTtlHelper"
 					min="0"
-					max="24"
+					:max="String(maxCustomHours)"
 					step="1"
 					inputmode="numeric" />
 				<NcTextField
@@ -65,6 +65,7 @@
 </template>
 
 <script setup lang="ts">
+import { loadState } from '@nextcloud/initial-state'
 import { translate as t } from '@nextcloud/l10n'
 import { computed, ref, watch } from 'vue'
 import NcButton from '@nextcloud/vue/components/NcButton'
@@ -86,11 +87,14 @@ const emit = defineEmits<{
 const roomsStore = useRoomsStore()
 
 const CUSTOM_TTL = -1
-const MAX_TTL_SECONDS = 86400
+const FALLBACK_MAX_TTL_SECONDS = 86400
+
+// Server-supplied cap from the admin settings page; bake it in at module
+// load since it's a per-page constant and the dialog can mount many times.
+const MAX_TTL_SECONDS = loadInitialMaxTtl()
 
 const name = ref('')
 const targetUrl = ref('')
-const ttlPreset = ref(86400)
 const customHours = ref(1)
 const customMinutes = ref(0)
 
@@ -99,13 +103,36 @@ interface TtlOption {
 	label: string
 }
 
-const ttlOptions: TtlOption[] = [
+const ALL_TTL_PRESETS: TtlOption[] = [
 	{ value: 3600, label: t('playbacksync', '1 hour') },
 	{ value: 21600, label: t('playbacksync', '6 hours') },
 	{ value: 43200, label: t('playbacksync', '12 hours') },
 	{ value: 86400, label: t('playbacksync', '24 hours') },
-	{ value: CUSTOM_TTL, label: t('playbacksync', 'Custom…') },
 ]
+
+const ttlOptions = computed<TtlOption[]>(() => {
+	const fitting = ALL_TTL_PRESETS.filter((opt) => opt.value <= MAX_TTL_SECONDS)
+	return [
+		...fitting,
+		{ value: CUSTOM_TTL, label: t('playbacksync', 'Custom…') },
+	]
+})
+
+const defaultTtlPreset = computed<number>(() => {
+	const fitting = ALL_TTL_PRESETS.filter((opt) => opt.value <= MAX_TTL_SECONDS)
+	if (fitting.length === 0) {
+		return CUSTOM_TTL
+	}
+	return fitting[fitting.length - 1].value
+})
+
+const ttlPreset = ref<number>(defaultTtlPreset.value)
+
+const maxCustomHours = computed(() => Math.max(1, Math.ceil(MAX_TTL_SECONDS / 3600)))
+
+const formattedMaxTtl = computed(() => formatTtlLimit(MAX_TTL_SECONDS))
+
+const customTtlHelper = computed(() => t('playbacksync', 'Between 1 minute and {limit}.', { limit: formattedMaxTtl.value }))
 
 /**
  * Pull the numeric TTL value out of a vue-select option object so NcSelect's
@@ -146,7 +173,7 @@ const customTtlError = computed<string | null>(() => {
 		return t('playbacksync', 'Must be at least 1 minute.')
 	}
 	if (seconds > MAX_TTL_SECONDS) {
-		return t('playbacksync', 'Must be 24 hours or less.')
+		return t('playbacksync', 'Must be {limit} or less.', { limit: formattedMaxTtl.value })
 	}
 	return null
 })
@@ -165,8 +192,8 @@ watch(() => props.open, (isOpen) => {
 	if (isOpen) {
 		name.value = ''
 		targetUrl.value = ''
-		ttlPreset.value = 86400
-		customHours.value = 1
+		ttlPreset.value = defaultTtlPreset.value
+		customHours.value = Math.min(1, maxCustomHours.value)
 		customMinutes.value = 0
 	}
 })
@@ -201,6 +228,47 @@ async function submit() {
 	if (ok) {
 		emit('update:open', false)
 	}
+}
+
+/**
+ * Read the server-injected room TTL ceiling from the page's initial state.
+ * Falls back to the historical 24-hour default when the value is missing,
+ * non-positive, or the initial-state key is not registered (e.g. when the
+ * dialog is mounted outside the rooms page during a test).
+ *
+ * @return the configured maximum room TTL in seconds
+ */
+function loadInitialMaxTtl(): number {
+	try {
+		const state = loadState<{ maxTtlSeconds?: unknown }>('playbacksync', 'roomLimits')
+		const raw = state?.maxTtlSeconds
+		if (typeof raw === 'number' && Number.isFinite(raw) && raw > 0) {
+			return Math.floor(raw)
+		}
+	} catch {
+		// loadState throws when the key isn't injected for this page.
+	}
+	return FALLBACK_MAX_TTL_SECONDS
+}
+
+/**
+ * Format a TTL ceiling for display in helper and error text. Round hours
+ * (1h, 6h, 12h, 24h) and round minutes (≤59m) get their cleaner unit form;
+ * everything else falls back to a compact "{h}h {m}m" pattern.
+ *
+ * @param seconds the duration in seconds, must be positive
+ * @return a localized string suitable for substitution into UI copy
+ */
+function formatTtlLimit(seconds: number): string {
+	const hours = Math.floor(seconds / 3600)
+	const minutes = Math.floor((seconds % 3600) / 60)
+	if (hours > 0 && minutes === 0) {
+		return t('playbacksync', '{hours}h', { hours })
+	}
+	if (hours === 0 && minutes > 0) {
+		return t('playbacksync', '{minutes}m', { minutes })
+	}
+	return t('playbacksync', '{hours}h {minutes}m', { hours, minutes })
 }
 </script>
 
