@@ -24,6 +24,7 @@ class WsConfig {
 		public readonly int $driftNudgeThresholdMs,
 		public readonly int $driftSeekThresholdMs,
 		public readonly int $driftCooldownMs,
+		public readonly int $maxClientsPerRoom,
 	) {
 	}
 
@@ -39,6 +40,7 @@ class WsConfig {
 			driftNudgeThresholdMs: $cfg->getValueInt($app, 'ws_drift_nudge_threshold_ms', 200),
 			driftSeekThresholdMs: $cfg->getValueInt($app, 'ws_drift_seek_threshold_ms', 500),
 			driftCooldownMs: $cfg->getValueInt($app, 'ws_drift_cooldown_ms', 3_000),
+			maxClientsPerRoom: $cfg->getValueInt($app, 'max_clients_per_room', 50),
 		);
 	}
 }

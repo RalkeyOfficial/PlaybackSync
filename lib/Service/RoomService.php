@@ -61,9 +61,10 @@ class RoomService {
 			throw new InvalidRoomInputException('name exceeds maximum length.');
 		}
 
-		$ttl = $ttlSeconds ?? $this->getDefaultTtlSeconds();
-		if ($ttl < 1 || $ttl > self::MAX_TTL_SECONDS) {
-			throw new InvalidRoomInputException('ttl must be between 1 and ' . self::MAX_TTL_SECONDS . ' seconds.');
+		$maxTtl = $this->getMaxTtlSeconds();
+		$ttl = $ttlSeconds ?? $this->getDefaultTtlSeconds($maxTtl);
+		if ($ttl < 1 || $ttl > $maxTtl) {
+			throw new InvalidRoomInputException('ttl must be between 1 and ' . $maxTtl . ' seconds.');
 		}
 
 		$nowMs = $this->timeFactory->getTime() * 1000;
@@ -136,10 +137,19 @@ class RoomService {
 		return $this->hasher->verify($plainPassword, $room->getPasswordHash());
 	}
 
-	private function getDefaultTtlSeconds(): int {
+	private function getDefaultTtlSeconds(int $maxTtl): int {
 		$configured = $this->appConfig->getValueInt(Application::APP_ID, 'default_ttl_seconds', self::DEFAULT_TTL_SECONDS);
-		if ($configured < 1 || $configured > self::MAX_TTL_SECONDS) {
-			return self::DEFAULT_TTL_SECONDS;
+		if ($configured < 1 || $configured > $maxTtl) {
+			return min(self::DEFAULT_TTL_SECONDS, $maxTtl);
+		}
+		return $configured;
+	}
+
+	private function getMaxTtlSeconds(): int {
+		$configured = $this->appConfig->getValueInt(Application::APP_ID, 'max_ttl_seconds', self::MAX_TTL_SECONDS);
+		// Negative or zero would brick room creation entirely; fall back to the safe default.
+		if ($configured < 1) {
+			return self::MAX_TTL_SECONDS;
 		}
 		return $configured;
 	}

@@ -4,8 +4,7 @@ declare(strict_types=1);
 
 namespace OCA\PlaybackSync\Migration;
 
-use OCA\PlaybackSync\AppInfo\Application;
-use OCP\IAppConfig;
+use OCA\PlaybackSync\Service\AdminSecretService;
 use OCP\Migration\IOutput;
 use OCP\Migration\IRepairStep;
 
@@ -25,10 +24,8 @@ use OCP\Migration\IRepairStep;
  */
 class EnsureAdminSecret implements IRepairStep {
 
-	private const KEY = 'ws_admin_secret';
-
 	public function __construct(
-		private readonly IAppConfig $appConfig,
+		private readonly AdminSecretService $secrets,
 	) {
 	}
 
@@ -37,20 +34,10 @@ class EnsureAdminSecret implements IRepairStep {
 	}
 
 	public function run(IOutput $output): void {
-		$current = $this->appConfig->getValueString(Application::APP_ID, self::KEY, '');
-		if ($current !== '') {
+		if ($this->secrets->ensureExists()) {
+			$output->info('PlaybackSync admin secret generated and stored.');
+		} else {
 			$output->info('PlaybackSync admin secret already configured — leaving in place.');
-			return;
 		}
-
-		$secret = bin2hex(random_bytes(32));
-		$this->appConfig->setValueString(
-			Application::APP_ID,
-			self::KEY,
-			$secret,
-			lazy: false,
-			sensitive: true,
-		);
-		$output->info('PlaybackSync admin secret generated and stored.');
 	}
 }

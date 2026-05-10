@@ -39,4 +39,9 @@
 			<order>50</order>
 		</navigation>
 	</navigations>
+
+	<settings>
+		<admin>OCA\PlaybackSync\Settings\AdminSettings</admin>
+		<admin-section>OCA\PlaybackSync\Sections\AdminSection</admin-section>
+	</settings>
 </info>

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace OCA\PlaybackSync\AppInfo;
 
 use OCA\PlaybackSync\WebSocket\Admin\AdminAuthMiddleware;
+use OCA\PlaybackSync\WebSocket\Admin\PresenceController;
 use OCA\PlaybackSync\WebSocket\RoomRegistry;
 use OCA\PlaybackSync\WebSocket\WsConfig;
 use OCP\AppFramework\App;
@@ -35,6 +36,15 @@ class Application extends App implements IBootstrap {
 
 		$context->registerService(RoomRegistry::class, static function (ContainerInterface $c): RoomRegistry {
 			return new RoomRegistry($c->get(WsConfig::class)->eventLogSize);
+		});
+
+		// PresenceController takes its per-room client cap from WsConfig so
+		// the daemon's view stays consistent with `max_clients_per_room`.
+		$context->registerService(PresenceController::class, static function (ContainerInterface $c): PresenceController {
+			return new PresenceController(
+				$c->get(RoomRegistry::class),
+				$c->get(WsConfig::class)->maxClientsPerRoom,
+			);
 		});
 
 		// AdminAuthMiddleware needs the configured shared secret. We read it

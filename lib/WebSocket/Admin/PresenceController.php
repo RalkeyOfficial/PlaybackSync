@@ -17,14 +17,17 @@ use OCA\PlaybackSync\WebSocket\RoomRuntime;
 class PresenceController {
 
 	/**
-	 * Cap on the number of clients returned per room. Keeps the response
-	 * bounded for absurdly busy rooms; `connectedCount` still reflects the
-	 * true total when the list is truncated.
+	 * Default cap on the number of clients returned per room. Keeps the
+	 * response bounded for absurdly busy rooms; `connectedCount` still
+	 * reflects the true total when the list is truncated. The runtime cap
+	 * is configurable via the `max_clients_per_room` IAppConfig key and
+	 * surfaced through `WsConfig::$maxClientsPerRoom`.
 	 */
 	public const MAX_CLIENTS_PER_ROOM = 50;
 
 	public function __construct(
 		private readonly RoomRegistry $registry,
+		private readonly int $maxClientsPerRoom = self::MAX_CLIENTS_PER_ROOM,
 	) {
 	}
 
@@ -76,7 +79,7 @@ class PresenceController {
 				continue;
 			}
 			$count++;
-			if (count($clients) < self::MAX_CLIENTS_PER_ROOM) {
+			if (count($clients) < $this->maxClientsPerRoom) {
 				$clients[] = [
 					'clientId' => $client->clientId,
 					'isBuffering' => $client->isBuffering,
