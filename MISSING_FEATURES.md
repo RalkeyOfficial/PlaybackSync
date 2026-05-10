@@ -4,7 +4,6 @@ Comparison of features documented in `OLD_CODE/docs/` against the current `docs/
 
 ## Truly absent (no Phase 1/2 mention)
 
-- **Healthcheck endpoint** (`GET /healthz`) for the WS daemon. Documented in OLD; current docs don't commit to one.
 - **Prometheus metrics** (`/metrics`, `playbacksync_*` gauges/counters). OLD §10. Absent from current docs and roadmap.
 - **Global per-room broadcast flood control.** OLD §8 had both per-connection *and* global rate limits — current `docs/ws-sync-server.md` only mentions per-connection (`ws_rate_limit_events_per_sec`).
 - **Graceful shutdown / `SERVER_SHUTDOWN` message.** OLD broadcast a notice on SIGTERM. Current accepts "daemon restart drops connections, clients reconnect" as a design tradeoff — but no graceful-close path is specified.
@@ -32,13 +31,13 @@ Comparison of features documented in `OLD_CODE/docs/` against the current `docs/
 
 If you want parity with the OLD design's operational story, the highest-value items to add to the roadmap are:
 
-1. **Healthcheck on the WS daemon** — useful regardless, trivial to add.
-2. **Graceful shutdown semantics** — at minimum document the contract (e.g. clients receive close code X and reconnect with backoff).
-3. **Metrics story** — even if not Prometheus, document what's observable.
+1. **Graceful shutdown semantics** — at minimum document the contract (e.g. clients receive close code X and reconnect with backoff).
+2. **Metrics story** — even if not Prometheus, document what's observable.
 
 Resolved since this file was first written:
 
 - **Kick endpoint** — `DELETE /api/v1/rooms/{uuid}/clients/{clientId}` is now wired end-to-end (PHP controller → HMAC loopback → daemon `KickController`) with a per-client reconnect block (`ws_kick_block_ms`, default 30 s) and a `KICKED` error frame on the way out. See `agent-os/specs/2026-05-10-1415-connected-client-kick/`.
+- **Healthcheck endpoint** — daemon now exposes unauthenticated `GET /healthz` on the loopback admin port (`ws_admin_port`, default 8766) returning aggregate counters (active rooms, connected clients, uptime, tick freshness) plus daemon version. Single-path carve-out evaluated before the HMAC check; response carries no UUIDs / client IDs / secrets. A public `GET /api/v1/health` (`#[PublicPage]`) loopback-passthrough route surfaces the same body wrapped with a reachability envelope so external probes (k8s, status pages) can hit a stable Nextcloud URL — always returns HTTP 200, daemon trouble surfaces as `status: "degraded"`. Bonus: `/api/v1/ws/status` was refactored to actually probe the daemon (it previously only checked install-state) and now distinguishes `not_installed` from `not_running` so the dashboard surfaces a warning state with restart guidance instead of misleadingly reporting "available". See `agent-os/specs/2026-05-10-1530-ws-daemon-healthcheck/`.
 
 ---
 
@@ -94,7 +93,8 @@ Resolved since this file was first written:
 |---|---|---|
 | `DELETE /rooms/:roomId/clients/:clientId` | Forcibly disconnect participant | Present |
 | `GET /rooms/:roomId` (with events) | Full state + recent events | Partial — metadata only |
-| `GET /healthz` | Daemon liveness | Deferred / undocumented |
+| `GET /healthz` (daemon admin port) | Daemon liveness + light stats | Present |
+| `GET /api/v1/health` (PHP passthrough) | Public liveness probe surfaced via Nextcloud | Present |
 | `GET /metrics` | Prometheus metrics | Deferred / undocumented |
 
 ### 6. Persistence / data model
