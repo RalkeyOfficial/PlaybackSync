@@ -12,6 +12,7 @@ All endpoints live under the prefix `/apps/playbacksync/api/v1/rooms`. The `v1` 
 | `GET`    | `/rooms`                | List the caller's active rooms           | `200 OK`           | Logged in    |
 | `GET`    | `/rooms/{uuid}`         | Fetch one of the caller's rooms          | `200 OK`           | Logged in    |
 | `DELETE` | `/rooms/{uuid}`         | Permanently delete one of caller's rooms | `204 No Content`   | Logged in    |
+| `DELETE` | `/rooms/{uuid}/clients/{clientId}` | Forcibly disconnect one connected client | `204 No Content`   | Logged in    |
 | `GET`    | `/ws/status`            | Whether the WebSocket sync service is installed and configured | `200 OK` | Logged in |
 
 [¹] Subject to the `restrict_to_admins` `IAppConfig` toggle — see [Authentication and authorization](#authentication-and-authorization).
@@ -215,7 +216,7 @@ curl -u alice:alice \
 DELETE /apps/playbacksync/api/v1/rooms/{uuid}
 ```
 
-Permanently deletes the room. There is no soft-delete or undo; the row is gone immediately. In a future phase where a WebSocket sync server is involved, this will also forcibly disconnect any active participants.
+Permanently deletes the room. There is no soft-delete or undo; the row is gone immediately. The WebSocket sync server is not signalled by this call — connected clients will fail their next heartbeat (because the room is gone) and reconnect attempts will get `ROOM_NOT_FOUND`. To disconnect a single participant without deleting the room, use the kick endpoint below.
 
 #### Path parameters
 
@@ -243,6 +244,46 @@ curl -u alice:alice \
   -H 'OCS-APIRequest: true' \
   -X DELETE \
   'https://nextcloud.example/index.php/apps/playbacksync/api/v1/rooms/5a66524f-5ba1-4f3d-8897-7c5838c0bd80'
+```
+
+### Disconnect a connected client
+
+```
+DELETE /apps/playbacksync/api/v1/rooms/{uuid}/clients/{clientId}
+```
+
+Forcibly disconnects one connected client from one of the caller's rooms. The WebSocket sync server sends the targeted client a final `{type:"ERROR", code:"KICKED"}` frame, closes the socket, and refuses any reconnect attempt that uses the same `clientId` for `ws_kick_block_ms` (default 30 seconds). The caller's other clients see the kicked participant disappear from `live.clients` on the next refresh.
+
+The block is in-memory and cleared on daemon restart; it's there to prevent immediate re-flap, not to be a persistent ban — a determined client can rejoin with a fresh `clientId`.
+
+#### Path parameters
+
+| Parameter   | Type             | Description                                                                            |
+|-------------|------------------|----------------------------------------------------------------------------------------|
+| `uuid`      | string (UUID v4) | The `uuid` field of an existing room owned by the caller.                              |
+| `clientId`  | hex string       | The opaque per-connection identifier surfaced under `live.clients[].clientId`.          |
+
+#### Success response
+
+`HTTP 204 No Content`. The body is empty.
+
+#### Failure modes
+
+| Status | Trigger                                                                                            |
+|--------|----------------------------------------------------------------------------------------------------|
+| 401    | No authenticated Nextcloud user on the request.                                                    |
+| 404    | Room UUID unknown / not owned / expired, **or** the `clientId` is not currently connected.         |
+| 502    | The PHP side could not reach the WebSocket sync daemon (daemon down, admin secret misconfigured).  |
+
+The 404 surface is deliberately collapsed: the caller doesn't get to distinguish "room belongs to someone else" from "room exists but client just disconnected". This mirrors the privacy property already documented for `GET /rooms/{uuid}`.
+
+#### Example
+
+```bash
+curl -u alice:alice \
+  -H 'OCS-APIRequest: true' \
+  -X DELETE \
+  'https://nextcloud.example/index.php/apps/playbacksync/api/v1/rooms/5a66524f-5ba1-4f3d-8897-7c5838c0bd80/clients/3f9b1a2c4d5e6f70'
 ```
 
 ### WebSocket service status

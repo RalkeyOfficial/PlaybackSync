@@ -7,8 +7,10 @@ namespace OCA\PlaybackSync\Tests\Unit\Controller;
 use OCA\PlaybackSync\Controller\RoomController;
 use OCA\PlaybackSync\Db\Room;
 use OCA\PlaybackSync\Service\Dto\RoomLiveState;
+use OCA\PlaybackSync\Service\Exceptions\ClientNotFoundException;
 use OCA\PlaybackSync\Service\Exceptions\CreateRestrictedException;
 use OCA\PlaybackSync\Service\Exceptions\InvalidRoomInputException;
+use OCA\PlaybackSync\Service\Exceptions\KickFailedException;
 use OCA\PlaybackSync\Service\Exceptions\RoomNotFoundException;
 use OCA\PlaybackSync\Service\RoomLiveStateEnricher;
 use OCA\PlaybackSync\Service\RoomService;
@@ -263,6 +265,55 @@ class RoomControllerTest extends TestCase {
 
 		$this->assertSame(Http::STATUS_NOT_FOUND, $response->getStatus());
 		$this->assertSame(['error' => 'Room not found.'], $response->getData());
+	}
+
+	// ─── kickClient ──────────────────────────────────────────────────────
+
+	public function testKickClientReturns401WhenNotLoggedIn(): void {
+		$response = $this->controller(null)->kickClient('uuid-1', 'deadbeef');
+
+		$this->assertSame(Http::STATUS_UNAUTHORIZED, $response->getStatus());
+	}
+
+	public function testKickClientReturns204OnSuccess(): void {
+		$this->service->expects($this->once())
+			->method('kickClient')
+			->with('alice', 'uuid-1', 'deadbeef');
+
+		$response = $this->controller('alice')->kickClient('uuid-1', 'deadbeef');
+
+		$this->assertSame(Http::STATUS_NO_CONTENT, $response->getStatus());
+		$this->assertNull($response->getData());
+	}
+
+	public function testKickClientReturns404WhenServiceThrowsRoomNotFound(): void {
+		$this->service->method('kickClient')
+			->willThrowException(new RoomNotFoundException('Room not found.'));
+
+		$response = $this->controller('alice')->kickClient('missing', 'deadbeef');
+
+		$this->assertSame(Http::STATUS_NOT_FOUND, $response->getStatus());
+		$this->assertSame(['error' => 'Room not found.'], $response->getData());
+	}
+
+	public function testKickClientReturns404WhenServiceThrowsClientNotFound(): void {
+		$this->service->method('kickClient')
+			->willThrowException(new ClientNotFoundException('Client is not connected to this room.'));
+
+		$response = $this->controller('alice')->kickClient('uuid-1', 'ghost');
+
+		$this->assertSame(Http::STATUS_NOT_FOUND, $response->getStatus());
+		$this->assertSame(['error' => 'Client is not connected to this room.'], $response->getData());
+	}
+
+	public function testKickClientReturns502WhenDaemonUnreachable(): void {
+		$this->service->method('kickClient')
+			->willThrowException(new KickFailedException('WebSocket daemon unreachable.'));
+
+		$response = $this->controller('alice')->kickClient('uuid-1', 'deadbeef');
+
+		$this->assertSame(Http::STATUS_BAD_GATEWAY, $response->getStatus());
+		$this->assertSame(['error' => 'WebSocket daemon unreachable.'], $response->getData());
 	}
 
 	// ─── live-state ──────────────────────────────────────────────────────

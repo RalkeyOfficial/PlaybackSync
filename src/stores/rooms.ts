@@ -4,7 +4,7 @@ import { showError } from '@nextcloud/dialogs'
 import { translate as t } from '@nextcloud/l10n'
 import { getLoggerBuilder } from '@nextcloud/logger'
 import { defineStore } from 'pinia'
-import { createRoom, deleteRoom, listRooms } from '../services/roomsApi.ts'
+import { createRoom, deleteRoom, kickRoomClient, listRooms } from '../services/roomsApi.ts'
 
 const logger = getLoggerBuilder().setApp('playbacksync').detectUser().build()
 
@@ -63,6 +63,18 @@ export const useRoomsStore = defineStore('rooms', {
 			} catch (error) {
 				logger.error('Failed to delete room', { error })
 				showError(t('playbacksync', 'Could not delete room.'))
+				return false
+			}
+		},
+
+		async kickClient(uuid: string, clientId: string): Promise<boolean> {
+			try {
+				await kickRoomClient(uuid, clientId)
+				return true
+			} catch (error) {
+				logger.error('Failed to kick client', { error, uuid, clientId })
+				const message = extractErrorMessage(error) ?? t('playbacksync', 'Could not disconnect client.')
+				showError(message)
 				return false
 			}
 		},

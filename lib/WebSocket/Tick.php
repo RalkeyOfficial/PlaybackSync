@@ -50,6 +50,7 @@ class Tick {
 			}
 
 			$runtime->pruneExpiredTombstones($nowMs);
+			$runtime->pruneExpiredKickBlocks($nowMs);
 
 			foreach ($runtime->findIdleClients($nowMs, $this->config->idleCloseMs) as $idleClient) {
 				if ($idleClient->conn !== null) {

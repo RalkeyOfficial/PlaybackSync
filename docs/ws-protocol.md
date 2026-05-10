@@ -269,6 +269,7 @@ Suppressed entirely while the client is `buffering` and during the
 | `AUTH_FAILED` | Wrong password | yes |
 | `CONTENT_MISMATCH` | JOIN content identity disagrees with the room | yes |
 | `CLIENT_ID_IN_USE` | A live connection already holds this `clientId` | yes |
+| `KICKED` | Room owner forcibly disconnected this client | yes |
 | `NOT_JOINED` | Sent EVENT/HEARTBEAT/etc. without a prior JOIN | yes |
 | `RATE_LIMITED` | Token bucket empty | no |
 | `INTERNAL_ERROR` | Unexpected server-side failure | yes |

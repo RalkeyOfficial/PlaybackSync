@@ -7,8 +7,11 @@ namespace OCA\PlaybackSync\Tests\Unit\Service;
 use OCA\PlaybackSync\AppInfo\Application;
 use OCA\PlaybackSync\Db\Room;
 use OCA\PlaybackSync\Db\RoomMapper;
+use OCA\PlaybackSync\Service\AdminKickClient;
+use OCA\PlaybackSync\Service\Exceptions\ClientNotFoundException;
 use OCA\PlaybackSync\Service\Exceptions\CreateRestrictedException;
 use OCA\PlaybackSync\Service\Exceptions\InvalidRoomInputException;
+use OCA\PlaybackSync\Service\Exceptions\KickFailedException;
 use OCA\PlaybackSync\Service\Exceptions\RoomNotFoundException;
 use OCA\PlaybackSync\Service\RoomService;
 use OCP\AppFramework\Db\DoesNotExistException;
@@ -27,6 +30,7 @@ class RoomServiceTest extends TestCase {
 	private IAppConfig&MockObject $appConfig;
 	private IGroupManager&MockObject $groupManager;
 	private ITimeFactory&MockObject $timeFactory;
+	private AdminKickClient&MockObject $adminKickClient;
 	private RoomService $service;
 
 	private const FIXED_TIME_S = 1_700_000_000;
@@ -39,6 +43,7 @@ class RoomServiceTest extends TestCase {
 		$this->appConfig = $this->createMock(IAppConfig::class);
 		$this->groupManager = $this->createMock(IGroupManager::class);
 		$this->timeFactory = $this->createMock(ITimeFactory::class);
+		$this->adminKickClient = $this->createMock(AdminKickClient::class);
 
 		$this->timeFactory->method('getTime')->willReturn(self::FIXED_TIME_S);
 
@@ -60,6 +65,7 @@ class RoomServiceTest extends TestCase {
 			$this->appConfig,
 			$this->groupManager,
 			$this->timeFactory,
+			$this->adminKickClient,
 		);
 	}
 
@@ -462,6 +468,67 @@ class RoomServiceTest extends TestCase {
 		$this->service->deleteOwnedRoom('alice', 'uuid-1');
 	}
 
+	// ─── kickClient ─────────────────────────────────────────────────────
+
+	/**
+	 * Owner-initiated kick: ownership is verified through `getOwnedRoom`, then
+	 * the admin loopback client is invoked once with the room's UUID and the
+	 * supplied client id.
+	 */
+	public function testKickClientForwardsToAdminClientWhenOwnerMatches(): void {
+		$room = $this->makeRoom('alice', expiresInSeconds: 3600);
+		$this->mapper->method('findByUuid')->willReturn($room);
+		$this->adminKickClient->expects($this->once())
+			->method('kick')
+			->with('uuid-1', 'deadbeef');
+
+		$this->service->kickClient('alice', 'uuid-1', 'deadbeef');
+	}
+
+	/**
+	 * Cross-user kick attempts are blocked with `RoomNotFoundException`
+	 * *before* the admin client is consulted — preserving the same opacity
+	 * contract as `deleteOwnedRoom`.
+	 */
+	public function testKickClientThrowsNotFoundForCrossUser(): void {
+		$room = $this->makeRoom('bob', expiresInSeconds: 3600);
+		$this->mapper->method('findByUuid')->willReturn($room);
+		$this->adminKickClient->expects($this->never())->method('kick');
+
+		$this->expectException(RoomNotFoundException::class);
+		$this->service->kickClient('alice', 'uuid-1', 'deadbeef');
+	}
+
+	/**
+	 * `ClientNotFoundException` from the admin client is propagated unchanged
+	 * so the controller can map it to a 404 distinct from "room not found".
+	 */
+	public function testKickClientPropagatesClientNotFoundException(): void {
+		$room = $this->makeRoom('alice', expiresInSeconds: 3600);
+		$this->mapper->method('findByUuid')->willReturn($room);
+		$this->adminKickClient->method('kick')
+			->willThrowException(new ClientNotFoundException('not connected'));
+
+		$this->expectException(ClientNotFoundException::class);
+		$this->service->kickClient('alice', 'uuid-1', 'deadbeef');
+	}
+
+	/**
+	 * `KickFailedException` from the admin client (daemon down, HMAC misconfig,
+	 * unexpected status) is propagated unchanged so the controller can map it
+	 * to a 502 — operators see the difference between "daemon broken" and
+	 * "client wasn't there".
+	 */
+	public function testKickClientPropagatesKickFailedException(): void {
+		$room = $this->makeRoom('alice', expiresInSeconds: 3600);
+		$this->mapper->method('findByUuid')->willReturn($room);
+		$this->adminKickClient->method('kick')
+			->willThrowException(new KickFailedException('daemon unreachable'));
+
+		$this->expectException(KickFailedException::class);
+		$this->service->kickClient('alice', 'uuid-1', 'deadbeef');
+	}
+
 	// ─── helpers ────────────────────────────────────────────────────────
 
 	private function buildServiceWithRestriction(bool $restricted): RoomService {
@@ -480,6 +547,7 @@ class RoomServiceTest extends TestCase {
 			$appConfig,
 			$this->groupManager,
 			$this->timeFactory,
+			$this->adminKickClient,
 		);
 	}
 

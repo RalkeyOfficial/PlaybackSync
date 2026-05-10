@@ -142,6 +142,9 @@ class JoinHandler {
 		int $nowMs,
 	): ClientConnection {
 		if ($requestedClientId !== null) {
+			if ($runtime->isClientBlocked($requestedClientId, $nowMs)) {
+				throw new MessageException('KICKED', 'Disconnected by room owner', closeAfter: true);
+			}
 			$existing = $runtime->getClient($requestedClientId);
 			if ($existing !== null && $existing->isTombstoned($nowMs)) {
 				$existing->reattach($conn, $nowMs);

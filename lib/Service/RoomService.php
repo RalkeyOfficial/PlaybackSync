@@ -31,6 +31,7 @@ class RoomService {
 		private IAppConfig $appConfig,
 		private IGroupManager $groupManager,
 		private ITimeFactory $timeFactory,
+		private AdminKickClient $adminKickClient,
 	) {
 	}
 
@@ -109,6 +110,19 @@ class RoomService {
 	public function deleteOwnedRoom(string $userId, string $uuid): void {
 		$room = $this->getOwnedRoom($userId, $uuid);
 		$this->mapper->delete($room);
+	}
+
+	/**
+	 * Forcibly disconnect one connected client from the owner's room.
+	 *
+	 * Throws `RoomNotFoundException` when the caller doesn't own (or the
+	 * room has expired) — same opacity as `getOwnedRoom`. Forwards lower-level
+	 * `ClientNotFoundException` / `KickFailedException` from the admin client
+	 * unchanged so the controller can map them to distinct status codes.
+	 */
+	public function kickClient(string $userId, string $uuid, string $clientId): void {
+		$room = $this->getOwnedRoom($userId, $uuid);
+		$this->adminKickClient->kick($room->getUuid(), $clientId);
 	}
 
 	/**

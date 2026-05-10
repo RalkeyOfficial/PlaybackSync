@@ -6,8 +6,10 @@ namespace OCA\PlaybackSync\Controller;
 
 use OCA\PlaybackSync\Db\Room;
 use OCA\PlaybackSync\Service\Dto\RoomLiveState;
+use OCA\PlaybackSync\Service\Exceptions\ClientNotFoundException;
 use OCA\PlaybackSync\Service\Exceptions\CreateRestrictedException;
 use OCA\PlaybackSync\Service\Exceptions\InvalidRoomInputException;
+use OCA\PlaybackSync\Service\Exceptions\KickFailedException;
 use OCA\PlaybackSync\Service\Exceptions\RoomNotFoundException;
 use OCA\PlaybackSync\Service\RoomLiveStateEnricher;
 use OCA\PlaybackSync\Service\RoomService;
@@ -117,6 +119,23 @@ class RoomController extends Controller {
 			$this->service->deleteOwnedRoom($this->userId, $uuid);
 		} catch (RoomNotFoundException $e) {
 			return new DataResponse(['error' => $e->getMessage()], Http::STATUS_NOT_FOUND);
+		}
+
+		return new DataResponse(null, Http::STATUS_NO_CONTENT);
+	}
+
+	#[NoAdminRequired]
+	public function kickClient(string $uuid, string $clientId): DataResponse {
+		if ($this->userId === null) {
+			return new DataResponse(['error' => 'Authentication required.'], Http::STATUS_UNAUTHORIZED);
+		}
+
+		try {
+			$this->service->kickClient($this->userId, $uuid, $clientId);
+		} catch (RoomNotFoundException|ClientNotFoundException $e) {
+			return new DataResponse(['error' => $e->getMessage()], Http::STATUS_NOT_FOUND);
+		} catch (KickFailedException $e) {
+			return new DataResponse(['error' => $e->getMessage()], Http::STATUS_BAD_GATEWAY);
 		}
 
 		return new DataResponse(null, Http::STATUS_NO_CONTENT);

@@ -36,7 +36,7 @@ class JoinHandlerTest extends TestCase {
 		$this->service = $this->createMock(RoomService::class);
 		$this->registry = new RoomRegistry(eventLogSize: 50);
 		$this->encoder = new MessageEncoder();
-		$this->config = new WsConfig(5000, 30000, 30000, 50, 10, 200, 500, 3000);
+		$this->config = new WsConfig(5000, 30000, 30000, 30000, 50, 10, 200, 500, 3000);
 		$this->handler = new JoinHandler($this->mapper, $this->service, $this->registry, $this->encoder, $this->config);
 	}
 
@@ -165,6 +165,31 @@ class JoinHandlerTest extends TestCase {
 		$this->assertSame($savedClientId, $ctx2->clientId);
 		$this->assertSame(1, $runtime->clientCount(), 'tombstoned slot should be reused');
 		$this->assertSame($conn2, $runtime->getClient($savedClientId)->conn);
+	}
+
+	public function testJoinFailsWhenClientIdIsBlockedAfterKick(): void {
+		$this->mapper->method('findByUuid')->willReturn($this->makeRoom(self::NOW_MS + 60_000));
+		$this->service->method('verifyPassword')->willReturn(true);
+
+		// Stage a previously-connected client and kick it, mirroring the real
+		// flow that records the reconnect block.
+		$runtime = $this->registry->getOrCreate(self::ROOM_UUID, self::NOW_MS + 60_000);
+		$runtime->addClient(new \OCA\PlaybackSync\WebSocket\ClientConnection(
+			'bannedId',
+			$this->createMock(ConnectionInterface::class),
+			self::NOW_MS,
+			0,
+			new \OCA\PlaybackSync\WebSocket\RateLimiter(10, self::NOW_MS),
+		));
+		$runtime->kickClient('bannedId', $this->encoder, blockMs: 30_000, nowMs: self::NOW_MS);
+
+		$conn = $this->createMock(ConnectionInterface::class);
+		$payload = $this->payload();
+		$payload['clientId'] = 'bannedId';
+
+		$this->expectException(MessageException::class);
+		$this->expectExceptionMessage('Disconnected by room owner');
+		$this->handler->handle($conn, new ConnectionContext(self::ROOM_UUID), $payload, self::NOW_MS + 1000);
 	}
 
 	public function testContentMismatchClosesConnection(): void {

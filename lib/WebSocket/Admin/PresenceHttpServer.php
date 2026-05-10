@@ -15,10 +15,13 @@ use Throwable;
 /**
  * Ratchet HTTP entry point bound to the daemon's loopback admin port.
  *
- * One route in v1: `GET /admin/rooms/presence?uuids=<csv>`. Every other path
- * returns 404. Authentication runs first and a missing/invalid HMAC closes
- * the connection with 401 — no body — to make probing cheap to the operator
- * and uninteresting to an attacker.
+ * Routes:
+ *   - `GET  /admin/rooms/presence?uuids=<csv>` — point-in-time presence map.
+ *   - `POST /admin/rooms/{uuid}/clients/{clientId}/disconnect` — owner kick.
+ *
+ * Every other path returns 404. Authentication runs first and a
+ * missing/invalid HMAC closes the connection with 401 — no body — to make
+ * probing cheap to the operator and uninteresting to an attacker.
  *
  * Connections are short-lived (one request, one response, then close) — same
  * model as the surrounding `Ratchet\Http\HttpServer` decorator expects.
@@ -27,9 +30,12 @@ class PresenceHttpServer implements HttpServerInterface {
 
 	public const ROUTE = '/admin/rooms/presence';
 
+	private const KICK_PATTERN = '#^/admin/rooms/(?P<uuid>[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/clients/(?P<clientId>[0-9a-f]{1,64})/disconnect$#';
+
 	public function __construct(
 		private readonly AdminAuthMiddleware $auth,
 		private readonly PresenceController $controller,
+		private readonly KickController $kickController,
 		private readonly LoggerInterface $logger,
 	) {
 	}
@@ -47,21 +53,34 @@ class PresenceHttpServer implements HttpServerInterface {
 				return;
 			}
 
-			if ($request->getMethod() !== 'GET') {
+			$method = $request->getMethod();
+			$path = $request->getUri()->getPath();
+
+			if ($method === 'GET' && $path === self::ROUTE) {
+				$uuids = $this->parseUuids($request);
+				$presence = $this->controller->presenceFor($uuids);
+				// Cast to object so an empty map serializes as `{}` not `[]`.
+				$this->respond($conn, 200, ['rooms' => (object)$presence]);
+				return;
+			}
+
+			if ($method === 'POST' && preg_match(self::KICK_PATTERN, strtolower($path), $m) === 1) {
+				$result = $this->kickController->kick($m['uuid'], $m['clientId'], $nowMs);
+				match ($result) {
+					KickController::RESULT_KICKED => $this->respond($conn, 200, ['result' => 'kicked']),
+					KickController::RESULT_ROOM_NOT_FOUND => $this->respond($conn, 404, ['error' => 'room_not_found']),
+					KickController::RESULT_CLIENT_NOT_FOUND => $this->respond($conn, 404, ['error' => 'client_not_found']),
+				};
+				return;
+			}
+
+			// Path didn't match any known route. If it looks like a kick path
+			// but with the wrong method, signal that explicitly.
+			if (preg_match(self::KICK_PATTERN, strtolower($path)) === 1 || $path === self::ROUTE) {
 				$this->respond($conn, 405, ['error' => 'method_not_allowed']);
 				return;
 			}
-
-			$path = $request->getUri()->getPath();
-			if ($path !== self::ROUTE) {
-				$this->respond($conn, 404, ['error' => 'not_found']);
-				return;
-			}
-
-			$uuids = $this->parseUuids($request);
-			$presence = $this->controller->presenceFor($uuids);
-			// Cast to object so an empty map serializes as `{}` not `[]`.
-			$this->respond($conn, 200, ['rooms' => (object)$presence]);
+			$this->respond($conn, 404, ['error' => 'not_found']);
 		} catch (Throwable $e) {
 			$this->logger->error('PresenceHttpServer failed to handle request', [
 				'exception' => $e,

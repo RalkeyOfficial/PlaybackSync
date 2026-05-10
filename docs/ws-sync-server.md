@@ -110,6 +110,7 @@ sudo -u www-data php occ config:app:set playbacksync <key> --value <value>
 | `ws_join_timeout_ms` | `5000` | A connection that doesn't send `JOIN` within this many ms is closed. |
 | `ws_idle_close_ms` | `30000` | A connection with no `HEARTBEAT` within this window is closed. |
 | `ws_tombstone_ms` | `30000` | How long a disconnected client may reconnect with the same `clientId` to resume its event-replay window. |
+| `ws_kick_block_ms` | `30000` | After an owner-initiated kick, how long the same `clientId` is forbidden from rejoining the room. In-memory only; cleared on daemon restart. |
 | `ws_event_log_size` | `200` | Per-room ring buffer size for replaying events to reconnecting clients. |
 | `ws_rate_limit_events_per_sec` | `10` | Per-connection token-bucket cap on `EVENT` / `EPISODE_CHANGE_REQUEST` messages. |
 | `ws_drift_nudge_threshold_ms` | `200` | Drift below this is ignored. Above this and below the seek threshold triggers `SYNC_ADJUST mode=nudge-rate`. |
@@ -123,7 +124,12 @@ Daemon-level options (`--host`, `--port`) override the corresponding app-config 
 
 ### Admin HTTP setup
 
-The PHP-side rooms API queries the daemon for live presence and playback state via a small HMAC-signed HTTP endpoint co-located with the WebSocket server. The shared secret (`ws_admin_secret`) is **seeded automatically** by a repair step on `occ app:enable` and on every `occ upgrade`, so operators don't normally need to touch it.
+The PHP-side rooms API talks to the daemon over a small HMAC-signed HTTP endpoint co-located with the WebSocket server. Two routes today:
+
+- `GET  /admin/rooms/presence?uuids=<csv>` — point-in-time presence map for the rooms list / detail view.
+- `POST /admin/rooms/{uuid}/clients/{clientId}/disconnect` — owner-initiated kick. Sends the targeted client a final `{type:"ERROR", code:"KICKED"}` frame, closes the socket, and records a per-room reconnect block of `ws_kick_block_ms`.
+
+The shared secret (`ws_admin_secret`) is **seeded automatically** by a repair step on `occ app:enable` and on every `occ upgrade`, so operators don't normally need to touch it.
 
 To rotate the secret manually (e.g. after a suspected leak):
 

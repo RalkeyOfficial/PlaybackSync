@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace OCA\PlaybackSync\Tests\Unit\WebSocket;
 
 use OCA\PlaybackSync\WebSocket\ClientConnection;
+use OCA\PlaybackSync\WebSocket\MessageEncoder;
 use OCA\PlaybackSync\WebSocket\RateLimiter;
 use OCA\PlaybackSync\WebSocket\RoomRuntime;
 use PHPUnit\Framework\TestCase;
@@ -98,6 +99,64 @@ class RoomRuntimeTest extends TestCase {
 		$this->assertNotNull($room->getClient('alive'));
 		$this->assertNotNull($room->getClient('fresh'));
 		$this->assertNull($room->getClient('stale'));
+	}
+
+	public function testKickClientReturnsFalseForUnknownId(): void {
+		$room = new RoomRuntime('uuid-1', expiresAtMs: 9_999_999);
+		$this->assertFalse($room->kickClient('nope', new MessageEncoder(), blockMs: 30_000, nowMs: 1000));
+	}
+
+	public function testKickClientSendsErrorClosesAndRecordsBlock(): void {
+		$room = new RoomRuntime('uuid-1', expiresAtMs: 9_999_999);
+		$conn = $this->createMock(ConnectionInterface::class);
+		$conn->expects($this->once())
+			->method('send')
+			->with($this->callback(static function (string $payload): bool {
+				$decoded = json_decode($payload, true);
+				return is_array($decoded)
+					&& ($decoded['type'] ?? null) === 'ERROR'
+					&& ($decoded['code'] ?? null) === 'KICKED';
+			}));
+		$conn->expects($this->once())->method('close');
+
+		$room->addClient($this->makeClient('victim', $conn));
+
+		$kicked = $room->kickClient('victim', new MessageEncoder(), blockMs: 30_000, nowMs: 1000);
+
+		$this->assertTrue($kicked);
+		$this->assertNull($room->getClient('victim'));
+		$this->assertTrue($room->isClientBlocked('victim', 1000));
+		$this->assertTrue($room->isClientBlocked('victim', 30_999));
+		$this->assertFalse($room->isClientBlocked('victim', 31_000));
+	}
+
+	public function testKickClientStillBlocksWhenConnectionAlreadyDropped(): void {
+		// Tombstoned client (conn=null) — kick should still record a block
+		// so a same-id reconnect during the window is rejected.
+		$room = new RoomRuntime('uuid-1', expiresAtMs: 9_999_999);
+		$ghost = $this->makeClient('ghost', null);
+		$ghost->tombstone(50_000);
+		$room->addClient($ghost);
+
+		$kicked = $room->kickClient('ghost', new MessageEncoder(), blockMs: 30_000, nowMs: 1000);
+
+		$this->assertTrue($kicked);
+		$this->assertTrue($room->isClientBlocked('ghost', 1000));
+	}
+
+	public function testPruneExpiredKickBlocksDropsOnlyTheExpiredOnes(): void {
+		$room = new RoomRuntime('uuid-1', expiresAtMs: 9_999_999);
+		$encoder = new MessageEncoder();
+
+		$room->addClient($this->makeClient('a', $this->createMock(ConnectionInterface::class)));
+		$room->addClient($this->makeClient('b', $this->createMock(ConnectionInterface::class)));
+		$room->kickClient('a', $encoder, blockMs: 1000, nowMs: 0);
+		$room->kickClient('b', $encoder, blockMs: 5000, nowMs: 0);
+
+		$room->pruneExpiredKickBlocks(2000);
+
+		$this->assertFalse($room->isClientBlocked('a', 2000));
+		$this->assertTrue($room->isClientBlocked('b', 2000));
 	}
 
 	public function testFindIdleClientsIgnoresTombstoned(): void {

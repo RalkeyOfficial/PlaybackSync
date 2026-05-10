@@ -71,3 +71,17 @@ export async function getRoomClients(uuid: string): Promise<RoomClientsResponse>
 	const { data } = await axios.get<RoomClientsResponse>(apiUrl('/' + encodeURIComponent(uuid) + '/clients'))
 	return data
 }
+
+/**
+ * Forcibly disconnect one connected client from a room owned by the current
+ * user. The daemon sends the kicked client a final `KICKED` error frame and
+ * blocks the same `clientId` from rejoining for a short window. Returns 204
+ * with no body on success; any error from the server is propagated as the
+ * underlying axios rejection so callers can branch on `response.status`.
+ *
+ * @param uuid the room's UUID
+ * @param clientId the daemon-issued opaque hex client identifier to kick
+ */
+export async function kickRoomClient(uuid: string, clientId: string): Promise<void> {
+	await axios.delete(apiUrl('/' + encodeURIComponent(uuid) + '/clients/' + encodeURIComponent(clientId)))
+}

@@ -22,6 +22,16 @@ class RoomRuntime {
 	/** @var array<int, array{type: string, value?: mixed, clientId: string, ts: int, eventId: int}> */
 	private array $eventLog = [];
 
+	/**
+	 * Per-clientId reconnect block. After a kick, the same `clientId` is
+	 * forbidden from rejoining until the recorded timestamp passes. This
+	 * prevents an immediate re-flap; it's anti-flap, not a security ban —
+	 * a kicked client can still rejoin with a fresh `clientId`.
+	 *
+	 * @var array<string, int>
+	 */
+	private array $kickBlocks = [];
+
 	public ?ContentIdentity $contentIdentity = null;
 	public PlaybackState $state;
 
@@ -160,5 +170,48 @@ class RoomRuntime {
 			}
 		}
 		return $idle;
+	}
+
+	/**
+	 * Forcibly disconnect a client by id. Sends a final `KICKED` error frame
+	 * (best-effort), closes the underlying socket, removes the client, and
+	 * records a reconnect block until `nowMs + blockMs` so the same id can't
+	 * immediately rejoin.
+	 *
+	 * Returns true when a connected client matched and was kicked; false
+	 * when no such client exists in this runtime.
+	 */
+	public function kickClient(string $clientId, MessageEncoder $encoder, int $blockMs, int $nowMs): bool {
+		$client = $this->clients[$clientId] ?? null;
+		if ($client === null) {
+			return false;
+		}
+		if ($client->conn !== null) {
+			$client->conn->send($encoder->error('KICKED', 'Disconnected by room owner', $nowMs));
+			$client->conn->close();
+		}
+		unset($this->clients[$clientId]);
+		$this->kickBlocks[$clientId] = $nowMs + $blockMs;
+		return true;
+	}
+
+	public function isClientBlocked(string $clientId, int $nowMs): bool {
+		$until = $this->kickBlocks[$clientId] ?? null;
+		if ($until === null) {
+			return false;
+		}
+		if ($until <= $nowMs) {
+			unset($this->kickBlocks[$clientId]);
+			return false;
+		}
+		return true;
+	}
+
+	public function pruneExpiredKickBlocks(int $nowMs): void {
+		foreach ($this->kickBlocks as $clientId => $until) {
+			if ($until <= $nowMs) {
+				unset($this->kickBlocks[$clientId]);
+			}
+		}
 	}
 }

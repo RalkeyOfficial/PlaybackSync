@@ -130,6 +130,15 @@
 						:style="{ backgroundColor: chip.color }">
 						{{ chip.label }}
 						<IconBuffer v-if="chip.isBuffering" :size="12" />
+						<button
+							type="button"
+							class="room-detail__chip-kick"
+							:aria-label="t('playbacksync', 'Disconnect this client')"
+							:title="t('playbacksync', 'Disconnect this client')"
+							:disabled="kicking === chip.clientId"
+							@click="onRequestKick(chip.clientId)">
+							<IconAccountRemove :size="14" />
+						</button>
 					</span>
 				</div>
 				<p v-else class="room-detail__empty">
@@ -191,6 +200,37 @@
 			</NcButton>
 		</template>
 	</NcDialog>
+
+	<NcDialog
+		:name="t('playbacksync', 'Disconnect client?')"
+		size="small"
+		:open="confirmingClientId !== null"
+		:canClose="kicking === null"
+		@update:open="(v) => { if (!v) { confirmingClientId = null } }">
+		<p class="room-detail__confirm-prompt">
+			{{ t('playbacksync', 'Disconnect client {clientId}?', { clientId: confirmingClientLabel }) }}
+		</p>
+		<p class="room-detail__confirm-detail">
+			{{ t('playbacksync', 'They will be disconnected immediately and blocked from rejoining for 30 seconds.') }}
+		</p>
+		<template #actions>
+			<NcButton
+				:disabled="kicking !== null"
+				@click="confirmingClientId = null">
+				{{ t('playbacksync', 'Cancel') }}
+			</NcButton>
+			<NcButton
+				variant="error"
+				:disabled="kicking !== null"
+				@click="onConfirmKick">
+				<template #icon>
+					<NcLoadingIcon v-if="kicking !== null" :size="20" />
+					<IconAccountRemove v-else :size="20" />
+				</template>
+				{{ t('playbacksync', 'Disconnect') }}
+			</NcButton>
+		</template>
+	</NcDialog>
 </template>
 
 <script setup lang="ts">
@@ -205,6 +245,7 @@ import NcDialog from '@nextcloud/vue/components/NcDialog'
 import NcLoadingIcon from '@nextcloud/vue/components/NcLoadingIcon'
 import NcNoteCard from '@nextcloud/vue/components/NcNoteCard'
 import IconAccountMultiple from 'vue-material-design-icons/AccountMultiple.vue'
+import IconAccountRemove from 'vue-material-design-icons/AccountRemove.vue'
 import IconCheck from 'vue-material-design-icons/Check.vue'
 import IconClock from 'vue-material-design-icons/ClockOutline.vue'
 import IconCopy from 'vue-material-design-icons/ContentCopy.vue'
@@ -221,6 +262,7 @@ import IconWeb from 'vue-material-design-icons/Web.vue'
 import StatusDot from './StatusDot.vue'
 import { useNow } from '../composables/useNow.ts'
 import { getRoom } from '../services/roomsApi.ts'
+import { useRoomsStore } from '../stores/rooms.ts'
 
 const props = defineProps<{
 	room: Room
@@ -233,6 +275,7 @@ const emit = defineEmits<{
 }>()
 
 const logger = getLoggerBuilder().setApp('playbacksync').detectUser().build()
+const roomsStore = useRoomsStore()
 
 const now = useNow()
 const copied = ref<'shareLink' | 'targetUrl' | null>(null)
@@ -247,6 +290,19 @@ const freshLive = ref<RoomLiveState | null | undefined>(undefined)
 const refreshing = ref(false)
 
 /**
+ * `clientId` of the chip the owner is being prompted to kick, or null when
+ * the confirmation dialog is closed.
+ */
+const confirmingClientId = ref<string | null>(null)
+
+/**
+ * `clientId` of the kick currently in flight, or null when no kick is
+ * pending. Used to disable both the per-chip button and the confirm-dialog
+ * actions while the request is being processed.
+ */
+const kicking = ref<string | null>(null)
+
+/**
  * The static room fields (uuid, name, URL, share link, timestamps) come
  * from the prop — they don't change while the dialog is open. The `live`
  * block prefers the fresh fetch when it's available, falling back to the
@@ -254,21 +310,34 @@ const refreshing = ref(false)
  */
 const live = computed(() => (freshLive.value === undefined ? props.room.live : freshLive.value))
 
-watch(() => props.open, async (isOpen) => {
-	if (!isOpen) {
-		freshLive.value = undefined
-		return
-	}
+const confirmingClientLabel = computed(() => (
+	confirmingClientId.value ? confirmingClientId.value.slice(0, 8) : ''
+))
+
+/**
+ * Re-fetch the room and replace `freshLive`. Called on dialog open and
+ * after a successful kick so the chip list reflects the new state.
+ */
+async function refreshLive() {
 	refreshing.value = true
 	try {
 		const fresh = await getRoom(props.room.uuid)
 		freshLive.value = fresh.live
 	} catch (error) {
 		logger.warn('Failed to refresh room detail', { error, uuid: props.room.uuid })
-		// Leave `freshLive` as undefined so the prop value stays visible.
+		// Leave the previous value visible.
 	} finally {
 		refreshing.value = false
 	}
+}
+
+watch(() => props.open, (isOpen) => {
+	if (!isOpen) {
+		freshLive.value = undefined
+		confirmingClientId.value = null
+		return
+	}
+	void refreshLive()
 }, { immediate: true })
 
 const isExpired = computed(() => props.room.expiresAt <= now.value)
@@ -481,6 +550,39 @@ function onDelete() {
 	emit('delete', props.room)
 	onOpenChange(false)
 }
+
+/**
+ * Open the confirmation dialog for the chosen client. Kick is irreversible,
+ * so we always prompt — there's no "skip confirmation" path.
+ *
+ * @param clientId the daemon-issued opaque hex identifier from the chip
+ */
+function onRequestKick(clientId: string) {
+	confirmingClientId.value = clientId
+}
+
+/**
+ * Run the confirmed kick: hit the API, refresh the live block, surface a
+ * toast, and close the confirmation dialog. The detail dialog itself stays
+ * open so the owner can see the chip disappear and confirm the outcome.
+ */
+async function onConfirmKick() {
+	const clientId = confirmingClientId.value
+	if (clientId === null || kicking.value !== null) {
+		return
+	}
+	kicking.value = clientId
+	try {
+		const ok = await roomsStore.kickClient(props.room.uuid, clientId)
+		if (ok) {
+			showSuccess(t('playbacksync', 'Client disconnected'))
+			confirmingClientId.value = null
+			await refreshLive()
+		}
+	} finally {
+		kicking.value = null
+	}
+}
 </script>
 
 <style scoped>
@@ -662,7 +764,7 @@ function onDelete() {
 	display: inline-flex;
 	align-items: center;
 	gap: 4px;
-	padding: 4px 10px;
+	padding: 4px 6px 4px 10px;
 	border-radius: 999px;
 	font-family: var(--font-monospace, monospace);
 	font-size: 12px;
@@ -670,6 +772,46 @@ function onDelete() {
 	color: var(--color-main-text);
 	letter-spacing: 0.03em;
 	border: 1px solid rgba(0, 0, 0, 0.05);
+}
+
+.room-detail__chip-kick {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 18px;
+	height: 18px;
+	padding: 0;
+	margin-inline-start: 2px;
+	border: none;
+	border-radius: 50%;
+	background: rgba(0, 0, 0, 0.08);
+	color: inherit;
+	cursor: pointer;
+	opacity: 0.65;
+	transition: opacity 120ms ease, background-color 120ms ease;
+}
+
+.room-detail__chip-kick:hover,
+.room-detail__chip-kick:focus-visible {
+	opacity: 1;
+	background: rgba(0, 0, 0, 0.18);
+}
+
+.room-detail__chip-kick:disabled {
+	cursor: progress;
+	opacity: 0.4;
+}
+
+.room-detail__confirm-prompt {
+	margin: 0 0 8px;
+	font-size: 14px;
+	font-weight: 500;
+}
+
+.room-detail__confirm-detail {
+	margin: 0 0 4px;
+	font-size: 13px;
+	color: var(--color-text-maxcontrast);
 }
 
 .room-detail__empty {
