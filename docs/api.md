@@ -14,6 +14,7 @@ All endpoints live under the prefix `/apps/playbacksync/api/v1/rooms`. The `v1` 
 | `DELETE` | `/rooms/{uuid}`         | Permanently delete one of caller's rooms | `204 No Content`   | Logged in    |
 | `DELETE` | `/rooms/{uuid}/clients/{clientId}` | Forcibly disconnect one connected client | `204 No Content`   | Logged in    |
 | `GET`    | `/ws/status`            | Whether the WebSocket sync service is installed and configured | `200 OK` | Logged in |
+| `GET`    | `/health`               | WebSocket sync daemon liveness + light stats | `200 OK` | Public |
 
 [¹] Subject to the `restrict_to_admins` `IAppConfig` toggle — see [Authentication and authorization](#authentication-and-authorization).
 
@@ -319,6 +320,79 @@ This endpoint has none beyond the global authentication check. It always returns
 curl -u alice:alice \
   -H 'OCS-APIRequest: true' \
   'https://nextcloud.example/index.php/apps/playbacksync/api/v1/ws/status'
+```
+
+### WebSocket sync daemon healthcheck
+
+```
+GET /apps/playbacksync/api/v1/health
+```
+
+Public liveness probe for the WebSocket sync daemon. Designed for external monitors (k8s probes, status pages, uptime checks) that need a stable URL on the Nextcloud webroot. The daemon's actual health endpoint is loopback-only on `ws_admin_port`; this route loopback-calls it and surfaces the result through the normal Nextcloud HTTP surface.
+
+This route is `#[PublicPage]` — no Nextcloud login required. The response carries no sensitive data (no UUIDs, no client IDs, no IPs, no secrets) — only aggregate counts and timings. The response body is intentionally compact enough to be polled aggressively without measurable cost.
+
+#### Success response
+
+`HTTP 200 OK`. **Always 200**, even when the daemon is unreachable — load balancers and humans alike misread a 5xx from a healthcheck. The `status` field is the primary signal.
+
+When the daemon is reachable and healthy:
+
+```json
+{
+  "status": "ok",
+  "daemon": {
+    "reachable": true,
+    "latency_ms": 3,
+    "body": {
+      "status": "ok",
+      "daemon_version": "0.3.0",
+      "uptime_seconds": 12345,
+      "timestamp_ms": 1715339000000,
+      "rooms":   { "active": 4 },
+      "clients": { "connected": 11 },
+      "tick":    { "running": true, "last_tick_ms_ago": 982 }
+    }
+  }
+}
+```
+
+When the daemon cannot be reached (process down, `ws_admin_secret` unset so the admin port isn't bound, loopback host/port misconfigured):
+
+```json
+{
+  "status": "degraded",
+  "daemon": {
+    "reachable": false,
+    "error": "request_failed"
+  }
+}
+```
+
+`error` is a short machine-readable token: `request_failed` (transport error / timeout), `http_<status>` (daemon answered with non-200), or `invalid_json` (daemon body wasn't JSON). Operators wanting a richer diagnosis should look in the Nextcloud log for the matching `HealthClient` warning.
+
+| Field                          | Type                       | Description                                                                                       |
+|--------------------------------|----------------------------|---------------------------------------------------------------------------------------------------|
+| `status`                       | `"ok"` \| `"degraded"`     | Top-level signal. `"ok"` only when the daemon was reachable AND its own `status` was `"ok"`.      |
+| `daemon.reachable`             | boolean                    | Whether the loopback HTTP call to the daemon succeeded.                                           |
+| `daemon.latency_ms`            | integer                    | (reachable only) Round-trip latency of the loopback probe.                                        |
+| `daemon.error`                 | string                     | (unreachable only) `request_failed`, `http_<status>`, or `invalid_json`.                          |
+| `daemon.body.daemon_version`   | string                     | App version of the daemon process.                                                                |
+| `daemon.body.uptime_seconds`   | integer                    | Wall-clock seconds since the daemon process started serving.                                      |
+| `daemon.body.timestamp_ms`     | integer (ms)               | Daemon's current wall clock at the moment of the response.                                        |
+| `daemon.body.rooms.active`     | integer                    | Rooms with at least one connection or recent activity tracked in memory.                          |
+| `daemon.body.clients.connected`| integer                    | Sum of `clientCount()` across all in-memory rooms.                                                |
+| `daemon.body.tick.running`     | boolean                    | Whether the housekeeping loop has run within the last 5 seconds.                                  |
+| `daemon.body.tick.last_tick_ms_ago` | integer \| `null`     | Milliseconds since the last tick. `null` before the loop's first run.                             |
+
+#### Failure modes
+
+This endpoint has none. It is `#[PublicPage]`, so authentication can't fail; daemon issues collapse to `status: "degraded"` with a `200`. The only way to get a non-200 here is a bug in PHP itself.
+
+#### Example
+
+```bash
+curl -s 'https://nextcloud.example/index.php/apps/playbacksync/api/v1/health'
 ```
 
 ## A note on `OCS-APIRequest`

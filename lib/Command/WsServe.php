@@ -5,9 +5,12 @@ declare(strict_types=1);
 namespace OCA\PlaybackSync\Command;
 
 use OCA\PlaybackSync\AppInfo\Application;
+use OCA\PlaybackSync\WebSocket\Admin\HealthController;
 use OCA\PlaybackSync\WebSocket\Admin\PresenceHttpServer;
 use OCA\PlaybackSync\WebSocket\MessageRouter;
+use OCA\PlaybackSync\WebSocket\RoomRegistry;
 use OCA\PlaybackSync\WebSocket\Tick;
+use OCP\App\IAppManager;
 use OCP\IAppConfig;
 use Psr\Log\LoggerInterface;
 use Ratchet\Http\HttpServer;
@@ -33,6 +36,8 @@ class WsServe extends Command {
 		private readonly MessageRouter $router,
 		private readonly Tick $tick,
 		private readonly PresenceHttpServer $presenceHttp,
+		private readonly RoomRegistry $registry,
+		private readonly IAppManager $appManager,
 	) {
 		parent::__construct();
 	}
@@ -51,6 +56,8 @@ class WsServe extends Command {
 		$port = (int)($input->getOption('port')
 			?? $this->appConfig->getValueString(Application::APP_ID, 'ws_port', '8765'));
 
+		$startedAtMs = (int)(microtime(true) * 1000);
+
 		$loop = Loop::get();
 		$socket = new SocketServer($host . ':' . $port, [], $loop);
 
@@ -59,6 +66,16 @@ class WsServe extends Command {
 			$socket,
 			$loop,
 		);
+
+		// Wire the daemon's healthcheck handler. Built here (not via the DI
+		// container) so the captured `startedAtMs` reflects the actual boot
+		// moment instead of whenever the container happened to resolve us.
+		$this->presenceHttp->setHealthController(new HealthController(
+			$this->registry,
+			$this->tick,
+			$this->appManager->getAppVersion(Application::APP_ID),
+			$startedAtMs,
+		));
 
 		$this->tick->start();
 

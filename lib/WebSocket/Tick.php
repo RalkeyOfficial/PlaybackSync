@@ -20,6 +20,7 @@ use React\EventLoop\Loop;
 class Tick {
 
 	private int $lastMetricsLogMs = 0;
+	private ?int $lastTickMs = null;
 
 	public function __construct(
 		private readonly RoomRegistry $registry,
@@ -35,7 +36,17 @@ class Tick {
 		});
 	}
 
+	/**
+	 * Wall-clock timestamp of the most recent successful `runOnce` invocation,
+	 * in milliseconds. Returns `null` before the first tick — `HealthController`
+	 * treats that as "loop hasn't run yet" rather than "loop is wedged".
+	 */
+	public function lastTickMs(): ?int {
+		return $this->lastTickMs;
+	}
+
 	public function runOnce(int $nowMs): void {
+		$this->lastTickMs = $nowMs;
 		foreach ($this->registry->all() as $uuid => $runtime) {
 			if ($runtime->isExpired($nowMs)) {
 				foreach ($runtime->clients() as $client) {

@@ -15,6 +15,8 @@ return [
 
 		['name' => 'ws_status#index', 'url' => '/api/v1/ws/status', 'verb' => 'GET'],
 
+		['name' => 'health#index', 'url' => '/api/v1/health', 'verb' => 'GET'],
+
 		['name' => 'admin_settings#index', 'url' => '/api/v1/admin/settings', 'verb' => 'GET'],
 		['name' => 'admin_settings#update', 'url' => '/api/v1/admin/settings', 'verb' => 'PUT'],
 		['name' => 'admin_settings#regenerateAdminSecret', 'url' => '/api/v1/admin/settings/secret', 'verb' => 'POST'],
