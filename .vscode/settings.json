@@ -1,5 +1,6 @@
 {
-    "prettier.configPath": ".prettierrc",
-    "editor.formatOnSave": true,
-    "editor.defaultFormatter": "esbenp.prettier-vscode"
+  "prettier.configPath": ".prettierrc",
+  "editor.formatOnSave": true,
+  "editor.defaultFormatter": "esbenp.prettier-vscode",
+  "cSpell.words": ["Nextcloud", "playbacksync"]
 }

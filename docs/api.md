@@ -14,7 +14,7 @@ All endpoints live under the prefix `/apps/playbacksync/api/v1/rooms`. The `v1` 
 | `DELETE` | `/rooms/{uuid}`         | Permanently delete one of caller's rooms | `204 No Content`   | Logged in    |
 | `DELETE` | `/rooms/{uuid}/clients/{clientId}` | Forcibly disconnect one connected client | `204 No Content`   | Logged in    |
 | `POST`   | `/rooms/{uuid}/playback` | Owner-initiated play/pause/seek/reset broadcast to every client | `204 No Content` | Logged in |
-| `GET`    | `/ws/status`            | Whether the WebSocket sync service is installed and configured | `200 OK` | Logged in |
+| `GET`    | `/ws/status`            | Whether the WebSocket sync service is usable (installed, configured, and the daemon is reachable) | `200 OK` | Logged in |
 | `GET`    | `/health`               | WebSocket sync daemon liveness + light stats | `200 OK` | Public |
 | `GET`    | `/r/{uuid}`[²]          | Public share link — Basic Auth gate, then 302 to target with sync params | `302 Found` | Public (Basic Auth password) |
 
@@ -357,7 +357,7 @@ curl -u alice:alice \
 
 ### WebSocket service status
 
-Tells the caller whether the WebSocket sync service is installed and configured on this Nextcloud instance. Use it to decide whether to expose sync UI in the client; the WS connection itself will surface any *liveness* issue when the client tries to open the socket.
+Tells the caller whether the WebSocket sync service is *usable* on this Nextcloud instance — meaning installed, configured, and the daemon is currently reachable from PHP. Use it to decide whether to expose sync UI in the client and which help affordance to show when sync is not usable.
 
 ```
 GET /apps/playbacksync/api/v1/ws/status
@@ -368,19 +368,39 @@ GET /apps/playbacksync/api/v1/ws/status
 `200 OK`
 
 ```json
-{ "available": true }
+{ "available": true, "reason": null }
 ```
 
-`available` is `true` only if both:
+`available` is `true` only when all of the following hold:
 
 - The daemon's Composer dependencies (Ratchet) are loadable in the PHP runtime — i.e., somebody ran `composer install` in the app directory.
 - Both `ws_host` and `ws_port` `IAppConfig` keys are non-empty.
+- The daemon answers a loopback `/healthz` probe (via the same `HealthClient` used by `/health`) with `status: "ok"`.
 
-The check is intentionally local-only — it does not reach across the network to probe the daemon process, because in containerised setups the PHP container often can't reach the daemon's bind address regardless of whether the daemon is running. Treat `available: true` as "the admin has set up sync"; treat WS connection failures at the client as "sync is configured but currently unreachable".
+When `available` is `false`, `reason` distinguishes *why*, so the UI can branch on it:
+
+| `reason`         | Meaning                                                                                                | Suggested UI               |
+|------------------|--------------------------------------------------------------------------------------------------------|----------------------------|
+| `not_installed`  | Composer deps are missing, or `ws_host` / `ws_port` are unset — the admin has not finished setup.      | Link to install instructions. |
+| `not_running`    | The app is installed and configured, but the daemon's `/healthz` probe failed (unreachable, timed out, or replied with non-`ok` status). | Tell the user a sysadmin needs to start the daemon (e.g. `systemctl start playbacksync-ws` or `occ playbacksync:ws-server`). |
+
+When `available` is `true`, `reason` is always `null`.
+
+Failure modes that go beyond `not_running` (timeout vs. connection refused vs. `degraded`) all collapse to `not_running` here — operators chase the detail through `/api/v1/health` or the daemon log.
+
+#### Failure responses
+
+```json
+{ "available": false, "reason": "not_installed" }
+```
+
+```json
+{ "available": false, "reason": "not_running" }
+```
 
 #### Failure modes
 
-This endpoint has none beyond the global authentication check. It always returns `200`.
+This endpoint has none beyond the global authentication check. It always returns `200`; the `available` / `reason` pair carries the outcome.
 
 #### Example
 
