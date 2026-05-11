@@ -39,6 +39,19 @@ export const useRoomsStore = defineStore('rooms', {
 			}
 		},
 
+		async refresh() {
+			// Silent refresh: keeps `loading` untouched so the empty-state spinner
+			// and any disabled-button states tied to it do not flicker on every
+			// tick, and swallows transient errors so we do not toast on every
+			// failed poll.
+			try {
+				this.rooms = await listRooms()
+				this.loaded = true
+			} catch (error) {
+				logger.error('Failed to refresh rooms', { error })
+			}
+		},
+
 		async create(payload: CreateRoomPayload): Promise<boolean> {
 			this.creating = true
 			try {

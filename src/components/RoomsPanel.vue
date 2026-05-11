@@ -2,6 +2,12 @@
 	<div class="rooms-panel">
 		<header class="rooms-panel__header">
 			<WsStatusBadge />
+			<div class="rooms-panel__header-spacer" />
+			<AutoRefreshRing
+				:intervalMs="15_000"
+				storageKey="playbacksync:rooms:auto-refresh"
+				:defaultEnabled="true"
+				@refresh="store.refresh()" />
 			<NcButton
 				variant="primary"
 				:disabled="wsStatus.isUnavailable"
@@ -56,6 +62,7 @@ import NcEmptyContent from '@nextcloud/vue/components/NcEmptyContent'
 import NcLoadingIcon from '@nextcloud/vue/components/NcLoadingIcon'
 import IconPlus from 'vue-material-design-icons/Plus.vue'
 import IconSync from 'vue-material-design-icons/Sync.vue'
+import AutoRefreshRing from './AutoRefreshRing.vue'
 import RoomCreatedDialog from './RoomCreatedDialog.vue'
 import RoomCreateDialog from './RoomCreateDialog.vue'
 import RoomList from './RoomList.vue'
@@ -106,9 +113,13 @@ async function onDelete(room: Room) {
 .rooms-panel__header {
 	display: flex;
 	align-items: center;
-	justify-content: space-between;
 	gap: 12px;
 	flex-wrap: wrap;
+}
+
+.rooms-panel__header-spacer {
+	flex: 1;
+	min-width: 0;
 }
 
 .rooms-panel__body {
