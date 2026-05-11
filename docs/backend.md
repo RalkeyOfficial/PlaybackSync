@@ -63,6 +63,8 @@ The constructor calls `addType()` for every column whose type is not "string", w
 
 The TTL handling is worth flagging because it interacts with admin config. The `default_ttl_seconds` and `MAX_TTL_SECONDS` constants live in this file (24 hours each, by default), but the *actual* default used for a request can be overridden by an admin via `IAppConfig`. The service guards against a misconfigured admin overriding the default to something nonsensical (zero, negative, longer than the maximum) by falling back to the constant if the configured value is out of range.
 
+`sendPlaybackCommand` is the entry point for owner-driven play/pause/seek/reset. It enforces ownership through `getOwnedRoom` exactly like `kickClient` and then hands off to [`lib/Service/AdminPlaybackClient.php`](../lib/Service/AdminPlaybackClient.php) — a sibling of `AdminKickClient` that issues an HMAC-signed `POST /admin/rooms/{uuid}/playback` to the daemon's loopback admin server. The admin client surfaces two distinct failure modes via dedicated exceptions: `RoomNotLiveException` for the 404 case (the daemon has no in-memory runtime for the room because no client has joined yet) and `PlaybackCommandFailedException` for transport/configuration errors. Keeping these as separate exception types is what lets the controller respond `409 Conflict` for "no clients connected" rather than collapsing both into a generic 502 — the dashboard renders the two states very differently.
+
 ## The controller
 
 [`lib/Controller/RoomController.php`](../lib/Controller/RoomController.php) is a plain `OCP\AppFramework\Controller` — not an `OCSController` — because the API is consumed exclusively by our own frontend, and the OCS envelope (`<ocs><meta>...</meta><data>...</data></ocs>`) would be pure overhead. We return `DataResponse` objects with explicit HTTP status codes and let `axios` and the Pinia store make sense of them client-side.
@@ -73,12 +75,14 @@ The `?string $userId` parameter in the constructor is auto-injected by Nextcloud
 
 Domain exceptions thrown by the service are caught at the controller boundary and translated into the appropriate HTTP responses. The mapping is one-to-one and lives entirely in the controller's `catch` blocks:
 
-| Exception                       | HTTP status         | When it fires                                                                          |
-|---------------------------------|---------------------|----------------------------------------------------------------------------------------|
-| `RoomNotFoundException`         | `404 Not Found`     | UUID unknown, room past `expires_at`, or room owned by a different user.               |
-| `CreateRestrictedException`     | `403 Forbidden`     | `restrict_to_admins` is on and the caller is not an admin. Only `POST /rooms` raises.  |
-| `InvalidRoomInputException`     | `400 Bad Request`   | `targetUrl` invalid, `name` too long, `ttl` out of range. Only `POST /rooms` raises.   |
-| (caller is unauthenticated)     | `401 Unauthorized`  | Guarded directly in each method via `if ($this->userId === null)`; no exception used.  |
+| Exception                          | HTTP status         | When it fires                                                                          |
+|------------------------------------|---------------------|----------------------------------------------------------------------------------------|
+| `RoomNotFoundException`            | `404 Not Found`     | UUID unknown, room past `expires_at`, or room owned by a different user.               |
+| `CreateRestrictedException`        | `403 Forbidden`     | `restrict_to_admins` is on and the caller is not an admin. Only `POST /rooms` raises.  |
+| `InvalidRoomInputException`        | `400 Bad Request`   | `targetUrl` invalid, `name` too long, `ttl` out of range. Only `POST /rooms` raises.   |
+| `RoomNotLiveException`             | `409 Conflict`      | Playback command for a room with no live daemon runtime (no client has joined yet).    |
+| `PlaybackCommandFailedException`   | `502 Bad Gateway`   | Playback command path; daemon unreachable or admin secret misconfigured.               |
+| (caller is unauthenticated)        | `401 Unauthorized`  | Guarded directly in each method via `if ($this->userId === null)`; no exception used.  |
 
 The error message in the response body comes straight from the exception, which is fine because every domain exception is constructed with a message the user can safely see (no internals, no SQL, no stack traces).
 

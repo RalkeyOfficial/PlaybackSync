@@ -13,6 +13,7 @@ All endpoints live under the prefix `/apps/playbacksync/api/v1/rooms`. The `v1` 
 | `GET`    | `/rooms/{uuid}`         | Fetch one of the caller's rooms          | `200 OK`           | Logged in    |
 | `DELETE` | `/rooms/{uuid}`         | Permanently delete one of caller's rooms | `204 No Content`   | Logged in    |
 | `DELETE` | `/rooms/{uuid}/clients/{clientId}` | Forcibly disconnect one connected client | `204 No Content`   | Logged in    |
+| `POST`   | `/rooms/{uuid}/playback` | Owner-initiated play/pause/seek/reset broadcast to every client | `204 No Content` | Logged in |
 | `GET`    | `/ws/status`            | Whether the WebSocket sync service is installed and configured | `200 OK` | Logged in |
 | `GET`    | `/health`               | WebSocket sync daemon liveness + light stats | `200 OK` | Public |
 | `GET`    | `/r/{uuid}`[²]          | Public share link — Basic Auth gate, then 302 to target with sync params | `302 Found` | Public (Basic Auth password) |
@@ -288,6 +289,70 @@ curl -u alice:alice \
   -H 'OCS-APIRequest: true' \
   -X DELETE \
   'https://nextcloud.example/index.php/apps/playbacksync/api/v1/rooms/5a66524f-5ba1-4f3d-8897-7c5838c0bd80/clients/3f9b1a2c4d5e6f70'
+```
+
+### Send a playback command
+
+```
+POST /apps/playbacksync/api/v1/rooms/{uuid}/playback
+```
+
+Lets the room owner drive playback for every connected client from outside the WebSocket protocol — typically from the dashboard's room detail modal. The PHP side relays the command to the daemon's loopback admin channel, which mutates the room's authoritative `PlaybackState`, appends to the event log (so reconnecting clients replay the change), and broadcasts a `STATE` frame to every active connection in the room. The behaviour is identical to what happens when a connected client sends a peer-to-peer `EVENT` frame, except the originator here is the dashboard rather than a participant.
+
+Because the daemon's runtime only exists once at least one client has joined, sending a command to an idle room responds with `409 Conflict` and an `error: "room_not_live"` body — there's nothing in memory to mutate yet. The dashboard surfaces this as "no clients are connected to this room yet"; create a connection first, then issue the command.
+
+#### Path parameters
+
+| Parameter | Type             | Description                                               |
+|-----------|------------------|-----------------------------------------------------------|
+| `uuid`    | string (UUID v4) | The `uuid` field of an existing room owned by the caller. |
+
+#### Request body
+
+JSON object:
+
+| Field      | Type      | Required               | Description                                                                                       |
+|------------|-----------|------------------------|---------------------------------------------------------------------------------------------------|
+| `action`   | string    | yes                    | One of `play`, `pause`, `seek`, `reset`. `reset` is a convenience for "pause then seek to 0".     |
+| `videoPos` | number ≥0 | yes when `action=seek` | Target playback position in seconds. Ignored for non-`seek` actions.                              |
+
+#### Success response
+
+`HTTP 204 No Content`. The body is empty. The state change is visible to every connected client immediately (the broadcast happens before the response returns) and to the dashboard on its next room refresh.
+
+#### Failure modes
+
+| Status | Body                          | Trigger                                                                                                     |
+|--------|-------------------------------|-------------------------------------------------------------------------------------------------------------|
+| 400    | `{"error":"invalid_action"}`  | `action` is missing or not one of the four allowed values.                                                  |
+| 400    | `{"error":"invalid_position"}` | `action: "seek"` without a non-negative numeric `videoPos`.                                                 |
+| 401    | `{"error":"…"}`               | No authenticated Nextcloud user on the request.                                                             |
+| 404    | `{"error":"Room not found."}` | Room UUID unknown / not owned / expired. Collapses with cross-user access, same as every other room route.  |
+| 409    | `{"error":"room_not_live"}`   | The daemon has no live runtime for the room — no client has joined yet, so there's no state to drive.       |
+| 502    | `{"error":"…"}`               | The PHP side could not reach the WebSocket sync daemon (daemon down, admin secret misconfigured).           |
+
+#### Examples
+
+Play / pause:
+
+```bash
+curl -u alice:alice \
+  -H 'OCS-APIRequest: true' \
+  -H 'Content-Type: application/json' \
+  -X POST \
+  -d '{"action":"play"}' \
+  'https://nextcloud.example/index.php/apps/playbacksync/api/v1/rooms/5a66524f-5ba1-4f3d-8897-7c5838c0bd80/playback'
+```
+
+Seek to 2 minutes 47 seconds:
+
+```bash
+curl -u alice:alice \
+  -H 'OCS-APIRequest: true' \
+  -H 'Content-Type: application/json' \
+  -X POST \
+  -d '{"action":"seek","videoPos":167}' \
+  'https://nextcloud.example/index.php/apps/playbacksync/api/v1/rooms/5a66524f-5ba1-4f3d-8897-7c5838c0bd80/playback'
 ```
 
 ### WebSocket service status

@@ -10,7 +10,9 @@ use OCA\PlaybackSync\Service\Exceptions\ClientNotFoundException;
 use OCA\PlaybackSync\Service\Exceptions\CreateRestrictedException;
 use OCA\PlaybackSync\Service\Exceptions\InvalidRoomInputException;
 use OCA\PlaybackSync\Service\Exceptions\KickFailedException;
+use OCA\PlaybackSync\Service\Exceptions\PlaybackCommandFailedException;
 use OCA\PlaybackSync\Service\Exceptions\RoomNotFoundException;
+use OCA\PlaybackSync\Service\Exceptions\RoomNotLiveException;
 use OCA\PlaybackSync\Service\RoomLiveStateEnricher;
 use OCA\PlaybackSync\Service\RoomService;
 use OCP\AppFramework\Controller;
@@ -135,6 +137,50 @@ class RoomController extends Controller {
 		} catch (RoomNotFoundException|ClientNotFoundException $e) {
 			return new DataResponse(['error' => $e->getMessage()], Http::STATUS_NOT_FOUND);
 		} catch (KickFailedException $e) {
+			return new DataResponse(['error' => $e->getMessage()], Http::STATUS_BAD_GATEWAY);
+		}
+
+		return new DataResponse(null, Http::STATUS_NO_CONTENT);
+	}
+
+	/**
+	 * Owner-driven playback command. Mutates the daemon's authoritative
+	 * playback state and triggers a `STATE` broadcast to every connected
+	 * client.
+	 *
+	 * @param string     $uuid     Room UUID.
+	 * @param string     $action   One of `play`, `pause`, `seek`, `reset`.
+	 * @param float|null $videoPos Target position in seconds. Required and ≥0
+	 *                             when `$action === 'seek'`; ignored otherwise.
+	 */
+	#[NoAdminRequired]
+	public function playback(string $uuid, string $action, ?float $videoPos = null): DataResponse {
+		if ($this->userId === null) {
+			return new DataResponse(['error' => 'Authentication required.'], Http::STATUS_UNAUTHORIZED);
+		}
+
+		$allowed = ['play', 'pause', 'seek', 'reset'];
+		if (!in_array($action, $allowed, true)) {
+			return new DataResponse(
+				['error' => 'invalid_action'],
+				Http::STATUS_BAD_REQUEST,
+			);
+		}
+
+		if ($action === 'seek' && ($videoPos === null || $videoPos < 0.0)) {
+			return new DataResponse(
+				['error' => 'invalid_position'],
+				Http::STATUS_BAD_REQUEST,
+			);
+		}
+
+		try {
+			$this->service->sendPlaybackCommand($this->userId, $uuid, $action, $videoPos);
+		} catch (RoomNotFoundException $e) {
+			return new DataResponse(['error' => $e->getMessage()], Http::STATUS_NOT_FOUND);
+		} catch (RoomNotLiveException $e) {
+			return new DataResponse(['error' => 'room_not_live'], Http::STATUS_CONFLICT);
+		} catch (PlaybackCommandFailedException $e) {
 			return new DataResponse(['error' => $e->getMessage()], Http::STATUS_BAD_GATEWAY);
 		}
 

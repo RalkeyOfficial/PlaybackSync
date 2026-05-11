@@ -104,7 +104,69 @@
 				</div>
 			</section>
 
-			<!-- Live state ------------------------------------------------ -->
+			<!-- Playback -------------------------------------------------- -->
+			<section v-if="live" class="room-detail__section">
+				<div class="room-detail__section-head">
+					<IconPlay :size="16" />
+					<h4>{{ t('playbacksync', 'Playback') }}</h4>
+					<span class="room-detail__playback-pill" :class="`room-detail__playback-pill--${playbackVariant}`">
+						<IconPlay v-if="playbackVariant === 'playing'" :size="14" />
+						<IconBuffer v-else-if="playbackVariant === 'buffering'" :size="14" class="room-detail__spin" />
+						<IconPause v-else :size="14" />
+						<span>{{ playbackLabel }}</span>
+						<span class="room-detail__playback-pos">{{ formattedVideoPos }}</span>
+					</span>
+				</div>
+
+				<div class="room-detail__controls">
+					<NcButton
+						:disabled="playbackBusy"
+						:aria-label="isCurrentlyPlaying
+							? t('playbacksync', 'Pause playback for everyone')
+							: t('playbacksync', 'Start playback for everyone')"
+						@click="onTogglePlay">
+						<template #icon>
+							<NcLoadingIcon v-if="playbackAction === 'play' || playbackAction === 'pause'" :size="20" />
+							<IconPause v-else-if="isCurrentlyPlaying" :size="20" />
+							<IconPlay v-else :size="20" />
+						</template>
+						{{ isCurrentlyPlaying ? t('playbacksync', 'Pause') : t('playbacksync', 'Play') }}
+					</NcButton>
+					<NcButton
+						:disabled="playbackBusy"
+						:aria-label="t('playbacksync', 'Reset playback to start')"
+						@click="onReset">
+						<template #icon>
+							<NcLoadingIcon v-if="playbackAction === 'reset'" :size="20" />
+							<IconSkipBackward v-else :size="20" />
+						</template>
+						{{ t('playbacksync', 'Reset to start') }}
+					</NcButton>
+				</div>
+
+				<form class="room-detail__seek" @submit.prevent="onSeek">
+					<NcTextField
+						v-model="seekInput"
+						class="room-detail__seek-field"
+						:label="t('playbacksync', 'Seek to')"
+						:placeholder="seekPlaceholder"
+						:helperText="seekHelperText"
+						:error="seekInput !== '' && !canSeek"
+						:disabled="playbackBusy" />
+					<NcButton
+						type="submit"
+						:disabled="playbackBusy || !canSeek"
+						:aria-label="t('playbacksync', 'Seek to entered position')">
+						<template #icon>
+							<NcLoadingIcon v-if="playbackAction === 'seek'" :size="20" />
+							<IconArrowRight v-else :size="20" />
+						</template>
+						{{ t('playbacksync', 'Go') }}
+					</NcButton>
+				</form>
+			</section>
+
+			<!-- Connected viewers ----------------------------------------- -->
 			<section v-if="live" class="room-detail__section">
 				<div class="room-detail__section-head">
 					<IconAccountMultiple :size="16" />
@@ -113,34 +175,34 @@
 					<NcLoadingIcon v-if="refreshing" :size="14" />
 				</div>
 
-				<div class="room-detail__playback" :class="`room-detail__playback--${playbackVariant}`">
-					<IconPlay v-if="playbackVariant === 'playing'" :size="16" />
-					<IconBuffer v-else-if="playbackVariant === 'buffering'" :size="16" />
-					<IconPause v-else :size="16" />
-					<span>{{ playbackLabel }}</span>
-					<span class="room-detail__playback-pos">{{ formattedVideoPos }}</span>
-				</div>
-
-				<div v-if="live.connectedCount > 0" class="room-detail__chips">
-					<span
+				<ul v-if="live.connectedCount > 0" class="room-detail__viewers">
+					<li
 						v-for="chip in clientChips"
 						:key="chip.clientId"
-						class="room-detail__chip"
-						:title="chip.clientId"
-						:style="{ backgroundColor: chip.color }">
-						{{ chip.label }}
-						<IconBuffer v-if="chip.isBuffering" :size="12" />
-						<button
-							type="button"
-							class="room-detail__chip-kick"
+						class="room-detail__viewer">
+						<span
+							class="room-detail__viewer-dot"
+							:style="{ backgroundColor: chip.color }" />
+						<code class="room-detail__viewer-id" :title="chip.clientId">
+							{{ chip.label }}
+						</code>
+						<span v-if="chip.isBuffering" class="room-detail__viewer-buffering">
+							<IconBuffer :size="14" class="room-detail__spin" />
+							{{ t('playbacksync', 'Buffering') }}
+						</span>
+						<NcButton
+							variant="tertiary"
 							:aria-label="t('playbacksync', 'Disconnect this client')"
 							:title="t('playbacksync', 'Disconnect this client')"
 							:disabled="kicking === chip.clientId"
 							@click="onRequestKick(chip.clientId)">
-							<IconAccountRemove :size="14" />
-						</button>
-					</span>
-				</div>
+							<template #icon>
+								<NcLoadingIcon v-if="kicking === chip.clientId" :size="20" />
+								<IconClose v-else :size="20" />
+							</template>
+						</NcButton>
+					</li>
+				</ul>
 				<p v-else class="room-detail__empty">
 					{{ t('playbacksync', 'No viewers are currently connected.') }}
 				</p>
@@ -157,21 +219,19 @@
 					<IconMovie :size="16" />
 					<h4>{{ t('playbacksync', 'Now watching') }}</h4>
 				</div>
-				<dl class="room-detail__defs">
-					<dt>{{ t('playbacksync', 'Provider') }}</dt>
-					<dd>{{ live.contentIdentity.providerId }}</dd>
-					<dt>{{ t('playbacksync', 'Episode') }}</dt>
-					<dd>{{ live.contentIdentity.episodeId }}</dd>
-					<dt>{{ t('playbacksync', 'Page') }}</dt>
-					<dd>
-						<a
-							:href="live.contentIdentity.pageUrl"
-							target="_blank"
-							rel="noopener noreferrer">
-							{{ live.contentIdentity.pageUrl }}
-						</a>
-					</dd>
-				</dl>
+				<a
+					class="room-detail__now-watching"
+					:href="live.contentIdentity.pageUrl"
+					:title="live.contentIdentity.pageUrl"
+					target="_blank"
+					rel="noopener noreferrer">
+					<span class="room-detail__now-watching-title">
+						{{ live.contentIdentity.providerId }} · {{ live.contentIdentity.episodeId }}
+					</span>
+					<span class="room-detail__now-watching-url">
+						{{ live.contentIdentity.pageUrl }}
+					</span>
+				</a>
 			</section>
 
 			<!-- Identity ---------------------------------------------------- -->
@@ -244,10 +304,13 @@ import NcButton from '@nextcloud/vue/components/NcButton'
 import NcDialog from '@nextcloud/vue/components/NcDialog'
 import NcLoadingIcon from '@nextcloud/vue/components/NcLoadingIcon'
 import NcNoteCard from '@nextcloud/vue/components/NcNoteCard'
+import NcTextField from '@nextcloud/vue/components/NcTextField'
 import IconAccountMultiple from 'vue-material-design-icons/AccountMultiple.vue'
 import IconAccountRemove from 'vue-material-design-icons/AccountRemove.vue'
+import IconArrowRight from 'vue-material-design-icons/ArrowRight.vue'
 import IconCheck from 'vue-material-design-icons/Check.vue'
 import IconClock from 'vue-material-design-icons/ClockOutline.vue'
+import IconClose from 'vue-material-design-icons/Close.vue'
 import IconCopy from 'vue-material-design-icons/ContentCopy.vue'
 import IconDelete from 'vue-material-design-icons/Delete.vue'
 import IconIdentifier from 'vue-material-design-icons/Identifier.vue'
@@ -257,6 +320,7 @@ import IconMovie from 'vue-material-design-icons/MovieOpenOutline.vue'
 import IconPause from 'vue-material-design-icons/Pause.vue'
 import IconPlay from 'vue-material-design-icons/Play.vue'
 import IconPulse from 'vue-material-design-icons/Pulse.vue'
+import IconSkipBackward from 'vue-material-design-icons/SkipBackward.vue'
 import IconHourglass from 'vue-material-design-icons/TimerSandComplete.vue'
 import IconWeb from 'vue-material-design-icons/Web.vue'
 import StatusDot from './StatusDot.vue'
@@ -302,6 +366,19 @@ const confirmingClientId = ref<string | null>(null)
  * actions while the request is being processed.
  */
 const kicking = ref<string | null>(null)
+
+/**
+ * Action of the playback command currently in flight, or null when no
+ * command is pending. Drives per-button loading spinners and the global
+ * disabled state of every control in the row.
+ */
+const playbackAction = ref<'play' | 'pause' | 'seek' | 'reset' | null>(null)
+
+/**
+ * Raw seek-position input (in seconds). Kept as a string so an empty field
+ * doesn't coerce to 0 and accidentally arm a "seek to 0" action.
+ */
+const seekInput = ref<string>('')
 
 /**
  * The static room fields (uuid, name, URL, share link, timestamps) come
@@ -389,6 +466,40 @@ const playbackLabel = computed(() => {
 })
 
 const formattedVideoPos = computed(() => formatVideoPos(live.value?.videoPos ?? 0))
+
+/**
+ * Treat both `playing` and `buffering` as "currently playing" for the
+ * toggle button: pressing it should pause the room in either case. Only a
+ * truly paused room shows the Play affordance.
+ */
+const isCurrentlyPlaying = computed(() => (
+	playbackVariant.value === 'playing' || playbackVariant.value === 'buffering'
+))
+
+const playbackBusy = computed(() => playbackAction.value !== null)
+
+/**
+ * Parsed seconds value for the seek input. `null` while the input is empty
+ * or syntactically invalid, so `canSeek` and `onSeek` can branch on one
+ * source of truth.
+ */
+const parsedSeekSeconds = computed(() => parseSeekInput(seekInput.value))
+
+const canSeek = computed(() => parsedSeekSeconds.value !== null)
+
+const seekPlaceholder = computed(() => formatVideoPos(live.value?.videoPos ?? 0))
+
+const seekHelperText = computed(() => {
+	if (seekInput.value !== '' && !canSeek.value) {
+		return t('playbacksync', 'Use mm:ss or h:mm:ss (or plain seconds).')
+	}
+	if (canSeek.value) {
+		return t('playbacksync', 'Jump to {time}.', {
+			time: formatVideoPos(parsedSeekSeconds.value ?? 0),
+		})
+	}
+	return t('playbacksync', 'e.g. 2:47 or 1:05:30')
+})
 
 /**
  * Full chip list for the modal — uncapped, sorted by recency. The card
@@ -515,6 +626,43 @@ function pad(n: number): string {
 }
 
 /**
+ * Parse a seek input string into a non-negative seconds count. Accepts
+ * `mm:ss`, `h:mm:ss`, and bare integers (treated as seconds). Returns null
+ * for empty, malformed, or negative input so callers can fall back to a
+ * disabled state without throwing.
+ *
+ * Lower components (minutes, seconds) must be under 60; the hours component
+ * is unbounded so a 3-hour movie can be seeked to.
+ *
+ * @param raw the value typed into the seek field
+ */
+function parseSeekInput(raw: string): number | null {
+	const trimmed = raw.trim()
+	if (trimmed === '') {
+		return null
+	}
+	const parts = trimmed.split(':').map((p) => p.trim())
+	if (parts.some((p) => p === '' || !/^\d+$/.test(p))) {
+		return null
+	}
+	const nums = parts.map((p) => Number.parseInt(p, 10))
+	if (nums.length === 0 || nums.length > 3) {
+		return null
+	}
+	// Right-align into [hours, minutes, seconds] so a 2-part input is mm:ss
+	// and a 1-part input is bare seconds, matching how people read a clock.
+	const padded: [number, number, number] = [0, 0, 0]
+	for (let i = 0; i < nums.length; i++) {
+		padded[3 - nums.length + i] = nums[i]
+	}
+	const [h, m, s] = padded
+	if (m >= 60 || s >= 60) {
+		return null
+	}
+	return h * 3600 + m * 60 + s
+}
+
+/**
  * Copy a value to the clipboard, briefly toggle the `copied` indicator on
  * the corresponding button, and surface the result via a toast.
  *
@@ -588,6 +736,58 @@ async function onConfirmKick() {
 	} finally {
 		kicking.value = null
 	}
+}
+
+/**
+ * Run a playback command against the daemon, then refresh the modal's live
+ * state to reconcile with whatever the daemon now reports. The store handles
+ * the optimistic UI update on the room list itself; this just keeps the
+ * modal's locally-fetched `freshLive` in sync.
+ *
+ * @param action   the command to send
+ * @param videoPos target seconds for `seek`; ignored otherwise
+ */
+async function runPlaybackCommand(
+	action: 'play' | 'pause' | 'seek' | 'reset',
+	videoPos?: number,
+) {
+	if (playbackAction.value !== null) {
+		return
+	}
+	playbackAction.value = action
+	try {
+		const ok = await roomsStore.sendPlaybackCommand(props.room.uuid, action, videoPos)
+		if (ok) {
+			await refreshLive()
+		}
+	} finally {
+		playbackAction.value = null
+	}
+}
+
+/**
+ *
+ */
+function onTogglePlay() {
+	void runPlaybackCommand(isCurrentlyPlaying.value ? 'pause' : 'play')
+}
+
+/**
+ *
+ */
+function onReset() {
+	void runPlaybackCommand('reset')
+}
+
+/**
+ *
+ */
+function onSeek() {
+	const parsed = parsedSeekSeconds.value
+	if (parsed === null) {
+		return
+	}
+	void runPlaybackCommand('seek', parsed)
 }
 </script>
 
@@ -731,25 +931,25 @@ async function onConfirmKick() {
 	color: var(--color-text-maxcontrast);
 }
 
-.room-detail__playback {
+.room-detail__playback-pill {
 	display: inline-flex;
 	align-items: center;
 	gap: 6px;
-	padding: 6px 12px;
+	margin-inline-start: auto;
+	padding: 4px 10px;
 	border-radius: 999px;
-	font-size: 13px;
+	font-size: 12px;
 	font-weight: 500;
 	background-color: var(--color-background-dark);
 	color: var(--color-main-text);
-	align-self: flex-start;
 }
 
-.room-detail__playback--playing {
+.room-detail__playback-pill--playing {
 	background-color: rgba(46, 160, 67, 0.18);
 	color: var(--color-success-text, var(--color-main-text));
 }
 
-.room-detail__playback--buffering {
+.room-detail__playback-pill--buffering {
 	background-color: rgba(245, 159, 0, 0.2);
 	color: var(--color-warning-text, var(--color-main-text));
 }
@@ -760,52 +960,105 @@ async function onConfirmKick() {
 	letter-spacing: 0.04em;
 }
 
-.room-detail__chips {
+.room-detail__controls {
 	display: flex;
 	flex-wrap: wrap;
-	gap: 6px;
+	gap: 8px;
 }
 
-.room-detail__chip {
+.room-detail__seek {
+	display: flex;
+	align-items: flex-end;
+	gap: 8px;
+}
+
+.room-detail__seek-field {
+	flex: 1;
+	min-width: 0;
+}
+
+.room-detail__viewers {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+.room-detail__viewer {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	padding: 6px 8px 6px 10px;
+	border-radius: var(--border-radius);
+	background-color: var(--color-background-dark);
+}
+
+.room-detail__viewer-dot {
+	flex: 0 0 auto;
+	width: 10px;
+	height: 10px;
+	border-radius: 50%;
+}
+
+.room-detail__viewer-id {
+	flex: 1;
+	min-width: 0;
+	padding: 0;
+	background: none;
+	font-family: var(--font-monospace, monospace);
+	font-size: 13px;
+	color: var(--color-main-text);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.room-detail__viewer-buffering {
 	display: inline-flex;
 	align-items: center;
 	gap: 4px;
-	padding: 4px 6px 4px 10px;
+	padding: 2px 8px;
 	border-radius: 999px;
-	font-family: var(--font-monospace, monospace);
-	font-size: 12px;
-	font-weight: 600;
+	background-color: rgba(245, 159, 0, 0.2);
+	color: var(--color-warning-text, var(--color-main-text));
+	font-size: 11px;
+	font-weight: 500;
+}
+
+.room-detail__now-watching {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	padding: 10px 12px;
+	border-radius: var(--border-radius);
+	background-color: var(--color-background-dark);
 	color: var(--color-main-text);
-	letter-spacing: 0.03em;
-	border: 1px solid rgba(0, 0, 0, 0.05);
+	text-decoration: none;
+	overflow: hidden;
 }
 
-.room-detail__chip-kick {
-	display: inline-flex;
-	align-items: center;
-	justify-content: center;
-	width: 18px;
-	height: 18px;
-	padding: 0;
-	margin-inline-start: 2px;
-	border: none;
-	border-radius: 50%;
-	background: rgba(0, 0, 0, 0.08);
-	color: inherit;
-	cursor: pointer;
-	opacity: 0.65;
-	transition: opacity 120ms ease, background-color 120ms ease;
+.room-detail__now-watching:hover,
+.room-detail__now-watching:focus-visible {
+	background-color: var(--color-background-hover, var(--color-background-dark));
 }
 
-.room-detail__chip-kick:hover,
-.room-detail__chip-kick:focus-visible {
-	opacity: 1;
-	background: rgba(0, 0, 0, 0.18);
+.room-detail__now-watching-title {
+	font-size: 13px;
+	font-weight: 600;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
 }
 
-.room-detail__chip-kick:disabled {
-	cursor: progress;
-	opacity: 0.4;
+.room-detail__now-watching-url {
+	font-family: var(--font-monospace, monospace);
+	font-size: 11px;
+	color: var(--color-text-maxcontrast);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
 }
 
 .room-detail__confirm-prompt {
@@ -827,24 +1080,13 @@ async function onConfirmKick() {
 	font-style: italic;
 }
 
-.room-detail__defs {
-	display: grid;
-	grid-template-columns: max-content 1fr;
-	gap: 6px 14px;
-	margin: 0;
+.room-detail__spin {
+	display: inline-flex;
+	animation: room-detail-spin 1s linear infinite;
 }
 
-.room-detail__defs dt {
-	font-size: 12px;
-	color: var(--color-text-maxcontrast);
-	text-transform: uppercase;
-	letter-spacing: 0.06em;
-}
-
-.room-detail__defs dd {
-	margin: 0;
-	font-size: 13px;
-	color: var(--color-main-text);
-	overflow-wrap: anywhere;
+@keyframes room-detail-spin {
+	from { transform: rotate(0deg); }
+	to { transform: rotate(360deg); }
 }
 </style>

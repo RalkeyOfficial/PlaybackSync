@@ -23,6 +23,10 @@ Comparison of features documented in `OLD_CODE/docs/` against the current `docs/
 - **Public ACK/NACK protocol** — kept as internal server concept only.
 - **Standalone Node.js Docker service** → replaced by `occ playbacksync:ws-serve` PHP daemon.
 
+## V2
+
+- **Change episode in live playback control** — For rooms with media defined you want to be able to change the episode in the dashboard
+
 ## Recommendations to address
 
 If you want parity with the OLD design's operational story, the highest-value items to add to the roadmap are:

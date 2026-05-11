@@ -85,3 +85,30 @@ export async function getRoomClients(uuid: string): Promise<RoomClientsResponse>
 export async function kickRoomClient(uuid: string, clientId: string): Promise<void> {
 	await axios.delete(apiUrl('/' + encodeURIComponent(uuid) + '/clients/' + encodeURIComponent(clientId)))
 }
+
+/** Owner-initiated playback commands the dashboard can send to the daemon. */
+export type PlaybackAction = 'play' | 'pause' | 'seek' | 'reset'
+
+/**
+ * Send an owner-initiated playback command for a room owned by the current
+ * user. The daemon mutates its authoritative playback state and broadcasts a
+ * `STATE` frame to every connected client. Returns 204 with no body on
+ * success; non-success responses surface as the underlying axios rejection so
+ * callers can branch on `response.status` (404 = room missing, 409 = no live
+ * runtime, 502 = daemon unreachable).
+ *
+ * @param uuid     the room's UUID
+ * @param action   one of `play`, `pause`, `seek`, `reset`
+ * @param videoPos target position in seconds; required for `seek`, ignored otherwise
+ */
+export async function sendPlaybackCommand(
+	uuid: string,
+	action: PlaybackAction,
+	videoPos?: number,
+): Promise<void> {
+	const body: { action: PlaybackAction, videoPos?: number } = { action }
+	if (videoPos !== undefined) {
+		body.videoPos = videoPos
+	}
+	await axios.post(apiUrl('/' + encodeURIComponent(uuid) + '/playback'), body)
+}

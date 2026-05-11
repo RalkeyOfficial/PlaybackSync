@@ -8,11 +8,14 @@ use OCA\PlaybackSync\AppInfo\Application;
 use OCA\PlaybackSync\Db\Room;
 use OCA\PlaybackSync\Db\RoomMapper;
 use OCA\PlaybackSync\Service\AdminKickClient;
+use OCA\PlaybackSync\Service\AdminPlaybackClient;
 use OCA\PlaybackSync\Service\Exceptions\ClientNotFoundException;
 use OCA\PlaybackSync\Service\Exceptions\CreateRestrictedException;
 use OCA\PlaybackSync\Service\Exceptions\InvalidRoomInputException;
 use OCA\PlaybackSync\Service\Exceptions\KickFailedException;
+use OCA\PlaybackSync\Service\Exceptions\PlaybackCommandFailedException;
 use OCA\PlaybackSync\Service\Exceptions\RoomNotFoundException;
+use OCA\PlaybackSync\Service\Exceptions\RoomNotLiveException;
 use OCA\PlaybackSync\Service\RoomService;
 use OCP\AppFramework\Db\DoesNotExistException;
 use OCP\AppFramework\Utility\ITimeFactory;
@@ -31,6 +34,7 @@ class RoomServiceTest extends TestCase {
 	private IGroupManager&MockObject $groupManager;
 	private ITimeFactory&MockObject $timeFactory;
 	private AdminKickClient&MockObject $adminKickClient;
+	private AdminPlaybackClient&MockObject $adminPlaybackClient;
 	private RoomService $service;
 
 	private const FIXED_TIME_S = 1_700_000_000;
@@ -44,6 +48,7 @@ class RoomServiceTest extends TestCase {
 		$this->groupManager = $this->createMock(IGroupManager::class);
 		$this->timeFactory = $this->createMock(ITimeFactory::class);
 		$this->adminKickClient = $this->createMock(AdminKickClient::class);
+		$this->adminPlaybackClient = $this->createMock(AdminPlaybackClient::class);
 
 		$this->timeFactory->method('getTime')->willReturn(self::FIXED_TIME_S);
 
@@ -66,6 +71,7 @@ class RoomServiceTest extends TestCase {
 			$this->groupManager,
 			$this->timeFactory,
 			$this->adminKickClient,
+			$this->adminPlaybackClient,
 		);
 	}
 
@@ -529,6 +535,52 @@ class RoomServiceTest extends TestCase {
 		$this->service->kickClient('alice', 'uuid-1', 'deadbeef');
 	}
 
+	// ─── sendPlaybackCommand ────────────────────────────────────────────
+
+	/**
+	 * Owner-initiated playback command: ownership is verified through
+	 * `getOwnedRoom`, then the admin loopback client is invoked once with the
+	 * room's UUID, action, and (for seek) the position.
+	 */
+	public function testSendPlaybackCommandForwardsToAdminClientWhenOwnerMatches(): void {
+		$room = $this->makeRoom('alice', expiresInSeconds: 3600);
+		$this->mapper->method('findByUuid')->willReturn($room);
+		$this->adminPlaybackClient->expects($this->once())
+			->method('apply')
+			->with('uuid-1', 'seek', 42.0);
+
+		$this->service->sendPlaybackCommand('alice', 'uuid-1', 'seek', 42.0);
+	}
+
+	public function testSendPlaybackCommandThrowsNotFoundForCrossUser(): void {
+		$room = $this->makeRoom('bob', expiresInSeconds: 3600);
+		$this->mapper->method('findByUuid')->willReturn($room);
+		$this->adminPlaybackClient->expects($this->never())->method('apply');
+
+		$this->expectException(RoomNotFoundException::class);
+		$this->service->sendPlaybackCommand('alice', 'uuid-1', 'play', null);
+	}
+
+	public function testSendPlaybackCommandPropagatesRoomNotLiveException(): void {
+		$room = $this->makeRoom('alice', expiresInSeconds: 3600);
+		$this->mapper->method('findByUuid')->willReturn($room);
+		$this->adminPlaybackClient->method('apply')
+			->willThrowException(new RoomNotLiveException('no clients'));
+
+		$this->expectException(RoomNotLiveException::class);
+		$this->service->sendPlaybackCommand('alice', 'uuid-1', 'play', null);
+	}
+
+	public function testSendPlaybackCommandPropagatesPlaybackCommandFailedException(): void {
+		$room = $this->makeRoom('alice', expiresInSeconds: 3600);
+		$this->mapper->method('findByUuid')->willReturn($room);
+		$this->adminPlaybackClient->method('apply')
+			->willThrowException(new PlaybackCommandFailedException('daemon unreachable'));
+
+		$this->expectException(PlaybackCommandFailedException::class);
+		$this->service->sendPlaybackCommand('alice', 'uuid-1', 'pause', null);
+	}
+
 	// ─── helpers ────────────────────────────────────────────────────────
 
 	private function buildServiceWithRestriction(bool $restricted): RoomService {
@@ -548,6 +600,7 @@ class RoomServiceTest extends TestCase {
 			$this->groupManager,
 			$this->timeFactory,
 			$this->adminKickClient,
+			$this->adminPlaybackClient,
 		);
 	}
 

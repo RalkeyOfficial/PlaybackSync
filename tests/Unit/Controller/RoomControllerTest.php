@@ -11,7 +11,9 @@ use OCA\PlaybackSync\Service\Exceptions\ClientNotFoundException;
 use OCA\PlaybackSync\Service\Exceptions\CreateRestrictedException;
 use OCA\PlaybackSync\Service\Exceptions\InvalidRoomInputException;
 use OCA\PlaybackSync\Service\Exceptions\KickFailedException;
+use OCA\PlaybackSync\Service\Exceptions\PlaybackCommandFailedException;
 use OCA\PlaybackSync\Service\Exceptions\RoomNotFoundException;
+use OCA\PlaybackSync\Service\Exceptions\RoomNotLiveException;
 use OCA\PlaybackSync\Service\RoomLiveStateEnricher;
 use OCA\PlaybackSync\Service\RoomService;
 use OCP\AppFramework\Http;
@@ -311,6 +313,92 @@ class RoomControllerTest extends TestCase {
 			->willThrowException(new KickFailedException('WebSocket daemon unreachable.'));
 
 		$response = $this->controller('alice')->kickClient('uuid-1', 'deadbeef');
+
+		$this->assertSame(Http::STATUS_BAD_GATEWAY, $response->getStatus());
+		$this->assertSame(['error' => 'WebSocket daemon unreachable.'], $response->getData());
+	}
+
+	// ─── playback ────────────────────────────────────────────────────────
+
+	public function testPlaybackReturns401WhenNotLoggedIn(): void {
+		$response = $this->controller(null)->playback('uuid-1', 'play');
+
+		$this->assertSame(Http::STATUS_UNAUTHORIZED, $response->getStatus());
+	}
+
+	public function testPlaybackReturns400ForUnknownAction(): void {
+		$this->service->expects($this->never())->method('sendPlaybackCommand');
+
+		$response = $this->controller('alice')->playback('uuid-1', 'fastforward');
+
+		$this->assertSame(Http::STATUS_BAD_REQUEST, $response->getStatus());
+		$this->assertSame(['error' => 'invalid_action'], $response->getData());
+	}
+
+	public function testPlaybackReturns400WhenSeekMissingPosition(): void {
+		$this->service->expects($this->never())->method('sendPlaybackCommand');
+
+		$response = $this->controller('alice')->playback('uuid-1', 'seek');
+
+		$this->assertSame(Http::STATUS_BAD_REQUEST, $response->getStatus());
+		$this->assertSame(['error' => 'invalid_position'], $response->getData());
+	}
+
+	public function testPlaybackReturns400WhenSeekPositionNegative(): void {
+		$this->service->expects($this->never())->method('sendPlaybackCommand');
+
+		$response = $this->controller('alice')->playback('uuid-1', 'seek', -1.0);
+
+		$this->assertSame(Http::STATUS_BAD_REQUEST, $response->getStatus());
+		$this->assertSame(['error' => 'invalid_position'], $response->getData());
+	}
+
+	public function testPlaybackReturns204OnSuccess(): void {
+		$this->service->expects($this->once())
+			->method('sendPlaybackCommand')
+			->with('alice', 'uuid-1', 'seek', 120.0);
+
+		$response = $this->controller('alice')->playback('uuid-1', 'seek', 120.0);
+
+		$this->assertSame(Http::STATUS_NO_CONTENT, $response->getStatus());
+		$this->assertNull($response->getData());
+	}
+
+	public function testPlaybackReturns204ForPlayWithoutPosition(): void {
+		$this->service->expects($this->once())
+			->method('sendPlaybackCommand')
+			->with('alice', 'uuid-1', 'play', null);
+
+		$response = $this->controller('alice')->playback('uuid-1', 'play');
+
+		$this->assertSame(Http::STATUS_NO_CONTENT, $response->getStatus());
+	}
+
+	public function testPlaybackReturns404WhenRoomNotFound(): void {
+		$this->service->method('sendPlaybackCommand')
+			->willThrowException(new RoomNotFoundException('Room not found.'));
+
+		$response = $this->controller('alice')->playback('missing', 'play');
+
+		$this->assertSame(Http::STATUS_NOT_FOUND, $response->getStatus());
+		$this->assertSame(['error' => 'Room not found.'], $response->getData());
+	}
+
+	public function testPlaybackReturns409WhenRoomNotLive(): void {
+		$this->service->method('sendPlaybackCommand')
+			->willThrowException(new RoomNotLiveException('no clients'));
+
+		$response = $this->controller('alice')->playback('uuid-1', 'play');
+
+		$this->assertSame(Http::STATUS_CONFLICT, $response->getStatus());
+		$this->assertSame(['error' => 'room_not_live'], $response->getData());
+	}
+
+	public function testPlaybackReturns502WhenDaemonUnreachable(): void {
+		$this->service->method('sendPlaybackCommand')
+			->willThrowException(new PlaybackCommandFailedException('WebSocket daemon unreachable.'));
+
+		$response = $this->controller('alice')->playback('uuid-1', 'pause');
 
 		$this->assertSame(Http::STATUS_BAD_GATEWAY, $response->getStatus());
 		$this->assertSame(['error' => 'WebSocket daemon unreachable.'], $response->getData());

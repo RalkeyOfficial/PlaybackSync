@@ -32,6 +32,7 @@ class RoomService {
 		private IGroupManager $groupManager,
 		private ITimeFactory $timeFactory,
 		private AdminKickClient $adminKickClient,
+		private AdminPlaybackClient $adminPlaybackClient,
 	) {
 	}
 
@@ -147,6 +148,23 @@ class RoomService {
 	public function kickClient(string $userId, string $uuid, string $clientId): void {
 		$room = $this->getOwnedRoom($userId, $uuid);
 		$this->adminKickClient->kick($room->getUuid(), $clientId);
+	}
+
+	/**
+	 * Send an owner-initiated playback command to the daemon for the room.
+	 *
+	 * Throws `RoomNotFoundException` when the caller doesn't own (or the room
+	 * has expired) — same opacity as `getOwnedRoom`. Forwards lower-level
+	 * `RoomNotLiveException` / `PlaybackCommandFailedException` from the admin
+	 * client unchanged so the controller can map them to distinct status codes.
+	 *
+	 * @param string     $action   One of `play`, `pause`, `seek`, `reset`.
+	 * @param float|null $videoPos Target position in seconds when `$action` is
+	 *                             `seek`. Required for seek; ignored otherwise.
+	 */
+	public function sendPlaybackCommand(string $userId, string $uuid, string $action, ?float $videoPos): void {
+		$room = $this->getOwnedRoom($userId, $uuid);
+		$this->adminPlaybackClient->apply($room->getUuid(), $action, $videoPos);
 	}
 
 	/**

@@ -21,6 +21,7 @@ use Throwable;
  *     evaluated *before* the HMAC check.
  *   - `GET  /admin/rooms/presence?uuids=<csv>` — point-in-time presence map.
  *   - `POST /admin/rooms/{uuid}/clients/{clientId}/disconnect` — owner kick.
+ *   - `POST /admin/rooms/{uuid}/playback` — owner-driven play/pause/seek/reset.
  *
  * Every other path returns 404. Authentication runs first (except for
  * `/healthz`) and a missing/invalid HMAC closes the connection with 401 — no
@@ -36,6 +37,7 @@ class PresenceHttpServer implements HttpServerInterface {
 	public const HEALTH_ROUTE = '/healthz';
 
 	private const KICK_PATTERN = '#^/admin/rooms/(?P<uuid>[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/clients/(?P<clientId>[0-9a-f]{1,64})/disconnect$#';
+	private const PLAYBACK_PATTERN = '#^/admin/rooms/(?P<uuid>[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/playback$#';
 
 	private ?HealthController $healthController = null;
 
@@ -43,6 +45,7 @@ class PresenceHttpServer implements HttpServerInterface {
 		private readonly AdminAuthMiddleware $auth,
 		private readonly PresenceController $controller,
 		private readonly KickController $kickController,
+		private readonly PlaybackController $playbackController,
 		private readonly LoggerInterface $logger,
 	) {
 	}
@@ -109,9 +112,39 @@ class PresenceHttpServer implements HttpServerInterface {
 				return;
 			}
 
-			// Path didn't match any known route. If it looks like a kick path
-			// but with the wrong method, signal that explicitly.
-			if (preg_match(self::KICK_PATTERN, strtolower($path)) === 1 || $path === self::ROUTE) {
+			if ($method === 'POST' && preg_match(self::PLAYBACK_PATTERN, strtolower($path), $m) === 1) {
+				$payload = $this->parseJsonBody($request);
+				if ($payload === null) {
+					$this->respond($conn, 400, ['error' => 'invalid_json']);
+					return;
+				}
+				$action = is_string($payload['action'] ?? null) ? $payload['action'] : '';
+				$rawPos = $payload['videoPos'] ?? null;
+				$videoPos = null;
+				if ($rawPos !== null) {
+					if (!is_int($rawPos) && !is_float($rawPos)) {
+						$this->respond($conn, 400, ['error' => 'invalid_position']);
+						return;
+					}
+					$videoPos = (float)$rawPos;
+				}
+				$result = $this->playbackController->apply($m['uuid'], $action, $videoPos, $nowMs);
+				match ($result) {
+					PlaybackController::RESULT_APPLIED => $this->respond($conn, 200, ['result' => 'applied']),
+					PlaybackController::RESULT_ROOM_NOT_FOUND => $this->respond($conn, 404, ['error' => 'room_not_found']),
+					PlaybackController::RESULT_INVALID_ACTION => $this->respond($conn, 400, ['error' => 'invalid_action']),
+					PlaybackController::RESULT_INVALID_POSITION => $this->respond($conn, 400, ['error' => 'invalid_position']),
+				};
+				return;
+			}
+
+			// Path didn't match any known route. If it looks like a kick or
+			// playback path but with the wrong method, signal that explicitly.
+			if (
+				preg_match(self::KICK_PATTERN, strtolower($path)) === 1
+				|| preg_match(self::PLAYBACK_PATTERN, strtolower($path)) === 1
+				|| $path === self::ROUTE
+			) {
 				$this->respond($conn, 405, ['error' => 'method_not_allowed']);
 				return;
 			}
@@ -158,6 +191,28 @@ class PresenceHttpServer implements HttpServerInterface {
 			}
 		}
 		return $out;
+	}
+
+	/**
+	 * Decode the request body as a JSON object. Returns null on any decode
+	 * failure or non-object payload — caller maps that to 400.
+	 *
+	 * @return array<string, mixed>|null
+	 */
+	private function parseJsonBody(RequestInterface $request): ?array {
+		$raw = (string)$request->getBody();
+		if ($raw === '') {
+			return [];
+		}
+		try {
+			$decoded = json_decode($raw, true, flags: JSON_THROW_ON_ERROR);
+		} catch (\JsonException) {
+			return null;
+		}
+		if (!is_array($decoded)) {
+			return null;
+		}
+		return $decoded;
 	}
 
 	private function respond(ConnectionInterface $conn, int $status, array $body): void {
