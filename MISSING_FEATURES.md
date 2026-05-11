@@ -12,8 +12,6 @@ Comparison of features documented in `OLD_CODE/docs/` against the current `docs/
 
 ## Deferred per current roadmap (not gaps, just FYI)
 
-- **`last_state` DB column** (cached playback state) — Phase 2 migration noted in `docs/architecture.md`.
-- **Token-based auth** (replace password-in-URL). OLD §17 future work.
 - **Live playback controls in dashboard** — OLD itself marked this out of v1.
 - **Event log surfaced in UI** — exists server-side as in-memory ring buffer, no API exposure yet.
 

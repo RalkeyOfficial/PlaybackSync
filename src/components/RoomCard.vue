@@ -10,9 +10,9 @@
 		@keydown.space.prevent="openDetail">
 		<header class="room-card__header">
 			<StatusDot
-				:variant="isExpired ? 'neutral' : 'success'"
+				:variant="status.variant"
 				:size="10"
-				:ariaLabel="isExpired ? t('playbacksync', 'Expired') : t('playbacksync', 'Live')" />
+				:ariaLabel="status.label" />
 			<h3 class="room-card__title" :class="{ 'room-card__title--mono': !room.name }">
 				{{ title }}
 			</h3>
@@ -97,6 +97,7 @@ import IconOpenInNew from 'vue-material-design-icons/OpenInNew.vue'
 import RoomDetailDialog from './RoomDetailDialog.vue'
 import StatusDot from './StatusDot.vue'
 import { useNow } from '../composables/useNow.ts'
+import { getRoomStatus } from '../composables/useRoomStatus.ts'
 
 const props = defineProps<{
 	room: Room
@@ -122,6 +123,11 @@ const ttl = computed(() => formatDuration(props.room.expiresAt - now.value))
 const createdAgo = computed(() => formatRelativePast(now.value - props.room.createdAt))
 
 const live = computed(() => props.room.live)
+
+const status = computed(() => getRoomStatus(
+	{ live: props.room.live, expiresAt: props.room.expiresAt },
+	now.value,
+))
 
 /**
  * Footer viewers count: rendered as the live `connectedCount` when known,

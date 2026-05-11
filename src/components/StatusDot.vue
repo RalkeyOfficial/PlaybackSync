@@ -15,6 +15,7 @@
  *
  * Variants:
  *   - success: green, pulsing — a live/active/healthy thing.
+ *   - info:    blue, solid    — a working-but-not-active thing (e.g. paused).
  *   - error:   red, solid     — a broken/unreachable thing.
  *   - warning: amber, solid   — set up but not currently working (e.g. daemon down).
  *   - neutral: grey, solid    — an inactive/expired thing.
@@ -26,7 +27,7 @@
  */
 
 withDefaults(defineProps<{
-	variant: 'success' | 'error' | 'warning' | 'neutral' | 'pending'
+	variant: 'success' | 'info' | 'error' | 'warning' | 'neutral' | 'pending'
 	size?: number
 	ariaLabel?: string
 }>(), {
@@ -49,6 +50,10 @@ withDefaults(defineProps<{
 .status-dot--success {
 	background-color: var(--color-element-success, #2ea043);
 	animation: status-dot-pulse 1.8s ease-out infinite;
+}
+
+.status-dot--info {
+	background-color: var(--color-primary-element, #0969da);
 }
 
 .status-dot--error {

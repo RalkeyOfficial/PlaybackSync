@@ -8,9 +8,9 @@
 		<div class="room-detail">
 			<!-- Top status strip ------------------------------------------- -->
 			<div class="room-detail__status">
-				<StatusDot :variant="isExpired ? 'neutral' : 'success'" :size="12" />
+				<StatusDot :variant="status.variant" :size="12" />
 				<span class="room-detail__status-label">
-					{{ isExpired ? t('playbacksync', 'Expired') : t('playbacksync', 'Live') }}
+					{{ status.label }}
 				</span>
 				<span v-if="!isExpired" class="room-detail__status-ttl">
 					{{ t('playbacksync', 'Expires in {ttl}', { ttl }) }}
@@ -261,6 +261,7 @@ import IconHourglass from 'vue-material-design-icons/TimerSandComplete.vue'
 import IconWeb from 'vue-material-design-icons/Web.vue'
 import StatusDot from './StatusDot.vue'
 import { useNow } from '../composables/useNow.ts'
+import { getRoomStatus } from '../composables/useRoomStatus.ts'
 import { getRoom } from '../services/roomsApi.ts'
 import { useRoomsStore } from '../stores/rooms.ts'
 
@@ -309,6 +310,11 @@ const kicking = ref<string | null>(null)
  * prop's cached value so the dialog never blanks out the count.
  */
 const live = computed(() => (freshLive.value === undefined ? props.room.live : freshLive.value))
+
+const status = computed(() => getRoomStatus(
+	{ live: live.value, expiresAt: props.room.expiresAt },
+	now.value,
+))
 
 const confirmingClientLabel = computed(() => (
 	confirmingClientId.value ? confirmingClientId.value.slice(0, 8) : ''
