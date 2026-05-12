@@ -52,13 +52,16 @@ class RoomServiceTest extends TestCase {
 
 		$this->timeFactory->method('getTime')->willReturn(self::FIXED_TIME_S);
 
-		// Defaults: not restricted, no admin override of TTL, hasher returns predictable shape.
+		// Defaults: not restricted, no admin overrides on any IAppConfig int key
+		// (returning the supplied default for every call), hasher returns a
+		// predictable shape. The callback form is essential: production
+		// `createRoom` reads both `max_ttl_seconds` and `default_ttl_seconds`,
+		// so a `with()`-constrained mock would only match one of them.
 		$this->appConfig->method('getValueBool')
 			->with(Application::APP_ID, 'restrict_to_admins', false)
 			->willReturn(false);
 		$this->appConfig->method('getValueInt')
-			->with(Application::APP_ID, 'default_ttl_seconds', RoomService::DEFAULT_TTL_SECONDS)
-			->willReturn(RoomService::DEFAULT_TTL_SECONDS);
+			->willReturnCallback(static fn (string $app, string $key, int $default): int => $default);
 		$this->hasher->method('hash')->willReturnCallback(static fn (string $plain): string => 'hashed:' . $plain);
 
 		// QBMapper::insert() returns the entity it was handed, so we mirror that.
@@ -204,13 +207,23 @@ class RoomServiceTest extends TestCase {
 
 	/**
 	 * If an admin sets a nonsensical `default_ttl_seconds` (zero, negative,
-	 * or larger than the hard maximum) the service silently ignores it and
-	 * uses the safe default. Misconfiguration must not break the create flow.
+	 * or larger than the configured maximum) the service silently ignores it
+	 * and uses the safe default. Misconfiguration must not break the create
+	 * flow. The cap (`max_ttl_seconds`) is left at its default here so the
+	 * fallback path resolves to `DEFAULT_TTL_SECONDS`.
 	 */
 	public function testCreateRoomFallsBackToDefaultTtlWhenAdminConfiguredOutOfRange(): void {
 		$appConfig = $this->createMock(IAppConfig::class);
 		$appConfig->method('getValueBool')->willReturn(false);
-		$appConfig->method('getValueInt')->willReturn(99_999_999); // way over MAX_TTL
+		$appConfig->method('getValueInt')
+			->willReturnCallback(static function (string $app, string $key, int $default): int {
+				// Only `default_ttl_seconds` is misconfigured; the cap stays sane
+				// so the service can recognise and ignore the out-of-range value.
+				if ($key === 'default_ttl_seconds') {
+					return 99_999_999;
+				}
+				return $default;
+			});
 		$service = $this->rebuildWith($appConfig);
 
 		$result = $service->createRoom('alice', 'https://example.com/watch', null, null);

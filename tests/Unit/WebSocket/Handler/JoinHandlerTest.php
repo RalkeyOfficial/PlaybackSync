@@ -36,7 +36,7 @@ class JoinHandlerTest extends TestCase {
 		$this->service = $this->createMock(RoomService::class);
 		$this->registry = new RoomRegistry(eventLogSize: 50);
 		$this->encoder = new MessageEncoder();
-		$this->config = new WsConfig(5000, 30000, 30000, 30000, 50, 10, 200, 500, 3000);
+		$this->config = new WsConfig(5000, 30000, 30000, 30000, 50, 10, 200, 500, 3000, 50);
 		$this->handler = new JoinHandler($this->mapper, $this->service, $this->registry, $this->encoder, $this->config);
 	}
 

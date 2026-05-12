@@ -26,6 +26,7 @@ class KickControllerTest extends TestCase {
 			driftNudgeThresholdMs: 200,
 			driftSeekThresholdMs: 500,
 			driftCooldownMs: 3_000,
+			maxClientsPerRoom: 50,
 		);
 		return new KickController($registry, new MessageEncoder(), $config);
 	}

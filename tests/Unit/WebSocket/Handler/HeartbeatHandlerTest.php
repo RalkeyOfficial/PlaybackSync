@@ -28,7 +28,7 @@ class HeartbeatHandlerTest extends TestCase {
 		parent::setUp();
 		$this->registry = new RoomRegistry(eventLogSize: 50);
 		// Long cooldown of 0 to keep tests focused on drift math.
-		$this->config = new WsConfig(5000, 30000, 30000, 30000, 50, 10, 200, 500, 0);
+		$this->config = new WsConfig(5000, 30000, 30000, 30000, 50, 10, 200, 500, 0, 50);
 		$this->handler = new HeartbeatHandler($this->registry, new MessageEncoder(), $this->config);
 	}
 
@@ -85,7 +85,7 @@ class HeartbeatHandlerTest extends TestCase {
 	public function testCooldownSuppressesCorrection(): void {
 		// Use a fresh registry with a non-zero cooldown.
 		$this->registry = new RoomRegistry(eventLogSize: 50);
-		$this->config = new WsConfig(5000, 30000, 30000, 30000, 50, 10, 200, 500, 3000);
+		$this->config = new WsConfig(5000, 30000, 30000, 30000, 50, 10, 200, 500, 3000, 50);
 		$this->handler = new HeartbeatHandler($this->registry, new MessageEncoder(), $this->config);
 
 		// Play happened 1s ago; cooldown is 3s, so no correction even with big drift.

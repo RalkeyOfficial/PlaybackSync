@@ -6,6 +6,7 @@ namespace OCA\PlaybackSync\Tests\Unit\Migration;
 
 use OCA\PlaybackSync\AppInfo\Application;
 use OCA\PlaybackSync\Migration\EnsureAdminSecret;
+use OCA\PlaybackSync\Service\AdminSecretService;
 use OCP\IAppConfig;
 use OCP\Migration\IOutput;
 use PHPUnit\Framework\MockObject\MockObject;
@@ -21,7 +22,11 @@ class EnsureAdminSecretTest extends TestCase {
 		parent::setUp();
 		$this->appConfig = $this->createMock(IAppConfig::class);
 		$this->output = $this->createMock(IOutput::class);
-		$this->subject = new EnsureAdminSecret($this->appConfig);
+		// Wrap the IAppConfig mock in a real AdminSecretService so the
+		// IAppConfig-level assertions below (length, hex shape, sensitive flag)
+		// keep exercising the same observable contract they did before the
+		// secret-handling was extracted out of the repair step itself.
+		$this->subject = new EnsureAdminSecret(new AdminSecretService($this->appConfig));
 	}
 
 	public function testGeneratesSecretWhenMissing(): void {
