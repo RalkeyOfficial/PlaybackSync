@@ -6,6 +6,7 @@ namespace OCA\PlaybackSync\Tests\Unit\Controller;
 
 use OCA\PlaybackSync\Controller\RoomController;
 use OCA\PlaybackSync\Db\Room;
+use OCA\PlaybackSync\Service\AdminEventClient;
 use OCA\PlaybackSync\Service\Dto\RoomLiveState;
 use OCA\PlaybackSync\Service\Exceptions\ClientNotFoundException;
 use OCA\PlaybackSync\Service\Exceptions\CreateRestrictedException;
@@ -29,6 +30,7 @@ class RoomControllerTest extends TestCase {
 	private RoomService&MockObject $service;
 	private IURLGenerator&MockObject $urlGenerator;
 	private RoomLiveStateEnricher&MockObject $liveStateEnricher;
+	private AdminEventClient&MockObject $eventClient;
 
 	protected function setUp(): void {
 		parent::setUp();
@@ -51,6 +53,9 @@ class RoomControllerTest extends TestCase {
 				return $out;
 			},
 		);
+		// Default no-op for the event client — tests that exercise the stream
+		// proxy can override via `$this->eventClient->method('streamRoom')`.
+		$this->eventClient = $this->createMock(AdminEventClient::class);
 	}
 
 	private function controller(?string $userId): RoomController {
@@ -61,6 +66,7 @@ class RoomControllerTest extends TestCase {
 			$this->service,
 			$this->urlGenerator,
 			$this->liveStateEnricher,
+			$this->eventClient,
 		);
 	}
 

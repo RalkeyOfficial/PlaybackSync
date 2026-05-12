@@ -24,6 +24,14 @@ class ClientConnection {
 	public ?float $rttMs = null;
 	public bool $isBuffering = false;
 	public RateLimiter $rateLimiter;
+	/**
+	 * Reason recorded by the daemon when it initiates a socket close
+	 * out-of-band (e.g. `Tick` killing an idle client). Read by
+	 * `MessageRouter::onClose` so the resulting `client_left` envelope can
+	 * carry the precise cause (`idle`) instead of the default `closed`.
+	 * Null when the close was driven by the client side.
+	 */
+	public ?string $pendingLeaveReason = null;
 
 	public function __construct(
 		public readonly string $clientId,

@@ -15,8 +15,10 @@ use OCA\PlaybackSync\WebSocket\WsConfig;
  * a reconnect block for `ws_kick_block_ms`), and reports back a small
  * outcome the HTTP layer can map to a status code.
  *
- * Pure value transformation around `RoomRuntime::kickClient` — no I/O of its
- * own — so the HTTP layer stays the only place that talks to Ratchet.
+ * Emits a `client_kicked` envelope (`actor: 'owner', actorId: $ownerUserId`)
+ * *before* the kick fires so consumers see the kick decision land before the
+ * follow-up `client_left` (`reason: 'closed'`) that the socket-close path
+ * publishes a moment later.
  */
 class KickController {
 
@@ -32,13 +34,32 @@ class KickController {
 	}
 
 	/**
+	 * @param string      $roomUuid    Target room UUID.
+	 * @param string      $clientId    Client UUID to disconnect.
+	 * @param int         $nowMs       Wall-clock timestamp for the envelope + kick block.
+	 * @param string|null $ownerUserId Nextcloud userId of the room owner that issued the
+	 *                                 kick, forwarded by PHP. Used as `actorId` on the
+	 *                                 emitted `client_kicked` envelope.
 	 * @return self::RESULT_*
 	 */
-	public function kick(string $roomUuid, string $clientId, int $nowMs): string {
+	public function kick(string $roomUuid, string $clientId, int $nowMs, ?string $ownerUserId = null): string {
 		$runtime = $this->registry->find($roomUuid);
 		if ($runtime === null) {
 			return self::RESULT_ROOM_NOT_FOUND;
 		}
+		if ($runtime->getClient($clientId) === null) {
+			return self::RESULT_CLIENT_NOT_FOUND;
+		}
+
+		$runtime->pushEnvelope([
+			'ts' => $nowMs,
+			'type' => 'client_kicked',
+			'category' => 'presence',
+			'actor' => 'owner',
+			'actorId' => $ownerUserId,
+			'data' => ['clientId' => $clientId],
+		]);
+
 		$kicked = $runtime->kickClient($clientId, $this->encoder, $this->config->kickBlockMs, $nowMs);
 		return $kicked ? self::RESULT_KICKED : self::RESULT_CLIENT_NOT_FOUND;
 	}

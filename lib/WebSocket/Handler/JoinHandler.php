@@ -78,6 +78,15 @@ class JoinHandler {
 			$ctx->joinTimer = null;
 		}
 
+		$runtime->pushEnvelope([
+			'ts' => $nowMs,
+			'type' => 'client_joined',
+			'category' => 'presence',
+			'actor' => 'client',
+			'actorId' => $client->clientId,
+			'data' => ['clientId' => $client->clientId],
+		]);
+
 		$replay = [];
 		if ($payload['lastEventId'] !== null) {
 			$replay = $runtime->recentEventsSince($payload['lastEventId']);

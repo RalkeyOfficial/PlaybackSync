@@ -33,6 +33,7 @@ class RoomService {
 		private ITimeFactory $timeFactory,
 		private AdminKickClient $adminKickClient,
 		private AdminPlaybackClient $adminPlaybackClient,
+		private AdminEventClient $adminEventClient,
 	) {
 	}
 
@@ -81,6 +82,15 @@ class RoomService {
 		$room->setExpiresAt($nowMs + ($ttl * 1000));
 
 		$room = $this->mapper->insert($room);
+
+		$this->adminEventClient->record(
+			'room_created',
+			'lifecycle',
+			'owner',
+			$userId,
+			$room->getUuid(),
+			['name' => $room->getName(), 'ttlSeconds' => $ttl],
+		);
 
 		return ['room' => $room, 'plainPassword' => $plainPassword];
 	}
@@ -135,6 +145,14 @@ class RoomService {
 	public function deleteOwnedRoom(string $userId, string $uuid): void {
 		$room = $this->getOwnedRoom($userId, $uuid);
 		$this->mapper->delete($room);
+		$this->adminEventClient->record(
+			'room_deleted',
+			'lifecycle',
+			'owner',
+			$userId,
+			$room->getUuid(),
+			['name' => $room->getName()],
+		);
 	}
 
 	/**
@@ -147,7 +165,7 @@ class RoomService {
 	 */
 	public function kickClient(string $userId, string $uuid, string $clientId): void {
 		$room = $this->getOwnedRoom($userId, $uuid);
-		$this->adminKickClient->kick($room->getUuid(), $clientId);
+		$this->adminKickClient->kick($room->getUuid(), $clientId, $userId);
 	}
 
 	/**
@@ -164,7 +182,7 @@ class RoomService {
 	 */
 	public function sendPlaybackCommand(string $userId, string $uuid, string $action, ?float $videoPos): void {
 		$room = $this->getOwnedRoom($userId, $uuid);
-		$this->adminPlaybackClient->apply($room->getUuid(), $action, $videoPos);
+		$this->adminPlaybackClient->apply($room->getUuid(), $action, $videoPos, $userId);
 	}
 
 	/**

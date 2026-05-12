@@ -67,6 +67,48 @@ class RoomRuntimeTest extends TestCase {
 		$this->assertSame([], $room->recentEventsSince(99));
 	}
 
+	public function testPushEnvelopePreservesPlaybackEventIdAtTopLevelForReconnectReplay(): void {
+		$room = new RoomRuntime('uuid-1', expiresAtMs: 9_999_999);
+		$room->pushEnvelope([
+			'ts' => 100,
+			'type' => 'seek',
+			'category' => 'playback',
+			'actor' => 'owner',
+			'actorId' => 'alice',
+			'data' => ['value' => 42.0],
+			'playbackEventId' => 7,
+		]);
+
+		// `recentEventsSince` reads `playbackEventId` from the envelope's top
+		// level — the legacy adapter contract that client reconnect-replay
+		// depends on. The owner's userId becomes the legacy `clientId`.
+		$tail = $room->recentEventsSince(0);
+		$this->assertCount(1, $tail);
+		$this->assertSame(7, $tail[0]['eventId']);
+		$this->assertSame('seek', $tail[0]['type']);
+		$this->assertSame(42.0, $tail[0]['value']);
+		$this->assertSame('alice', $tail[0]['clientId']);
+	}
+
+	public function testEnvelopesSinceReturnsFullEnvelopeShape(): void {
+		$registry = new \OCA\PlaybackSync\WebSocket\RoomRegistry(eventLogSize: 50);
+		$room = $registry->getOrCreate('uuid-1', expiresAtMs: 9_999_999);
+		$room->pushEnvelope([
+			'ts' => 555,
+			'type' => 'client_joined',
+			'category' => 'presence',
+			'actor' => 'client',
+			'actorId' => 'c1',
+			'data' => ['clientId' => 'c1'],
+		]);
+
+		$out = $room->envelopesSince(0);
+		$this->assertCount(1, $out);
+		$this->assertSame('presence', $out[0]['category']);
+		$this->assertSame('client_joined', $out[0]['type']);
+		$this->assertSame('uuid-1', $out[0]['roomUuid']);
+	}
+
 	public function testActiveConnectionsExcludesTombstonedAndCallerSelf(): void {
 		$room = new RoomRuntime('uuid-1', expiresAtMs: 9_999_999);
 		$connA = $this->createMock(ConnectionInterface::class);

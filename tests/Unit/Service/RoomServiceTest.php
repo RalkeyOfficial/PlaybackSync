@@ -7,6 +7,7 @@ namespace OCA\PlaybackSync\Tests\Unit\Service;
 use OCA\PlaybackSync\AppInfo\Application;
 use OCA\PlaybackSync\Db\Room;
 use OCA\PlaybackSync\Db\RoomMapper;
+use OCA\PlaybackSync\Service\AdminEventClient;
 use OCA\PlaybackSync\Service\AdminKickClient;
 use OCA\PlaybackSync\Service\AdminPlaybackClient;
 use OCA\PlaybackSync\Service\Exceptions\ClientNotFoundException;
@@ -35,6 +36,7 @@ class RoomServiceTest extends TestCase {
 	private ITimeFactory&MockObject $timeFactory;
 	private AdminKickClient&MockObject $adminKickClient;
 	private AdminPlaybackClient&MockObject $adminPlaybackClient;
+	private AdminEventClient&MockObject $adminEventClient;
 	private RoomService $service;
 
 	private const FIXED_TIME_S = 1_700_000_000;
@@ -49,6 +51,7 @@ class RoomServiceTest extends TestCase {
 		$this->timeFactory = $this->createMock(ITimeFactory::class);
 		$this->adminKickClient = $this->createMock(AdminKickClient::class);
 		$this->adminPlaybackClient = $this->createMock(AdminPlaybackClient::class);
+		$this->adminEventClient = $this->createMock(AdminEventClient::class);
 
 		$this->timeFactory->method('getTime')->willReturn(self::FIXED_TIME_S);
 
@@ -75,6 +78,7 @@ class RoomServiceTest extends TestCase {
 			$this->timeFactory,
 			$this->adminKickClient,
 			$this->adminPlaybackClient,
+			$this->adminEventClient,
 		);
 	}
 
@@ -499,7 +503,7 @@ class RoomServiceTest extends TestCase {
 		$this->mapper->method('findByUuid')->willReturn($room);
 		$this->adminKickClient->expects($this->once())
 			->method('kick')
-			->with('uuid-1', 'deadbeef');
+			->with('uuid-1', 'deadbeef', 'alice');
 
 		$this->service->kickClient('alice', 'uuid-1', 'deadbeef');
 	}
@@ -560,7 +564,7 @@ class RoomServiceTest extends TestCase {
 		$this->mapper->method('findByUuid')->willReturn($room);
 		$this->adminPlaybackClient->expects($this->once())
 			->method('apply')
-			->with('uuid-1', 'seek', 42.0);
+			->with('uuid-1', 'seek', 42.0, 'alice');
 
 		$this->service->sendPlaybackCommand('alice', 'uuid-1', 'seek', 42.0);
 	}
@@ -614,6 +618,7 @@ class RoomServiceTest extends TestCase {
 			$this->timeFactory,
 			$this->adminKickClient,
 			$this->adminPlaybackClient,
+			$this->adminEventClient,
 		);
 	}
 

@@ -35,9 +35,12 @@ class PresenceHttpServer implements HttpServerInterface {
 
 	public const ROUTE = '/admin/rooms/presence';
 	public const HEALTH_ROUTE = '/healthz';
+	public const GLOBAL_EVENTS_STREAM_ROUTE = '/admin/events/stream';
+	public const EVENTS_INGEST_ROUTE = '/admin/events';
 
 	private const KICK_PATTERN = '#^/admin/rooms/(?P<uuid>[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/clients/(?P<clientId>[0-9a-f]{1,64})/disconnect$#';
 	private const PLAYBACK_PATTERN = '#^/admin/rooms/(?P<uuid>[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/playback$#';
+	private const EVENTS_STREAM_PATTERN = '#^/admin/rooms/(?P<uuid>[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/events/stream$#';
 
 	private ?HealthController $healthController = null;
 
@@ -46,6 +49,8 @@ class PresenceHttpServer implements HttpServerInterface {
 		private readonly PresenceController $controller,
 		private readonly KickController $kickController,
 		private readonly PlaybackController $playbackController,
+		private readonly EventStreamController $eventStreamController,
+		private readonly EventIngestController $eventIngestController,
 		private readonly LoggerInterface $logger,
 	) {
 	}
@@ -103,12 +108,42 @@ class PresenceHttpServer implements HttpServerInterface {
 			}
 
 			if ($method === 'POST' && preg_match(self::KICK_PATTERN, strtolower($path), $m) === 1) {
-				$result = $this->kickController->kick($m['uuid'], $m['clientId'], $nowMs);
+				$payload = $this->parseJsonBody($request);
+				$ownerUserId = is_array($payload) && is_string($payload['userId'] ?? null) ? $payload['userId'] : null;
+				$result = $this->kickController->kick($m['uuid'], $m['clientId'], $nowMs, $ownerUserId);
 				match ($result) {
 					KickController::RESULT_KICKED => $this->respond($conn, 200, ['result' => 'kicked']),
 					KickController::RESULT_ROOM_NOT_FOUND => $this->respond($conn, 404, ['error' => 'room_not_found']),
 					KickController::RESULT_CLIENT_NOT_FOUND => $this->respond($conn, 404, ['error' => 'client_not_found']),
 				};
+				return;
+			}
+
+			if ($method === 'GET' && preg_match(self::EVENTS_STREAM_PATTERN, strtolower($path), $m) === 1) {
+				$lastEventId = $this->parseLastEventId($request);
+				$this->eventStreamController->openRoomStream($conn, $m['uuid'], $lastEventId);
+				// Do NOT close — the stream stays open until the client disconnects.
+				return;
+			}
+
+			if ($method === 'GET' && $path === self::GLOBAL_EVENTS_STREAM_ROUTE) {
+				$lastEventId = $this->parseLastEventId($request);
+				$this->eventStreamController->openGlobalStream($conn, $lastEventId);
+				return;
+			}
+
+			if ($method === 'POST' && $path === self::EVENTS_INGEST_ROUTE) {
+				$payload = $this->parseJsonBody($request);
+				if ($payload === null) {
+					$this->respond($conn, 400, ['error' => 'invalid_json']);
+					return;
+				}
+				$result = $this->eventIngestController->apply($payload, $nowMs);
+				if ($result['result'] === EventIngestController::RESULT_ACCEPTED) {
+					$this->respond($conn, 200, $result);
+				} else {
+					$this->respond($conn, 400, $result);
+				}
 				return;
 			}
 
@@ -128,7 +163,8 @@ class PresenceHttpServer implements HttpServerInterface {
 					}
 					$videoPos = (float)$rawPos;
 				}
-				$result = $this->playbackController->apply($m['uuid'], $action, $videoPos, $nowMs);
+				$ownerUserId = is_string($payload['userId'] ?? null) ? $payload['userId'] : null;
+				$result = $this->playbackController->apply($m['uuid'], $action, $videoPos, $nowMs, $ownerUserId);
 				match ($result) {
 					PlaybackController::RESULT_APPLIED => $this->respond($conn, 200, ['result' => 'applied']),
 					PlaybackController::RESULT_ROOM_NOT_FOUND => $this->respond($conn, 404, ['error' => 'room_not_found']),
@@ -143,7 +179,10 @@ class PresenceHttpServer implements HttpServerInterface {
 			if (
 				preg_match(self::KICK_PATTERN, strtolower($path)) === 1
 				|| preg_match(self::PLAYBACK_PATTERN, strtolower($path)) === 1
+				|| preg_match(self::EVENTS_STREAM_PATTERN, strtolower($path)) === 1
 				|| $path === self::ROUTE
+				|| $path === self::GLOBAL_EVENTS_STREAM_ROUTE
+				|| $path === self::EVENTS_INGEST_ROUTE
 			) {
 				$this->respond($conn, 405, ['error' => 'method_not_allowed']);
 				return;
@@ -164,6 +203,10 @@ class PresenceHttpServer implements HttpServerInterface {
 	}
 
 	public function onClose(ConnectionInterface $conn): void {
+		// SSE consumers register subscriber + heartbeat-timer state in the
+		// EventStreamController; tear them down on socket close. Other paths
+		// close synchronously in respond() so this is a no-op for them.
+		$this->eventStreamController->closeStream($conn);
 	}
 
 	public function onError(ConnectionInterface $conn, \Exception $e): void {
@@ -191,6 +234,24 @@ class PresenceHttpServer implements HttpServerInterface {
 			}
 		}
 		return $out;
+	}
+
+	/**
+	 * Pull the SSE replay cursor from `Last-Event-ID` header or, as a
+	 * fallback for proxies that strip headers, the `?lastEventId=` query.
+	 * Returns null when no usable cursor is present.
+	 */
+	private function parseLastEventId(RequestInterface $request): ?int {
+		$header = $request->getHeaderLine('Last-Event-ID');
+		if ($header !== '' && ctype_digit($header)) {
+			return (int)$header;
+		}
+		parse_str($request->getUri()->getQuery(), $params);
+		$raw = $params['lastEventId'] ?? null;
+		if (is_string($raw) && ctype_digit($raw)) {
+			return (int)$raw;
+		}
+		return null;
 	}
 
 	/**

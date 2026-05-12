@@ -17,231 +17,268 @@
 				</span>
 			</div>
 
-			<!-- URL ------------------------------------------------------- -->
-			<section class="room-detail__section">
-				<div class="room-detail__section-head">
-					<IconWeb :size="16" />
-					<h4>{{ t('playbacksync', 'Target video URL') }}</h4>
-				</div>
-				<div class="room-detail__field-row">
-					<a
-						class="room-detail__url"
-						:href="room.targetUrl"
-						:title="room.targetUrl"
-						target="_blank"
-						rel="noopener noreferrer">
-						{{ room.targetUrl }}
-					</a>
-					<NcButton
-						:aria-label="t('playbacksync', 'Copy target URL')"
-						:title="t('playbacksync', 'Copy target URL')"
-						@click="copy(room.targetUrl, 'targetUrl')">
-						<template #icon>
-							<IconCheck v-if="copied === 'targetUrl'" :size="20" />
-							<IconCopy v-else :size="20" />
-						</template>
-					</NcButton>
-				</div>
-			</section>
-
-			<!-- Share link ------------------------------------------------ -->
-			<section class="room-detail__section">
-				<div class="room-detail__section-head">
-					<IconLink :size="16" />
-					<h4>{{ t('playbacksync', 'Share link') }}</h4>
-				</div>
-				<div class="room-detail__field-row">
-					<code class="room-detail__shared">{{ room.shareLink }}</code>
-					<NcButton
-						:aria-label="t('playbacksync', 'Copy share link')"
-						:title="t('playbacksync', 'Copy share link')"
-						@click="copy(room.shareLink, 'shareLink')">
-						<template #icon>
-							<IconCheck v-if="copied === 'shareLink'" :size="20" />
-							<IconCopy v-else :size="20" />
-						</template>
-					</NcButton>
-				</div>
-			</section>
-
-			<!-- Timestamps ------------------------------------------------ -->
-			<section class="room-detail__section room-detail__section--grid">
-				<div class="room-detail__metric">
-					<div class="room-detail__metric-head">
-						<IconClock :size="14" />
-						<span>{{ t('playbacksync', 'Created') }}</span>
-					</div>
-					<div class="room-detail__metric-value">
-						{{ createdAgo }}
-					</div>
-					<div class="room-detail__metric-meta">
-						{{ formatAbsolute(room.createdAt) }}
-					</div>
-				</div>
-				<div class="room-detail__metric">
-					<div class="room-detail__metric-head">
-						<IconHourglass :size="14" />
-						<span>{{ isExpired ? t('playbacksync', 'Expired') : t('playbacksync', 'Expires in') }}</span>
-					</div>
-					<div class="room-detail__metric-value">
-						{{ isExpired ? '—' : ttl }}
-					</div>
-					<div class="room-detail__metric-meta">
-						{{ formatAbsolute(room.expiresAt) }}
-					</div>
-				</div>
-				<div class="room-detail__metric">
-					<div class="room-detail__metric-head">
-						<IconPulse :size="14" />
-						<span>{{ t('playbacksync', 'Last activity') }}</span>
-					</div>
-					<div class="room-detail__metric-value">
-						{{ lastActivityRel }}
-					</div>
-					<div class="room-detail__metric-meta">
-						{{ lastActivityAbs }}
-					</div>
-				</div>
-			</section>
-
-			<!-- Playback -------------------------------------------------- -->
-			<section v-if="live" class="room-detail__section">
-				<div class="room-detail__section-head">
-					<IconPlay :size="16" />
-					<h4>{{ t('playbacksync', 'Playback') }}</h4>
-					<span class="room-detail__playback-pill" :class="`room-detail__playback-pill--${playbackVariant}`">
-						<IconPlay v-if="playbackVariant === 'playing'" :size="14" />
-						<IconBuffer v-else-if="playbackVariant === 'buffering'" :size="14" class="room-detail__spin" />
-						<IconPause v-else :size="14" />
-						<span>{{ playbackLabel }}</span>
-						<span class="room-detail__playback-pos">{{ formattedVideoPos }}</span>
+			<!-- Tabs ------------------------------------------------------ -->
+			<div class="room-detail__tabs" role="tablist">
+				<button
+					type="button"
+					role="tab"
+					class="room-detail__tab"
+					:class="{ 'room-detail__tab--active': activeTab === 'overview' }"
+					:aria-selected="activeTab === 'overview'"
+					@click="activeTab = 'overview'">
+					{{ t('playbacksync', 'Overview') }}
+				</button>
+				<button
+					type="button"
+					role="tab"
+					class="room-detail__tab"
+					:class="{ 'room-detail__tab--active': activeTab === 'eventLog' }"
+					:aria-selected="activeTab === 'eventLog'"
+					@click="activeTab = 'eventLog'">
+					{{ t('playbacksync', 'Event log') }}
+					<span
+						v-if="eventLogEvents.length > 0"
+						class="room-detail__tab-badge"
+						:title="t('playbacksync', '{n} events buffered', { n: eventLogEvents.length })">
+						{{ eventLogEvents.length }}
 					</span>
-				</div>
+				</button>
+			</div>
 
-				<div class="room-detail__controls">
-					<NcButton
-						:disabled="playbackBusy"
-						:aria-label="isCurrentlyPlaying
-							? t('playbacksync', 'Pause playback for everyone')
-							: t('playbacksync', 'Start playback for everyone')"
-						@click="onTogglePlay">
-						<template #icon>
-							<NcLoadingIcon v-if="playbackAction === 'play' || playbackAction === 'pause'" :size="20" />
-							<IconPause v-else-if="isCurrentlyPlaying" :size="20" />
-							<IconPlay v-else :size="20" />
-						</template>
-						{{ isCurrentlyPlaying ? t('playbacksync', 'Pause') : t('playbacksync', 'Play') }}
-					</NcButton>
-					<NcButton
-						:disabled="playbackBusy"
-						:aria-label="t('playbacksync', 'Reset playback to start')"
-						@click="onReset">
-						<template #icon>
-							<NcLoadingIcon v-if="playbackAction === 'reset'" :size="20" />
-							<IconSkipBackward v-else :size="20" />
-						</template>
-						{{ t('playbacksync', 'Reset to start') }}
-					</NcButton>
-				</div>
-
-				<form class="room-detail__seek" @submit.prevent="onSeek">
-					<NcTextField
-						v-model="seekInput"
-						class="room-detail__seek-field"
-						:label="t('playbacksync', 'Seek to')"
-						:placeholder="seekPlaceholder"
-						:helperText="seekHelperText"
-						:error="seekInput !== '' && !canSeek"
-						:disabled="playbackBusy" />
-					<NcButton
-						type="submit"
-						:disabled="playbackBusy || !canSeek"
-						:aria-label="t('playbacksync', 'Seek to entered position')">
-						<template #icon>
-							<NcLoadingIcon v-if="playbackAction === 'seek'" :size="20" />
-							<IconArrowRight v-else :size="20" />
-						</template>
-						{{ t('playbacksync', 'Go') }}
-					</NcButton>
-				</form>
-			</section>
-
-			<!-- Connected viewers ----------------------------------------- -->
-			<section v-if="live" class="room-detail__section">
-				<div class="room-detail__section-head">
-					<IconAccountMultiple :size="16" />
-					<h4>{{ t('playbacksync', 'Connected viewers') }}</h4>
-					<span class="room-detail__count-badge">{{ live.connectedCount }}</span>
-					<NcLoadingIcon v-if="refreshing" :size="14" />
-				</div>
-
-				<ul v-if="live.connectedCount > 0" class="room-detail__viewers">
-					<li
-						v-for="chip in clientChips"
-						:key="chip.clientId"
-						class="room-detail__viewer">
-						<span
-							class="room-detail__viewer-dot"
-							:style="{ backgroundColor: chip.color }" />
-						<code class="room-detail__viewer-id" :title="chip.clientId">
-							{{ chip.label }}
-						</code>
-						<span v-if="chip.isBuffering" class="room-detail__viewer-buffering">
-							<IconBuffer :size="14" class="room-detail__spin" />
-							{{ t('playbacksync', 'Buffering') }}
-						</span>
+			<div v-show="activeTab === 'overview'" class="room-detail__pane">
+				<!-- URL ------------------------------------------------------- -->
+				<section class="room-detail__section">
+					<div class="room-detail__section-head">
+						<IconWeb :size="16" />
+						<h4>{{ t('playbacksync', 'Target video URL') }}</h4>
+					</div>
+					<div class="room-detail__field-row">
+						<a
+							class="room-detail__url"
+							:href="room.targetUrl"
+							:title="room.targetUrl"
+							target="_blank"
+							rel="noopener noreferrer">
+							{{ room.targetUrl }}
+						</a>
 						<NcButton
-							variant="tertiary"
-							:aria-label="t('playbacksync', 'Disconnect this client')"
-							:title="t('playbacksync', 'Disconnect this client')"
-							:disabled="kicking === chip.clientId"
-							@click="onRequestKick(chip.clientId)">
+							:aria-label="t('playbacksync', 'Copy target URL')"
+							:title="t('playbacksync', 'Copy target URL')"
+							@click="copy(room.targetUrl, 'targetUrl')">
 							<template #icon>
-								<NcLoadingIcon v-if="kicking === chip.clientId" :size="20" />
-								<IconClose v-else :size="20" />
+								<IconCheck v-if="copied === 'targetUrl'" :size="20" />
+								<IconCopy v-else :size="20" />
 							</template>
 						</NcButton>
-					</li>
-				</ul>
-				<p v-else class="room-detail__empty">
-					{{ t('playbacksync', 'No viewers are currently connected.') }}
-				</p>
-			</section>
-			<section v-else class="room-detail__section">
-				<NcNoteCard type="warning">
-					{{ t('playbacksync', 'Live state unavailable — the WebSocket sync server may be offline.') }}
-				</NcNoteCard>
-			</section>
+					</div>
+				</section>
 
-			<!-- Content identity ------------------------------------------ -->
-			<section v-if="live?.contentIdentity" class="room-detail__section">
-				<div class="room-detail__section-head">
-					<IconMovie :size="16" />
-					<h4>{{ t('playbacksync', 'Now watching') }}</h4>
-				</div>
-				<a
-					class="room-detail__now-watching"
-					:href="live.contentIdentity.pageUrl"
-					:title="live.contentIdentity.pageUrl"
-					target="_blank"
-					rel="noopener noreferrer">
-					<span class="room-detail__now-watching-title">
-						{{ live.contentIdentity.providerId }} · {{ live.contentIdentity.episodeId }}
-					</span>
-					<span class="room-detail__now-watching-url">
-						{{ live.contentIdentity.pageUrl }}
-					</span>
-				</a>
-			</section>
+				<!-- Share link ------------------------------------------------ -->
+				<section class="room-detail__section">
+					<div class="room-detail__section-head">
+						<IconLink :size="16" />
+						<h4>{{ t('playbacksync', 'Share link') }}</h4>
+					</div>
+					<div class="room-detail__field-row">
+						<code class="room-detail__shared">{{ room.shareLink }}</code>
+						<NcButton
+							:aria-label="t('playbacksync', 'Copy share link')"
+							:title="t('playbacksync', 'Copy share link')"
+							@click="copy(room.shareLink, 'shareLink')">
+							<template #icon>
+								<IconCheck v-if="copied === 'shareLink'" :size="20" />
+								<IconCopy v-else :size="20" />
+							</template>
+						</NcButton>
+					</div>
+				</section>
 
-			<!-- Identity ---------------------------------------------------- -->
-			<section class="room-detail__section">
-				<div class="room-detail__section-head">
-					<IconIdentifier :size="16" />
-					<h4>{{ t('playbacksync', 'Identifier') }}</h4>
-				</div>
-				<code class="room-detail__uuid">{{ room.uuid }}</code>
-			</section>
+				<!-- Timestamps ------------------------------------------------ -->
+				<section class="room-detail__section room-detail__section--grid">
+					<div class="room-detail__metric">
+						<div class="room-detail__metric-head">
+							<IconClock :size="14" />
+							<span>{{ t('playbacksync', 'Created') }}</span>
+						</div>
+						<div class="room-detail__metric-value">
+							{{ createdAgo }}
+						</div>
+						<div class="room-detail__metric-meta">
+							{{ formatAbsolute(room.createdAt) }}
+						</div>
+					</div>
+					<div class="room-detail__metric">
+						<div class="room-detail__metric-head">
+							<IconHourglass :size="14" />
+							<span>{{ isExpired ? t('playbacksync', 'Expired') : t('playbacksync', 'Expires in') }}</span>
+						</div>
+						<div class="room-detail__metric-value">
+							{{ isExpired ? '—' : ttl }}
+						</div>
+						<div class="room-detail__metric-meta">
+							{{ formatAbsolute(room.expiresAt) }}
+						</div>
+					</div>
+					<div class="room-detail__metric">
+						<div class="room-detail__metric-head">
+							<IconPulse :size="14" />
+							<span>{{ t('playbacksync', 'Last activity') }}</span>
+						</div>
+						<div class="room-detail__metric-value">
+							{{ lastActivityRel }}
+						</div>
+						<div class="room-detail__metric-meta">
+							{{ lastActivityAbs }}
+						</div>
+					</div>
+				</section>
+
+				<!-- Playback -------------------------------------------------- -->
+				<section v-if="live" class="room-detail__section">
+					<div class="room-detail__section-head">
+						<IconPlay :size="16" />
+						<h4>{{ t('playbacksync', 'Playback') }}</h4>
+						<span class="room-detail__playback-pill" :class="`room-detail__playback-pill--${playbackVariant}`">
+							<IconPlay v-if="playbackVariant === 'playing'" :size="14" />
+							<IconBuffer v-else-if="playbackVariant === 'buffering'" :size="14" class="room-detail__spin" />
+							<IconPause v-else :size="14" />
+							<span>{{ playbackLabel }}</span>
+							<span class="room-detail__playback-pos">{{ formattedVideoPos }}</span>
+						</span>
+					</div>
+
+					<div class="room-detail__controls">
+						<NcButton
+							:disabled="playbackBusy"
+							:aria-label="isCurrentlyPlaying
+								? t('playbacksync', 'Pause playback for everyone')
+								: t('playbacksync', 'Start playback for everyone')"
+							@click="onTogglePlay">
+							<template #icon>
+								<NcLoadingIcon v-if="playbackAction === 'play' || playbackAction === 'pause'" :size="20" />
+								<IconPause v-else-if="isCurrentlyPlaying" :size="20" />
+								<IconPlay v-else :size="20" />
+							</template>
+							{{ isCurrentlyPlaying ? t('playbacksync', 'Pause') : t('playbacksync', 'Play') }}
+						</NcButton>
+						<NcButton
+							:disabled="playbackBusy"
+							:aria-label="t('playbacksync', 'Reset playback to start')"
+							@click="onReset">
+							<template #icon>
+								<NcLoadingIcon v-if="playbackAction === 'reset'" :size="20" />
+								<IconSkipBackward v-else :size="20" />
+							</template>
+							{{ t('playbacksync', 'Reset to start') }}
+						</NcButton>
+					</div>
+
+					<form class="room-detail__seek" @submit.prevent="onSeek">
+						<NcTextField
+							v-model="seekInput"
+							class="room-detail__seek-field"
+							:label="t('playbacksync', 'Seek to')"
+							:placeholder="seekPlaceholder"
+							:helperText="seekHelperText"
+							:error="seekInput !== '' && !canSeek"
+							:disabled="playbackBusy" />
+						<NcButton
+							type="submit"
+							:disabled="playbackBusy || !canSeek"
+							:aria-label="t('playbacksync', 'Seek to entered position')">
+							<template #icon>
+								<NcLoadingIcon v-if="playbackAction === 'seek'" :size="20" />
+								<IconArrowRight v-else :size="20" />
+							</template>
+							{{ t('playbacksync', 'Go') }}
+						</NcButton>
+					</form>
+				</section>
+
+				<!-- Connected viewers ----------------------------------------- -->
+				<section v-if="live" class="room-detail__section">
+					<div class="room-detail__section-head">
+						<IconAccountMultiple :size="16" />
+						<h4>{{ t('playbacksync', 'Connected viewers') }}</h4>
+						<span class="room-detail__count-badge">{{ live.connectedCount }}</span>
+						<NcLoadingIcon v-if="refreshing" :size="14" />
+					</div>
+
+					<ul v-if="live.connectedCount > 0" class="room-detail__viewers">
+						<li
+							v-for="chip in clientChips"
+							:key="chip.clientId"
+							class="room-detail__viewer">
+							<span
+								class="room-detail__viewer-dot"
+								:style="{ backgroundColor: chip.color }" />
+							<code class="room-detail__viewer-id" :title="chip.clientId">
+								{{ chip.label }}
+							</code>
+							<span v-if="chip.isBuffering" class="room-detail__viewer-buffering">
+								<IconBuffer :size="14" class="room-detail__spin" />
+								{{ t('playbacksync', 'Buffering') }}
+							</span>
+							<NcButton
+								variant="tertiary"
+								:aria-label="t('playbacksync', 'Disconnect this client')"
+								:title="t('playbacksync', 'Disconnect this client')"
+								:disabled="kicking === chip.clientId"
+								@click="onRequestKick(chip.clientId)">
+								<template #icon>
+									<NcLoadingIcon v-if="kicking === chip.clientId" :size="20" />
+									<IconClose v-else :size="20" />
+								</template>
+							</NcButton>
+						</li>
+					</ul>
+					<p v-else class="room-detail__empty">
+						{{ t('playbacksync', 'No viewers are currently connected.') }}
+					</p>
+				</section>
+				<section v-else class="room-detail__section">
+					<NcNoteCard type="warning">
+						{{ t('playbacksync', 'Live state unavailable — the WebSocket sync server may be offline.') }}
+					</NcNoteCard>
+				</section>
+
+				<!-- Content identity ------------------------------------------ -->
+				<section v-if="live?.contentIdentity" class="room-detail__section">
+					<div class="room-detail__section-head">
+						<IconMovie :size="16" />
+						<h4>{{ t('playbacksync', 'Now watching') }}</h4>
+					</div>
+					<a
+						class="room-detail__now-watching"
+						:href="live.contentIdentity.pageUrl"
+						:title="live.contentIdentity.pageUrl"
+						target="_blank"
+						rel="noopener noreferrer">
+						<span class="room-detail__now-watching-title">
+							{{ live.contentIdentity.providerId }} · {{ live.contentIdentity.episodeId }}
+						</span>
+						<span class="room-detail__now-watching-url">
+							{{ live.contentIdentity.pageUrl }}
+						</span>
+					</a>
+				</section>
+
+				<!-- Identity ---------------------------------------------------- -->
+				<section class="room-detail__section">
+					<div class="room-detail__section-head">
+						<IconIdentifier :size="16" />
+						<h4>{{ t('playbacksync', 'Identifier') }}</h4>
+					</div>
+					<code class="room-detail__uuid">{{ room.uuid }}</code>
+				</section>
+			</div>
+
+			<div v-show="activeTab === 'eventLog'" class="room-detail__pane room-detail__pane--log">
+				<RoomEventLog
+					:events="eventLogEvents"
+					:state="eventLogState"
+					:meta="eventLogMeta" />
+			</div>
 		</div>
 
 		<template #actions>
@@ -330,10 +367,13 @@ import IconPulse from 'vue-material-design-icons/Pulse.vue'
 import IconSkipBackward from 'vue-material-design-icons/SkipBackward.vue'
 import IconHourglass from 'vue-material-design-icons/TimerSandComplete.vue'
 import IconWeb from 'vue-material-design-icons/Web.vue'
+import RoomEventLog from './RoomEventLog.vue'
 import StatusDot from './StatusDot.vue'
+import { useEventSource } from '../composables/useEventSource.ts'
 import { useNow } from '../composables/useNow.ts'
 import { getRoomStatus } from '../composables/useRoomStatus.ts'
 import { SKIP_CONFIRM_KICK_CLIENT, useSkipConfirm } from '../composables/useSkipConfirm.ts'
+import { buildRoomEventStreamUrl } from '../services/roomEventsApi.ts'
 import { getRoom } from '../services/roomsApi.ts'
 import { useRoomsStore } from '../stores/rooms.ts'
 
@@ -425,15 +465,44 @@ async function refreshLive() {
 	}
 }
 
+/**
+ * SSE stream of the room's event log. Lifecycle is gated to (dialog open
+ * AND event-log tab active) so the FPM proxy worker only stays pinned
+ * while the user is actually watching the feed.
+ */
+const {
+	events: eventLogEvents,
+	state: eventLogState,
+	meta: eventLogMeta,
+	start: startEventLog,
+	stop: stopEventLog,
+} = useEventSource(() => buildRoomEventStreamUrl(props.room.uuid))
+
+/**
+ * Currently-visible tab in the detail dialog. Defaults to `overview` on
+ * each open so the dialog never lands on a stale tab.
+ */
+const activeTab = ref<'overview' | 'eventLog'>('overview')
+
 watch(() => props.open, (isOpen) => {
 	if (!isOpen) {
 		freshLive.value = undefined
 		confirmingClientId.value = null
 		dontAskAgainKick.value = false
+		stopEventLog()
 		return
 	}
+	activeTab.value = 'overview'
 	void refreshLive()
 }, { immediate: true })
+
+watch([() => props.open, activeTab], ([isOpen, tab]) => {
+	if (isOpen && tab === 'eventLog') {
+		startEventLog()
+	} else {
+		stopEventLog()
+	}
+})
 
 watch(confirmingClientId, (value) => {
 	if (value === null) {
@@ -859,6 +928,63 @@ function onSeek() {
 	font-variant-numeric: tabular-nums;
 	color: var(--color-text-maxcontrast);
 	font-size: 13px;
+}
+
+.room-detail__tabs {
+	display: flex;
+	padding: 2px;
+	background-color: var(--color-background-dark);
+	border-radius: var(--border-radius-large, 12px);
+}
+
+.room-detail__tab {
+	margin-inline-start: unset !important;
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	flex: 1;
+	justify-content: center;
+	padding: 8px 12px;
+	border: none;
+	border-radius: var(--border-radius, 8px);
+	background: transparent;
+	color: var(--color-text-maxcontrast);
+	font-size: 13px;
+	font-weight: 600;
+	cursor: pointer;
+	transition: background-color 80ms ease, color 80ms ease;
+}
+
+.room-detail__tab:hover {
+	background-color: var(--color-background-hover, var(--color-background-dark));
+	color: var(--color-main-text);
+}
+
+.room-detail__tab--active {
+	background-color: var(--color-main-background);
+	color: var(--color-main-text);
+	box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+}
+
+.room-detail__tab-badge {
+	min-width: 22px;
+	padding: 1px 7px;
+	border-radius: 999px;
+	background-color: var(--color-primary-element, var(--color-primary));
+	color: var(--color-primary-element-text, var(--color-primary-text));
+	font-size: 11px;
+	font-weight: 700;
+	font-variant-numeric: tabular-nums;
+}
+
+.room-detail__pane {
+	display: flex;
+	flex-direction: column;
+	gap: 18px;
+}
+
+.room-detail__pane--log {
+	padding-top: 4px;
 }
 
 .room-detail__section {

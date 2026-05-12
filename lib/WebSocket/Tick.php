@@ -60,11 +60,24 @@ class Tick {
 				continue;
 			}
 
-			$runtime->pruneExpiredTombstones($nowMs);
+			foreach ($runtime->pruneExpiredTombstones($nowMs) as $droppedClientId) {
+				$runtime->pushEnvelope([
+					'ts' => $nowMs,
+					'type' => 'client_left',
+					'category' => 'presence',
+					'actor' => 'system',
+					'actorId' => null,
+					'data' => ['clientId' => $droppedClientId, 'reason' => 'tombstone_expired'],
+				]);
+			}
 			$runtime->pruneExpiredKickBlocks($nowMs);
 
 			foreach ($runtime->findIdleClients($nowMs, $this->config->idleCloseMs) as $idleClient) {
 				if ($idleClient->conn !== null) {
+					// Mark the cause so the upcoming `MessageRouter::onClose`
+					// surfaces it on the resulting `client_left` envelope; the
+					// default would be the generic `closed`.
+					$idleClient->pendingLeaveReason = 'idle';
 					$idleClient->conn->close();
 				}
 			}

@@ -11,15 +11,28 @@ use Ratchet\ConnectionInterface;
  * object — no I/O — so it's trivial to unit-test the lifecycle without
  * spinning up a network stack.
  *
- * The event log is a fixed-size ring buffer indexed by monotonic `eventId`;
- * a reconnecting client passes its last seen `eventId` and we replay just
- * the tail it missed.
+ * The event log is a fixed-size ring buffer of rich envelopes (see
+ * `pushEnvelope`). Each entry carries a process-wide `id` (used as the SSE
+ * `Last-Event-ID`) and, for playback events, the per-room `playbackEventId`
+ * that the reconnect-replay path uses to find the tail a client missed.
  */
 class RoomRuntime {
 	/** @var array<string, ClientConnection> */
 	private array $clients = [];
 
-	/** @var array<int, array{type: string, value?: mixed, clientId: string, ts: int, eventId: int}> */
+	/**
+	 * @var list<array{
+	 *   id: int,
+	 *   ts: int,
+	 *   type: string,
+	 *   category: string,
+	 *   actor: string,
+	 *   actorId: ?string,
+	 *   roomUuid: string,
+	 *   data: ?array<string, mixed>,
+	 *   playbackEventId?: int
+	 * }>
+	 */
 	private array $eventLog = [];
 
 	/**
@@ -39,6 +52,7 @@ class RoomRuntime {
 		public readonly string $uuid,
 		public int $expiresAtMs,
 		public readonly int $eventLogSize = 200,
+		private readonly ?RoomRegistry $registry = null,
 	) {
 		$this->state = new PlaybackState();
 	}
@@ -92,34 +106,112 @@ class RoomRuntime {
 	}
 
 	/**
-	 * Append an event to the ring buffer. The buffer never exceeds
-	 * `eventLogSize` entries — older events are dropped silently because any
-	 * client that needed them missed its tombstone window anyway.
+	 * Push a playback event (`play`, `pause`, `seek`, `reset`) into the ring
+	 * and fan it out to subscribers. Preserves the legacy semantics of the
+	 * old `pushEvent(type, value, clientId, ts, eventId)` signature for callers
+	 * that already drive `PlaybackState::applyPlay`/etc.
+	 *
+	 * `eventId` is the playback state version (per-room); the SSE wire id is
+	 * allocated separately from the registry.
+	 *
+	 * @param string $type     play|pause|seek|reset (use the strings already in use).
+	 * @param mixed  $value    Type-specific scalar (e.g. seek videoPos). Stored under `data.value`.
+	 * @param string $clientId Originating clientId; `'admin'` for owner-via-dashboard until the
+	 *                        actor refactor lands.
 	 */
 	public function pushEvent(string $type, mixed $value, string $clientId, int $tsMs, int $eventId): void {
-		$this->eventLog[] = [
-			'type' => $type,
-			'value' => $value,
-			'clientId' => $clientId,
+		// `'admin'` is a legacy sentinel meaning "the room owner acting via
+		// the dashboard loopback" — it is NOT a Nextcloud administrator. Map
+		// it to `actor: 'owner'` and drop the sentinel from `actorId` so the
+		// UI can fall back to a clean "owner" label instead of literally
+		// rendering the string "admin".
+		$isOwnerLoopback = $clientId === 'admin';
+		$envelope = [
+			'id' => $this->registry?->allocateEventId() ?? $eventId,
 			'ts' => $tsMs,
-			'eventId' => $eventId,
+			'type' => $type,
+			'category' => 'playback',
+			'actor' => $isOwnerLoopback ? 'owner' : 'client',
+			'actorId' => $isOwnerLoopback ? null : $clientId,
+			'roomUuid' => $this->uuid,
+			'data' => $value === null ? null : ['value' => $value],
+			'playbackEventId' => $eventId,
 		];
-		if (count($this->eventLog) > $this->eventLogSize) {
-			array_shift($this->eventLog);
-		}
+		$this->appendEnvelope($envelope);
 	}
 
 	/**
-	 * @return list<array{type: string, value?: mixed, clientId: string, ts: int, eventId: int}>
+	 * Push a fully-formed envelope (presence, lifecycle, admin, or an owner-
+	 * originated playback command) into the ring. Caller is responsible for
+	 * the envelope shape — see the spec at
+	 * `agent-os/specs/2026-05-12-2038-event-log-sse/plan.md`.
+	 *
+	 * For playback envelopes, the optional `playbackEventId` field is preserved
+	 * at top level so `recentEventsSince` can keep feeding the legacy client
+	 * reconnect-replay tail.
+	 *
+	 * @param array{
+	 *   ts: int,
+	 *   type: string,
+	 *   category: string,
+	 *   actor: string,
+	 *   actorId: ?string,
+	 *   data?: ?array<string, mixed>,
+	 *   playbackEventId?: int
+	 * } $envelope Caller-supplied; the runtime fills in `id` and `roomUuid`.
 	 */
-	public function recentEventsSince(int $eventId): array {
+	public function pushEnvelope(array $envelope): void {
+		$full = $envelope + ['data' => null];
+		$full['id'] = $this->registry?->allocateEventId() ?? 0;
+		$full['roomUuid'] = $this->uuid;
+		$this->appendEnvelope($full);
+	}
+
+	/**
+	 * Replay tail for client reconnects. Returns playback events with
+	 * `playbackEventId > $clientLastEventId`, mapped to the legacy 5-tuple
+	 * shape consumed by `MessageEncoder::roomState`.
+	 *
+	 * Presence/lifecycle envelopes are intentionally excluded — clients only
+	 * know how to apply playback events on reconnect.
+	 *
+	 * @return list<array{type: string, value: mixed, clientId: string, ts: int, eventId: int}>
+	 */
+	public function recentEventsSince(int $clientLastEventId): array {
 		$tail = [];
-		foreach ($this->eventLog as $event) {
-			if ($event['eventId'] > $eventId) {
-				$tail[] = $event;
+		foreach ($this->eventLog as $env) {
+			if ($env['category'] !== 'playback') {
+				continue;
 			}
+			$pid = $env['playbackEventId'] ?? null;
+			if ($pid === null || $pid <= $clientLastEventId) {
+				continue;
+			}
+			$tail[] = [
+				'type' => $env['type'],
+				'value' => $env['data']['value'] ?? null,
+				'clientId' => $env['actorId'] ?? '',
+				'ts' => $env['ts'],
+				'eventId' => $pid,
+			];
 		}
 		return $tail;
+	}
+
+	/**
+	 * SSE backfill: return every envelope currently in the ring whose `id` is
+	 * greater than `$sinceId`. Returns the full envelope shape (no mapping).
+	 *
+	 * @return list<array<string, mixed>>
+	 */
+	public function envelopesSince(int $sinceId): array {
+		$out = [];
+		foreach ($this->eventLog as $env) {
+			if (($env['id'] ?? 0) > $sinceId) {
+				$out[] = $env;
+			}
+		}
+		return $out;
 	}
 
 	/**
@@ -213,5 +305,13 @@ class RoomRuntime {
 				unset($this->kickBlocks[$clientId]);
 			}
 		}
+	}
+
+	private function appendEnvelope(array $envelope): void {
+		$this->eventLog[] = $envelope;
+		if (count($this->eventLog) > $this->eventLogSize) {
+			array_shift($this->eventLog);
+		}
+		$this->registry?->publishRoomEvent($this->uuid, $envelope);
 	}
 }

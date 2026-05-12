@@ -37,10 +37,14 @@ class AdminPlaybackClient {
 	/**
 	 * Send a playback command to the daemon's live runtime for the room.
 	 *
-	 * @param string     $roomUuid Room to target.
-	 * @param string     $action   One of `play`, `pause`, `seek`, `reset`.
-	 * @param float|null $videoPos Target position in seconds when `$action` is
-	 *                             `seek`. Ignored otherwise.
+	 * @param string      $roomUuid Room to target.
+	 * @param string      $action   One of `play`, `pause`, `seek`, `reset`.
+	 * @param float|null  $videoPos Target position in seconds when `$action` is
+	 *                              `seek`. Ignored otherwise.
+	 * @param string|null $userId   Nextcloud userId of the room owner that
+	 *                              triggered this command. Forwarded to the
+	 *                              daemon so the emitted playback envelope can
+	 *                              carry `actor: 'owner', actorId: $userId`.
 	 *
 	 * @throws RoomNotLiveException             when the daemon reports no live
 	 *                                          runtime for the room.
@@ -49,7 +53,7 @@ class AdminPlaybackClient {
 	 *                                          misconfigured, invalid payload,
 	 *                                          or any other non-200 response.
 	 */
-	public function apply(string $roomUuid, string $action, ?float $videoPos): void {
+	public function apply(string $roomUuid, string $action, ?float $videoPos, ?string $userId = null): void {
 		$secret = $this->appConfig->getValueString(Application::APP_ID, 'ws_admin_secret', '');
 		if ($secret === '') {
 			throw new PlaybackCommandFailedException('Admin secret is not configured.');
@@ -67,6 +71,9 @@ class AdminPlaybackClient {
 		$payload = ['action' => $action];
 		if ($videoPos !== null) {
 			$payload['videoPos'] = $videoPos;
+		}
+		if ($userId !== null) {
+			$payload['userId'] = $userId;
 		}
 		$body = json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
 		if ($body === false) {

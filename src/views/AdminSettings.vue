@@ -161,6 +161,32 @@
 				</div>
 			</NcSettingsSection>
 
+			<NcSettingsSection
+				:name="t('playbacksync', 'Recent activity')"
+				:description="t('playbacksync', 'Live cross-room feed of playback, presence and admin events from the running daemon. Events are kept in memory only — they reset when the daemon restarts.')">
+				<div v-if="eventLogDegraded" class="playbacksync-admin__event-warning">
+					<NcNoteCard type="warning">
+						{{ t('playbacksync', 'Event log is temporarily unavailable.') }}
+					</NcNoteCard>
+				</div>
+				<div class="playbacksync-admin__event-filters">
+					<NcCheckboxRadioSwitch
+						v-for="filter in categoryFilters"
+						:key="filter.key"
+						:modelValue="enabledCategories.has(filter.key)"
+						type="switch"
+						@update:modelValue="(checked) => toggleCategory(filter.key, checked)">
+						{{ filter.label }}
+					</NcCheckboxRadioSwitch>
+				</div>
+				<RoomEventLog
+					:events="filteredEvents"
+					:state="eventLogState"
+					:meta="eventLogMeta"
+					:roomNames="roomNames"
+					showRoom />
+			</NcSettingsSection>
+
 			<NcDialog
 				:name="t('playbacksync', 'Regenerate admin secret?')"
 				:open="confirmOpen"
@@ -188,10 +214,11 @@
 
 <script setup lang="ts">
 import type { AdminSettingsSection, DaemonSettings, RoomSettings, WsTuningSettings } from '../types/adminSettings.ts'
+import type { EventCategory } from '../types/event.ts'
 
 import { showError, showSuccess } from '@nextcloud/dialogs'
 import { translate as t } from '@nextcloud/l10n'
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import NcButton from '@nextcloud/vue/components/NcButton'
 import NcCheckboxRadioSwitch from '@nextcloud/vue/components/NcCheckboxRadioSwitch'
 import NcDialog from '@nextcloud/vue/components/NcDialog'
@@ -202,6 +229,9 @@ import NcTextField from '@nextcloud/vue/components/NcTextField'
 import IconContentCopy from 'vue-material-design-icons/ContentCopy.vue'
 import IconContentSave from 'vue-material-design-icons/ContentSave.vue'
 import IconRefresh from 'vue-material-design-icons/Refresh.vue'
+import RoomEventLog from '../components/RoomEventLog.vue'
+import { useEventSource } from '../composables/useEventSource.ts'
+import { buildAdminEventStreamUrl } from '../services/adminEventsApi.ts'
 import { useAdminSettingsStore } from '../stores/adminSettings.ts'
 
 interface WsTuningField {
@@ -243,9 +273,82 @@ const rooms = computed<RoomSettings>({
 	set: (value) => { store.rooms = value },
 })
 
+const {
+	state: eventLogState,
+	events: eventLogEvents,
+	meta: eventLogMeta,
+	degraded: eventLogDegraded,
+	start: startEventLog,
+	stop: stopEventLog,
+} = useEventSource(() => buildAdminEventStreamUrl())
+
+// Local map of `roomUuid → human-friendly name`. Populated as `room_created`
+// and `room_renamed` envelopes stream in so the row chips can render names
+// even when the admin doesn't own the room.
+const roomNames = reactive<Record<string, string>>({})
+
+interface CategoryFilter {
+	key: EventCategory
+	label: string
+}
+
+const categoryFilters = computed<CategoryFilter[]>(() => [
+	{ key: 'playback', label: t('playbacksync', 'Playback') },
+	{ key: 'presence', label: t('playbacksync', 'Presence') },
+	{ key: 'lifecycle', label: t('playbacksync', 'Lifecycle') },
+	{ key: 'admin', label: t('playbacksync', 'Admin') },
+])
+
+const enabledCategories = ref<Set<EventCategory>>(new Set<EventCategory>(['playback', 'presence', 'lifecycle', 'admin']))
+
+const filteredEvents = computed(() => {
+	const enabled = enabledCategories.value
+	return eventLogEvents.value.filter((e) => enabled.has(e.category))
+})
+
+/**
+ * Toggle a category filter in the local set. Triggers reactivity by
+ * reassigning the ref to a fresh Set since native Set mutations are not
+ * deeply reactive.
+ *
+ * @param category which event category to toggle
+ * @param enabled  whether it should be visible
+ */
+function toggleCategory(category: EventCategory, enabled: boolean) {
+	const next = new Set(enabledCategories.value)
+	if (enabled) {
+		next.add(category)
+	} else {
+		next.delete(category)
+	}
+	enabledCategories.value = next
+}
+
 onMounted(() => {
 	store.load()
+	startEventLog()
 })
+
+onBeforeUnmount(() => {
+	stopEventLog()
+})
+
+// Watch streamed events for room-name updates so chips have something better
+// than a raw UUID. `lifecycle` events carry the friendly name in `data`.
+watch(eventLogEvents, (events) => {
+	for (const event of events) {
+		if (!event.roomUuid) {
+			continue
+		}
+		if (event.type === 'room_created' || event.type === 'room_renamed') {
+			const data = event.data as { name?: string, to?: string } | null
+			const name = data?.name ?? data?.to
+			if (typeof name === 'string' && name !== '') {
+				roomNames[event.roomUuid] = name
+			}
+		}
+	}
+}, { deep: false })
 
 /**
  * Persist a single section's current form state via the store.
@@ -379,6 +482,17 @@ function createEmptyRooms(): RoomSettings {
 .playbacksync-admin__confirm {
 	margin: 8px 4px;
 	line-height: 1.5;
+}
+
+.playbacksync-admin__event-filters {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px 16px;
+	margin: 8px 0 12px;
+}
+
+.playbacksync-admin__event-warning {
+	margin-bottom: 8px;
 }
 
 @media (max-width: 720px) {

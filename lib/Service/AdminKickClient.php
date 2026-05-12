@@ -38,12 +38,19 @@ class AdminKickClient {
 	/**
 	 * Disconnect the named client from the daemon's live runtime for the room.
 	 *
+	 * @param string      $roomUuid The room to act on.
+	 * @param string      $clientId The client UUID to disconnect.
+	 * @param string|null $userId   Nextcloud userId of the room owner that
+	 *                              issued the kick. Forwarded to the daemon so
+	 *                              the resulting `client_kicked` envelope can
+	 *                              carry `actor: 'owner', actorId: $userId`.
+	 *
 	 * @throws ClientNotFoundException when the daemon answered that no such
 	 *                                 room/client is currently connected.
 	 * @throws KickFailedException     when the call could not be completed —
 	 *                                 daemon down, HMAC misconfigured, etc.
 	 */
-	public function kick(string $roomUuid, string $clientId): void {
+	public function kick(string $roomUuid, string $clientId, ?string $userId = null): void {
 		$secret = $this->appConfig->getValueString(Application::APP_ID, 'ws_admin_secret', '');
 		if ($secret === '') {
 			throw new KickFailedException('Admin secret is not configured.');
@@ -58,16 +65,22 @@ class AdminKickClient {
 		$sig = hash_hmac('sha256', $canonical, $secret);
 		$header = 't=' . $nowMs . ',sig=' . $sig;
 
+		$body = json_encode(['userId' => $userId], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+		if ($body === false) {
+			throw new KickFailedException('Failed to encode kick payload.');
+		}
+
 		$url = 'http://' . $host . ':' . $port . $path;
 
 		try {
 			$response = $this->clientService->newClient()->post($url, [
 				'headers' => [
 					'X-PBSync-Admin' => $header,
+					'Content-Type' => 'application/json',
 					'Accept' => 'application/json',
-					'Content-Length' => '0',
+					'Content-Length' => (string)strlen($body),
 				],
-				'body' => '',
+				'body' => $body,
 				'timeout' => self::DEFAULT_TIMEOUT_SECONDS,
 				'connect_timeout' => self::DEFAULT_TIMEOUT_SECONDS,
 				'nextcloud' => ['allow_local_address' => true],

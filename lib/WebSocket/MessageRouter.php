@@ -127,7 +127,17 @@ class MessageRouter implements MessageComponentInterface {
 			$client = $runtime?->getClient($ctx->clientId);
 			if ($client !== null) {
 				$nowMs = (int)(microtime(true) * 1000);
+				$reason = $client->pendingLeaveReason ?? 'closed';
+				$client->pendingLeaveReason = null;
 				$client->tombstone($nowMs + $this->config->tombstoneMs);
+				$runtime?->pushEnvelope([
+					'ts' => $nowMs,
+					'type' => 'client_left',
+					'category' => 'presence',
+					'actor' => 'system',
+					'actorId' => null,
+					'data' => ['clientId' => $ctx->clientId, 'reason' => $reason],
+				]);
 			}
 		}
 

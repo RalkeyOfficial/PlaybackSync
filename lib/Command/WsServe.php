@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace OCA\PlaybackSync\Command;
 
 use OCA\PlaybackSync\AppInfo\Application;
+use OCA\PlaybackSync\WebSocket\Admin\EventStreamController;
 use OCA\PlaybackSync\WebSocket\Admin\HealthController;
 use OCA\PlaybackSync\WebSocket\Admin\PresenceHttpServer;
 use OCA\PlaybackSync\WebSocket\MessageRouter;
@@ -38,6 +39,7 @@ class WsServe extends Command {
 		private readonly PresenceHttpServer $presenceHttp,
 		private readonly RoomRegistry $registry,
 		private readonly IAppManager $appManager,
+		private readonly EventStreamController $eventStreamController,
 	) {
 		parent::__construct();
 	}
@@ -76,6 +78,7 @@ class WsServe extends Command {
 			$this->appManager->getAppVersion(Application::APP_ID),
 			$startedAtMs,
 		));
+		$this->eventStreamController->setDaemonStartedAtMs($startedAtMs);
 
 		$this->tick->start();
 

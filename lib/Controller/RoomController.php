@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace OCA\PlaybackSync\Controller;
 
 use OCA\PlaybackSync\Db\Room;
+use OCA\PlaybackSync\Http\SseStreamResponse;
+use OCA\PlaybackSync\Service\AdminEventClient;
 use OCA\PlaybackSync\Service\Dto\RoomLiveState;
 use OCA\PlaybackSync\Service\Exceptions\ClientNotFoundException;
 use OCA\PlaybackSync\Service\Exceptions\CreateRestrictedException;
@@ -18,7 +20,9 @@ use OCA\PlaybackSync\Service\RoomService;
 use OCP\AppFramework\Controller;
 use OCP\AppFramework\Http;
 use OCP\AppFramework\Http\Attribute\NoAdminRequired;
+use OCP\AppFramework\Http\Attribute\NoCSRFRequired;
 use OCP\AppFramework\Http\DataResponse;
+use OCP\AppFramework\Http\Response;
 use OCP\IRequest;
 use OCP\IURLGenerator;
 
@@ -31,6 +35,7 @@ class RoomController extends Controller {
 		private RoomService $service,
 		private IURLGenerator $urlGenerator,
 		private RoomLiveStateEnricher $liveStateEnricher,
+		private AdminEventClient $eventClient,
 	) {
 		parent::__construct($appName, $request);
 	}
@@ -185,6 +190,72 @@ class RoomController extends Controller {
 		}
 
 		return new DataResponse(null, Http::STATUS_NO_CONTENT);
+	}
+
+	/**
+	 * Owner-gated SSE stream of the room's event log. The response stays open
+	 * for the lifetime of the FPM worker — `SseStreamResponse` flips the worker
+	 * into streaming mode and the producer below proxies bytes from the daemon
+	 * straight to the browser.
+	 *
+	 * Returns 404 (opaque, same shape as `show()`) when the room doesn't exist
+	 * or the requester isn't the owner. Returns 401 when unauthenticated.
+	 *
+	 * `Last-Event-ID` is read from the standard SSE header or the
+	 * `?lastEventId=` query fallback; the daemon also accepts either.
+	 */
+	#[NoAdminRequired]
+	#[NoCSRFRequired]
+	public function eventsStream(string $uuid): Response {
+		if ($this->userId === null) {
+			return new DataResponse(['error' => 'Authentication required.'], Http::STATUS_UNAUTHORIZED);
+		}
+
+		try {
+			$this->service->getOwnedRoom($this->userId, $uuid);
+		} catch (RoomNotFoundException $e) {
+			return new DataResponse(['error' => $e->getMessage()], Http::STATUS_NOT_FOUND);
+		}
+
+		$lastEventId = $this->parseClientLastEventId();
+		$client = $this->eventClient;
+
+		return new SseStreamResponse(static function () use ($client, $uuid, $lastEventId): void {
+			$aborted = false;
+			$client->streamRoom($uuid, $lastEventId, static function (string $chunk) use (&$aborted): int {
+				if ($aborted) {
+					return 0;
+				}
+				echo $chunk;
+				@ob_flush();
+				@flush();
+				if (connection_aborted()) {
+					$aborted = true;
+					return 0;
+				}
+				return strlen($chunk);
+			});
+		});
+	}
+
+	/**
+	 * Read the SSE replay cursor from the incoming request. EventSource sends
+	 * `Last-Event-ID` on automatic reconnect; we also accept `?lastEventId=`
+	 * for hand-rolled callers and tests.
+	 */
+	private function parseClientLastEventId(): ?int {
+		$headerValue = $this->request->getHeader('Last-Event-ID');
+		if ($headerValue !== '' && ctype_digit($headerValue)) {
+			return (int)$headerValue;
+		}
+		$query = $this->request->getParam('lastEventId');
+		if (is_string($query) && ctype_digit($query)) {
+			return (int)$query;
+		}
+		if (is_int($query)) {
+			return $query;
+		}
+		return null;
 	}
 
 	/**

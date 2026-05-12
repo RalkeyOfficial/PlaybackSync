@@ -5,10 +5,14 @@ declare(strict_types=1);
 namespace OCA\PlaybackSync\Controller;
 
 use OCA\PlaybackSync\AppInfo\Application;
+use OCA\PlaybackSync\Http\SseStreamResponse;
+use OCA\PlaybackSync\Service\AdminEventClient;
 use OCA\PlaybackSync\Service\AdminSecretService;
 use OCP\AppFramework\Controller;
 use OCP\AppFramework\Http;
+use OCP\AppFramework\Http\Attribute\NoCSRFRequired;
 use OCP\AppFramework\Http\DataResponse;
+use OCP\AppFramework\Http\Response;
 use OCP\IAppConfig;
 use OCP\IRequest;
 
@@ -75,8 +79,10 @@ class AdminSettingsController extends Controller {
 	public function __construct(
 		string $appName,
 		IRequest $request,
+		private ?string $userId,
 		private readonly IAppConfig $appConfig,
 		private readonly AdminSecretService $secrets,
+		private readonly AdminEventClient $eventClient,
 	) {
 		parent::__construct($appName, $request);
 	}
@@ -112,16 +118,114 @@ class AdminSettingsController extends Controller {
 			);
 		}
 
+		// Capture before/after so the event log can show *what* changed, not
+		// just *which keys* were posted. Strict !== so a typed mismatch (e.g.
+		// "8765" vs 8765) still registers — the validator normalises both
+		// sides to the same type so this is purely defensive.
+		$changes = [];
 		foreach ($normalized as $key => $value) {
+			$before = $this->readCurrentValue($key);
 			$this->persist($key, $value);
+			if ($before !== $value) {
+				$changes[] = ['key' => $key, 'from' => $before, 'to' => $value];
+			}
 		}
+
+		$this->eventClient->record(
+			'settings_updated',
+			'admin',
+			'admin',
+			$this->userId,
+			null,
+			['changes' => $changes],
+		);
 
 		return new DataResponse($this->snapshot());
 	}
 
+	/**
+	 * Read the currently-persisted value for a configurable key, using the
+	 * same type discipline as `persist()`. Returns null for unknown keys —
+	 * the caller has already validated against the same rule maps, so this
+	 * branch is unreachable in practice.
+	 */
+	private function readCurrentValue(string $key): int|string|bool|null {
+		$app = Application::APP_ID;
+		if (isset(self::INT_RULES[$key])) {
+			return $this->appConfig->getValueInt($app, $key, self::INT_DEFAULTS[$key]);
+		}
+		if ($key === 'ws_host' || $key === 'ws_admin_host') {
+			return $this->appConfig->getValueString($app, $key, self::STRING_DEFAULTS[$key]);
+		}
+		if ($key === 'restrict_to_admins') {
+			return $this->appConfig->getValueBool($app, $key, false);
+		}
+		return null;
+	}
+
 	public function regenerateAdminSecret(): DataResponse {
 		$secret = $this->secrets->rotate();
+		$this->eventClient->record(
+			'admin_secret_rotated',
+			'admin',
+			'admin',
+			$this->userId,
+			null,
+			[],
+		);
 		return new DataResponse(['secret' => $secret]);
+	}
+
+	/**
+	 * Admin-gated SSE proxy onto the daemon's cross-room event feed. Same
+	 * shape as `RoomController::eventsStream` but talks to
+	 * `AdminEventClient::streamGlobal` and is gated by Nextcloud's default
+	 * admin middleware (no `#[NoAdminRequired]`).
+	 *
+	 * `Last-Event-ID` rides via the standard SSE header on automatic
+	 * reconnect, with `?lastEventId=` as a fallback for hand-rolled callers.
+	 */
+	#[NoCSRFRequired]
+	public function eventsStream(): Response {
+		$lastEventId = $this->parseClientLastEventId();
+		$client = $this->eventClient;
+
+		return new SseStreamResponse(static function () use ($client, $lastEventId): void {
+			$aborted = false;
+			$client->streamGlobal($lastEventId, static function (string $chunk) use (&$aborted): int {
+				if ($aborted) {
+					return 0;
+				}
+				echo $chunk;
+				@ob_flush();
+				@flush();
+				if (connection_aborted()) {
+					$aborted = true;
+					return 0;
+				}
+				return strlen($chunk);
+			});
+		});
+	}
+
+	/**
+	 * Read the SSE replay cursor from the incoming request. EventSource sends
+	 * `Last-Event-ID` on automatic reconnect; we also accept `?lastEventId=`
+	 * for hand-rolled callers and tests.
+	 */
+	private function parseClientLastEventId(): ?int {
+		$headerValue = $this->request->getHeader('Last-Event-ID');
+		if ($headerValue !== '' && ctype_digit($headerValue)) {
+			return (int)$headerValue;
+		}
+		$query = $this->request->getParam('lastEventId');
+		if (is_string($query) && ctype_digit($query)) {
+			return (int)$query;
+		}
+		if (is_int($query)) {
+			return $query;
+		}
+		return null;
 	}
 
 	/**
