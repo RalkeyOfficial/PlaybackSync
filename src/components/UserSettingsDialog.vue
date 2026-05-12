@@ -41,6 +41,28 @@
 				:clearable="false" />
 		</NcSettingsSection>
 
+		<NcSettingsSection
+			:name="t('playbacksync', 'Confirmations')"
+			:description="t('playbacksync', 'Restore confirmation prompts you previously silenced.')">
+			<div v-if="hasSilencedConfirms" class="user-settings__confirm-list">
+				<NcButton
+					v-if="skipDeleteConfirm"
+					variant="secondary"
+					@click="skipDeleteConfirm = false">
+					{{ t('playbacksync', 'Re-enable the delete-room confirmation prompt') }}
+				</NcButton>
+				<NcButton
+					v-if="skipKickConfirm"
+					variant="secondary"
+					@click="skipKickConfirm = false">
+					{{ t('playbacksync', 'Re-enable the kick confirmation prompt') }}
+				</NcButton>
+			</div>
+			<p v-else class="user-settings__confirm-empty">
+				{{ t('playbacksync', 'No silenced confirmations.') }}
+			</p>
+		</NcSettingsSection>
+
 		<template #actions>
 			<NcButton variant="tertiary" :disabled="store.saving" @click="onOpenChange(false)">
 				{{ t('playbacksync', 'Cancel') }}
@@ -75,6 +97,11 @@ import NcSelect from '@nextcloud/vue/components/NcSelect'
 import NcSettingsSection from '@nextcloud/vue/components/NcSettingsSection'
 import NcTextField from '@nextcloud/vue/components/NcTextField'
 import IconContentSave from 'vue-material-design-icons/ContentSave.vue'
+import {
+	SKIP_CONFIRM_DELETE_ROOM,
+	SKIP_CONFIRM_KICK_CLIENT,
+	useSkipConfirm,
+} from '../composables/useSkipConfirm.ts'
 import { useUserSettingsStore } from '../stores/userSettings.ts'
 
 interface SelectOption<T extends string> {
@@ -101,6 +128,11 @@ const intervalSeconds = ref(toSeconds(store.autoRefreshIntervalMs))
 const timestampFormat = ref<TimestampFormat>(store.timestampFormat)
 const shareCopyFormat = ref<ShareCopyFormat>(store.shareCopyFormat)
 const roomsSortOrder = ref<RoomsSortOrder>(store.roomsSortOrder)
+
+const skipDeleteConfirm = useSkipConfirm(SKIP_CONFIRM_DELETE_ROOM)
+const skipKickConfirm = useSkipConfirm(SKIP_CONFIRM_KICK_CLIENT)
+
+const hasSilencedConfirms = computed(() => skipDeleteConfirm.value || skipKickConfirm.value)
 
 watch(
 	() => props.open,
@@ -196,7 +228,15 @@ function toSeconds(ms: number): number {
 </script>
 
 <style scoped>
-/* The dialog body inherits its layout from NcSettingsSection; no extra
- * styling needed today. Keep this block so the SFC carries scoped styles
- * per the project convention. */
+.user-settings__confirm-list {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	align-items: flex-start;
+}
+
+.user-settings__confirm-empty {
+	margin: 0;
+	color: var(--color-text-maxcontrast);
+}
 </style>

@@ -273,6 +273,12 @@
 		<p class="room-detail__confirm-detail">
 			{{ t('playbacksync', 'They will be disconnected immediately and blocked from rejoining for 30 seconds.') }}
 		</p>
+		<NcCheckboxRadioSwitch
+			v-model="dontAskAgainKick"
+			type="checkbox"
+			:disabled="kicking !== null">
+			{{ t('playbacksync', "Don't ask again") }}
+		</NcCheckboxRadioSwitch>
 		<template #actions>
 			<NcButton
 				:disabled="kicking !== null"
@@ -301,6 +307,7 @@ import { translate as t } from '@nextcloud/l10n'
 import { getLoggerBuilder } from '@nextcloud/logger'
 import { computed, ref, watch } from 'vue'
 import NcButton from '@nextcloud/vue/components/NcButton'
+import NcCheckboxRadioSwitch from '@nextcloud/vue/components/NcCheckboxRadioSwitch'
 import NcDialog from '@nextcloud/vue/components/NcDialog'
 import NcLoadingIcon from '@nextcloud/vue/components/NcLoadingIcon'
 import NcNoteCard from '@nextcloud/vue/components/NcNoteCard'
@@ -326,6 +333,7 @@ import IconWeb from 'vue-material-design-icons/Web.vue'
 import StatusDot from './StatusDot.vue'
 import { useNow } from '../composables/useNow.ts'
 import { getRoomStatus } from '../composables/useRoomStatus.ts'
+import { SKIP_CONFIRM_KICK_CLIENT, useSkipConfirm } from '../composables/useSkipConfirm.ts'
 import { getRoom } from '../services/roomsApi.ts'
 import { useRoomsStore } from '../stores/rooms.ts'
 
@@ -366,6 +374,9 @@ const confirmingClientId = ref<string | null>(null)
  * actions while the request is being processed.
  */
 const kicking = ref<string | null>(null)
+
+const skipKickConfirm = useSkipConfirm(SKIP_CONFIRM_KICK_CLIENT)
+const dontAskAgainKick = ref(false)
 
 /**
  * Action of the playback command currently in flight, or null when no
@@ -418,10 +429,17 @@ watch(() => props.open, (isOpen) => {
 	if (!isOpen) {
 		freshLive.value = undefined
 		confirmingClientId.value = null
+		dontAskAgainKick.value = false
 		return
 	}
 	void refreshLive()
 }, { immediate: true })
+
+watch(confirmingClientId, (value) => {
+	if (value === null) {
+		dontAskAgainKick.value = false
+	}
+})
 
 const isExpired = computed(() => props.room.expiresAt <= now.value)
 
@@ -706,23 +724,43 @@ function onDelete() {
 }
 
 /**
- * Open the confirmation dialog for the chosen client. Kick is irreversible,
- * so we always prompt — there's no "skip confirmation" path.
+ * Open the confirmation dialog for the chosen client — or skip the prompt
+ * and run the kick directly if the user has previously silenced it.
  *
  * @param clientId the daemon-issued opaque hex identifier from the chip
  */
 function onRequestKick(clientId: string) {
+	if (skipKickConfirm.value) {
+		void performKick(clientId)
+		return
+	}
 	confirmingClientId.value = clientId
 }
 
 /**
- * Run the confirmed kick: hit the API, refresh the live block, surface a
- * toast, and close the confirmation dialog. The detail dialog itself stays
- * open so the owner can see the chip disappear and confirm the outcome.
+ * Run the confirmed kick from the dialog: persist the "don't ask again"
+ * choice (if any), then perform the kick.
  */
 async function onConfirmKick() {
 	const clientId = confirmingClientId.value
 	if (clientId === null || kicking.value !== null) {
+		return
+	}
+	if (dontAskAgainKick.value) {
+		skipKickConfirm.value = true
+	}
+	await performKick(clientId)
+}
+
+/**
+ * Hit the kick API, refresh the live block, surface a toast, and close the
+ * confirmation dialog. The detail dialog itself stays open so the owner can
+ * see the chip disappear and confirm the outcome.
+ *
+ * @param clientId the client to disconnect
+ */
+async function performKick(clientId: string) {
+	if (kicking.value !== null) {
 		return
 	}
 	kicking.value = clientId
