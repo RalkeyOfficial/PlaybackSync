@@ -98,6 +98,9 @@ import RoomDetailDialog from './RoomDetailDialog.vue'
 import StatusDot from './StatusDot.vue'
 import { useNow } from '../composables/useNow.ts'
 import { getRoomStatus } from '../composables/useRoomStatus.ts'
+import { formatShareLink } from '../composables/useShareCopy.ts'
+import { formatTimestamp } from '../composables/useTimeFormat.ts'
+import { useUserSettingsStore } from '../stores/userSettings.ts'
 
 const props = defineProps<{
 	room: Room
@@ -110,6 +113,7 @@ const emit = defineEmits<{
 const logger = getLoggerBuilder().setApp('playbacksync').detectUser().build()
 
 const now = useNow()
+const userSettings = useUserSettingsStore()
 const copied = ref(false)
 const detailOpen = ref(false)
 
@@ -120,7 +124,7 @@ const title = computed(() => props.room.name?.trim() || shortUuid.value)
 const isExpired = computed(() => props.room.expiresAt <= now.value)
 
 const ttl = computed(() => formatDuration(props.room.expiresAt - now.value))
-const createdAgo = computed(() => formatRelativePast(now.value - props.room.createdAt))
+const createdAgo = computed(() => formatTimestamp(props.room.createdAt, now.value, userSettings.timestampFormat))
 
 const live = computed(() => props.room.live)
 
@@ -170,30 +174,6 @@ function formatDuration(ms: number): string {
 }
 
 /**
- * Render a positive millisecond duration as a coarse "X unit ago" string
- * for the card's "Created …" caption. Falls back to "just now" under a
- * minute so the line doesn't churn second-by-second for fresh rooms.
- *
- * @param ms how long ago the event happened, in milliseconds
- * @return localized relative-time string, e.g. "5m ago"
- */
-function formatRelativePast(ms: number): string {
-	if (ms < 60_000) {
-		return t('playbacksync', 'just now')
-	}
-	const minutes = Math.floor(ms / 60_000)
-	if (minutes < 60) {
-		return t('playbacksync', '{n}m ago', { n: minutes })
-	}
-	const hours = Math.floor(minutes / 60)
-	if (hours < 24) {
-		return t('playbacksync', '{n}h ago', { n: hours })
-	}
-	const days = Math.floor(hours / 24)
-	return t('playbacksync', '{n}d ago', { n: days })
-}
-
-/**
  * Two-digit zero-pad for display in the duration formatter.
  *
  * @param n a non-negative integer under 100
@@ -221,13 +201,13 @@ function onDeleteFromDialog(room: Room) {
 }
 
 /**
- * Copy the room's share link to the clipboard and toggle the local
- * `copied` state for a short period so the icon swap and label confirm
- * the action.
+ * Copy the room's share link to the clipboard in the user's preferred
+ * format and toggle the local `copied` state briefly so the icon swap and
+ * label confirm the action.
  */
 async function copyShareLink() {
 	try {
-		await navigator.clipboard.writeText(props.room.shareLink)
+		await navigator.clipboard.writeText(formatShareLink(props.room, userSettings.shareCopyFormat))
 		copied.value = true
 		showSuccess(t('playbacksync', 'Share link copied'))
 		setTimeout(() => {

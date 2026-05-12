@@ -22,12 +22,12 @@
 		</div>
 
 		<template #actions>
-			<NcButton @click="copyForDiscord">
+			<NcButton @click="copyRoomDetails">
 				<template #icon>
 					<IconCheck v-if="copied" :size="20" />
 					<IconCopy v-else :size="20" />
 				</template>
-				{{ t('playbacksync', 'Copy for Discord') }}
+				{{ t('playbacksync', 'Copy') }}
 			</NcButton>
 			<NcButton variant="primary" @click="onOpenChange(false)">
 				{{ t('playbacksync', 'Done') }}
@@ -48,6 +48,8 @@ import NcDialog from '@nextcloud/vue/components/NcDialog'
 import NcNoteCard from '@nextcloud/vue/components/NcNoteCard'
 import IconCheck from 'vue-material-design-icons/Check.vue'
 import IconCopy from 'vue-material-design-icons/ContentCopy.vue'
+import { formatCreatedRoom } from '../composables/useShareCopy.ts'
+import { useUserSettingsStore } from '../stores/userSettings.ts'
 
 const props = defineProps<{
 	room: CreatedRoom | null
@@ -59,18 +61,19 @@ const emit = defineEmits<{
 
 const logger = getLoggerBuilder().setApp('playbacksync').detectUser().build()
 
+const userSettings = useUserSettingsStore()
 const copied = ref(false)
 
 /**
- * Copy a Discord-friendly block containing the share link and password to the
- * clipboard. The link is wrapped in `<…>` to suppress Discord's link preview,
- * and the password is fenced as inline code so it is easy to select.
+ * Copy the freshly created room's link + password to the clipboard in the
+ * user's preferred share-copy format. Toggles the local `copied` state
+ * briefly so the icon swap confirms the action.
  */
-async function copyForDiscord() {
+async function copyRoomDetails() {
 	if (!props.room) {
 		return
 	}
-	const text = `**PlaybackSync Room**\n🔗 <${props.room.shareLink}>\n🔑 \`${props.room.password}\``
+	const text = formatCreatedRoom(props.room, userSettings.shareCopyFormat)
 	try {
 		await navigator.clipboard.writeText(text)
 		copied.value = true

@@ -45,7 +45,7 @@
 					</NcButton>
 				</template>
 			</NcEmptyContent>
-			<RoomList v-else :rooms="store.rooms" @delete="onDelete" />
+			<RoomList v-else :rooms="sortedRooms" @delete="onDelete" />
 		</div>
 
 		<footer class="rooms-panel__footer">
@@ -83,6 +83,7 @@ import RoomCreateDialog from './RoomCreateDialog.vue'
 import RoomList from './RoomList.vue'
 import UserSettingsDialog from './UserSettingsDialog.vue'
 import WsStatusBadge from './WsStatusBadge.vue'
+import { sortRooms } from '../composables/useSortRooms.ts'
 import { useRoomsStore } from '../stores/rooms.ts'
 import { useUserSettingsStore } from '../stores/userSettings.ts'
 import { useWsStatusStore } from '../stores/wsStatus.ts'
@@ -98,6 +99,8 @@ const createButtonTooltip = computed(() => (
 		? t('playbacksync', 'The WebSocket sync service is not installed. Ask an administrator to set it up.')
 		: ''
 ))
+
+const sortedRooms = computed(() => sortRooms(store.rooms, userSettings.roomsSortOrder))
 
 onMounted(() => {
 	store.load()

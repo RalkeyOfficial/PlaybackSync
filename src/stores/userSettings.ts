@@ -1,4 +1,10 @@
-import type { UserSettingsPatch, UserSettingsSnapshot } from '../types/userSettings.ts'
+import type {
+	RoomsSortOrder,
+	ShareCopyFormat,
+	TimestampFormat,
+	UserSettingsPatch,
+	UserSettingsSnapshot,
+} from '../types/userSettings.ts'
 
 import { showError, showSuccess } from '@nextcloud/dialogs'
 import { translate as t } from '@nextcloud/l10n'
@@ -8,10 +14,19 @@ import { fetchUserSettings, updateUserSettings } from '../services/userSettingsA
 
 const logger = getLoggerBuilder().setApp('playbacksync').detectUser().build()
 
+// Mirrors of the server's STRING_DEFAULTS/INT_DEFAULTS. Used until the
+// initial fetch resolves, and as a permanent fallback if the fetch fails so
+// the UI never has to deal with a missing setting.
 const DEFAULT_AUTO_REFRESH_INTERVAL_MS = 15_000
+const DEFAULT_TIMESTAMP_FORMAT: TimestampFormat = 'relative'
+const DEFAULT_SHARE_COPY_FORMAT: ShareCopyFormat = 'link'
+const DEFAULT_ROOMS_SORT_ORDER: RoomsSortOrder = 'newest'
 
 interface UserSettingsState {
 	autoRefreshIntervalMs: number
+	timestampFormat: TimestampFormat
+	shareCopyFormat: ShareCopyFormat
+	roomsSortOrder: RoomsSortOrder
 	loaded: boolean
 	loading: boolean
 	saving: boolean
@@ -20,6 +35,9 @@ interface UserSettingsState {
 export const useUserSettingsStore = defineStore('userSettings', {
 	state: (): UserSettingsState => ({
 		autoRefreshIntervalMs: DEFAULT_AUTO_REFRESH_INTERVAL_MS,
+		timestampFormat: DEFAULT_TIMESTAMP_FORMAT,
+		shareCopyFormat: DEFAULT_SHARE_COPY_FORMAT,
+		roomsSortOrder: DEFAULT_ROOMS_SORT_ORDER,
 		loaded: false,
 		loading: false,
 		saving: false,
@@ -61,6 +79,9 @@ export const useUserSettingsStore = defineStore('userSettings', {
 
 		applySnapshot(snapshot: UserSettingsSnapshot) {
 			this.autoRefreshIntervalMs = snapshot.autoRefreshIntervalMs
+			this.timestampFormat = snapshot.timestampFormat
+			this.shareCopyFormat = snapshot.shareCopyFormat
+			this.roomsSortOrder = snapshot.roomsSortOrder
 		},
 	},
 })
