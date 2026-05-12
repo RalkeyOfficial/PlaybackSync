@@ -153,6 +153,12 @@ OC.L10N.register(
 		"Admin secret regenerated": "Admin secret regenerated",
 		"Could not regenerate admin secret.": "Could not regenerate admin secret.",
 		"Secret copied": "Secret copied",
+		"Settings": "Settings",
+		"Personal settings": "Personal settings",
+		"Dashboard": "Dashboard",
+		"How the rooms dashboard behaves while it is open.": "How the rooms dashboard behaves while it is open.",
+		"Auto-refresh interval (seconds)": "Auto-refresh interval (seconds)",
+		"How often the rooms list refreshes automatically.": "How often the rooms list refreshes automatically.",
 	},
 	"nplurals=2; plural=(n != 1);",
 )

@@ -23,5 +23,8 @@ return [
 		['name' => 'admin_settings#index', 'url' => '/api/v1/admin/settings', 'verb' => 'GET'],
 		['name' => 'admin_settings#update', 'url' => '/api/v1/admin/settings', 'verb' => 'PUT'],
 		['name' => 'admin_settings#regenerateAdminSecret', 'url' => '/api/v1/admin/settings/secret', 'verb' => 'POST'],
+
+		['name' => 'user_settings#index', 'url' => '/api/v1/user/settings', 'verb' => 'GET'],
+		['name' => 'user_settings#update', 'url' => '/api/v1/user/settings', 'verb' => 'PUT'],
 	],
 ];

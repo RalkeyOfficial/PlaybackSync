@@ -4,7 +4,8 @@
 			<WsStatusBadge />
 			<div class="rooms-panel__header-spacer" />
 			<AutoRefreshRing
-				:intervalMs="15_000"
+				:key="userSettings.autoRefreshIntervalMs"
+				:intervalMs="userSettings.autoRefreshIntervalMs"
 				storageKey="playbacksync:rooms:auto-refresh"
 				:defaultEnabled="true"
 				@refresh="store.refresh()" />
@@ -47,8 +48,21 @@
 			<RoomList v-else :rooms="store.rooms" @delete="onDelete" />
 		</div>
 
+		<footer class="rooms-panel__footer">
+			<NcButton
+				variant="tertiary"
+				:title="t('playbacksync', 'Personal settings')"
+				@click="settingsDialogOpen = true">
+				<template #icon>
+					<IconCog :size="20" />
+				</template>
+				{{ t('playbacksync', 'Settings') }}
+			</NcButton>
+		</footer>
+
 		<RoomCreateDialog v-model:open="createDialogOpen" />
 		<RoomCreatedDialog :room="store.lastCreated" @dismiss="store.dismissLastCreated()" />
+		<UserSettingsDialog v-model:open="settingsDialogOpen" />
 	</div>
 </template>
 
@@ -60,19 +74,24 @@ import { computed, onMounted, ref } from 'vue'
 import NcButton from '@nextcloud/vue/components/NcButton'
 import NcEmptyContent from '@nextcloud/vue/components/NcEmptyContent'
 import NcLoadingIcon from '@nextcloud/vue/components/NcLoadingIcon'
+import IconCog from 'vue-material-design-icons/Cog.vue'
 import IconPlus from 'vue-material-design-icons/Plus.vue'
 import IconSync from 'vue-material-design-icons/Sync.vue'
 import AutoRefreshRing from './AutoRefreshRing.vue'
 import RoomCreatedDialog from './RoomCreatedDialog.vue'
 import RoomCreateDialog from './RoomCreateDialog.vue'
 import RoomList from './RoomList.vue'
+import UserSettingsDialog from './UserSettingsDialog.vue'
 import WsStatusBadge from './WsStatusBadge.vue'
 import { useRoomsStore } from '../stores/rooms.ts'
+import { useUserSettingsStore } from '../stores/userSettings.ts'
 import { useWsStatusStore } from '../stores/wsStatus.ts'
 
 const store = useRoomsStore()
 const wsStatus = useWsStatusStore()
+const userSettings = useUserSettingsStore()
 const createDialogOpen = ref(false)
+const settingsDialogOpen = ref(false)
 
 const createButtonTooltip = computed(() => (
 	wsStatus.isUnavailable
@@ -83,6 +102,7 @@ const createButtonTooltip = computed(() => (
 onMounted(() => {
 	store.load()
 	wsStatus.load()
+	userSettings.load()
 })
 
 /**
@@ -134,5 +154,10 @@ async function onDelete(room: Room) {
 	align-items: center;
 	justify-content: center;
 	flex: 1;
+}
+
+.rooms-panel__footer {
+	display: flex;
+	justify-content: flex-start;
 }
 </style>

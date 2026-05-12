@@ -153,6 +153,12 @@ OC.L10N.register(
 		"Admin secret regenerated": "Beheergeheim opnieuw gegenereerd",
 		"Could not regenerate admin secret.": "Kon beheergeheim niet opnieuw genereren.",
 		"Secret copied": "Geheim gekopieerd",
+		"Settings": "Instellingen",
+		"Personal settings": "Persoonlijke instellingen",
+		"Dashboard": "Dashboard",
+		"How the rooms dashboard behaves while it is open.": "Hoe het kameroverzicht zich gedraagt terwijl het geopend is.",
+		"Auto-refresh interval (seconds)": "Interval voor automatisch verversen (seconden)",
+		"How often the rooms list refreshes automatically.": "Hoe vaak de kamerlijst automatisch wordt vernieuwd.",
 	},
 	"nplurals=2; plural=(n != 1);",
 )
