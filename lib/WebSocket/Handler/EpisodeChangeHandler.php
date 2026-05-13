@@ -62,7 +62,7 @@ class EpisodeChangeHandler {
 		$runtime->pushEvent(
 			'episode_change',
 			$identity->contentKey,
-			$ctx->clientId,
+			$client->nickname,
 			$nowMs,
 			$eventId,
 		);

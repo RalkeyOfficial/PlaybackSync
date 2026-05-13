@@ -12,6 +12,7 @@ use OCA\PlaybackSync\WebSocket\ConnectionContext;
 use OCA\PlaybackSync\WebSocket\ContentIdentity;
 use OCA\PlaybackSync\WebSocket\MessageEncoder;
 use OCA\PlaybackSync\WebSocket\MessageException;
+use OCA\PlaybackSync\WebSocket\NicknameGenerator;
 use OCA\PlaybackSync\WebSocket\RateLimiter;
 use OCA\PlaybackSync\WebSocket\RoomRegistry;
 use OCA\PlaybackSync\WebSocket\WsConfig;
@@ -83,8 +84,8 @@ class JoinHandler {
 			'type' => 'client_joined',
 			'category' => 'presence',
 			'actor' => 'client',
-			'actorId' => $client->clientId,
-			'data' => ['clientId' => $client->clientId],
+			'actorId' => $client->nickname,
+			'data' => ['nickname' => $client->nickname],
 		]);
 
 		$replay = [];
@@ -169,6 +170,7 @@ class JoinHandler {
 		$clientId = $requestedClientId ?? bin2hex(random_bytes(16));
 		$client = new ClientConnection(
 			$clientId,
+			NicknameGenerator::generate(),
 			$conn,
 			$nowMs,
 			$runtime->state->eventId,

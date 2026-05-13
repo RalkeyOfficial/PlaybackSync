@@ -72,6 +72,7 @@ class PlaybackControllerTest extends TestCase {
 		$conn->expects($this->once())->method('send');
 		$runtime->addClient(new ClientConnection(
 			'viewer',
+			'WittyViewer42',
 			$conn,
 			nowMs: 0,
 			lastEventId: 0,
@@ -117,8 +118,8 @@ class PlaybackControllerTest extends TestCase {
 		$connA->expects($this->once())->method('send');
 		$connB = $this->createMock(ConnectionInterface::class);
 		$connB->expects($this->once())->method('send');
-		$runtime->addClient(new ClientConnection('a', $connA, 0, 0, new RateLimiter(10, 0)));
-		$runtime->addClient(new ClientConnection('b', $connB, 0, 0, new RateLimiter(10, 0)));
+		$runtime->addClient(new ClientConnection('a', 'NickA', $connA, 0, 0, new RateLimiter(10, 0)));
+		$runtime->addClient(new ClientConnection('b', 'NickB', $connB, 0, 0, new RateLimiter(10, 0)));
 
 		$result = $this->makeController($registry)->apply(
 			$uuid,

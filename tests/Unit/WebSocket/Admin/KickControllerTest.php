@@ -62,6 +62,7 @@ class KickControllerTest extends TestCase {
 		$conn->expects($this->once())->method('close');
 		$runtime->addClient(new ClientConnection(
 			'victim',
+			'WittyVictim42',
 			$conn,
 			nowMs: 0,
 			lastEventId: 0,

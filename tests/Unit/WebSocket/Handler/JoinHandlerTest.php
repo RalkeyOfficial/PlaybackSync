@@ -176,6 +176,7 @@ class JoinHandlerTest extends TestCase {
 		$runtime = $this->registry->getOrCreate(self::ROOM_UUID, self::NOW_MS + 60_000);
 		$runtime->addClient(new \OCA\PlaybackSync\WebSocket\ClientConnection(
 			'bannedId',
+			'WittyBanned42',
 			$this->createMock(ConnectionInterface::class),
 			self::NOW_MS,
 			0,

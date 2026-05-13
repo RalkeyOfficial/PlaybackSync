@@ -26,8 +26,8 @@ class EpisodeChangeHandlerTest extends TestCase {
 
 		$connA = $this->createMock(ConnectionInterface::class);
 		$connB = $this->createMock(ConnectionInterface::class);
-		$runtime->addClient(new ClientConnection('A', $connA, self::NOW, 0, new RateLimiter(10, self::NOW)));
-		$runtime->addClient(new ClientConnection('B', $connB, self::NOW, 0, new RateLimiter(10, self::NOW)));
+		$runtime->addClient(new ClientConnection('A', 'NickA', $connA, self::NOW, 0, new RateLimiter(10, self::NOW)));
+		$runtime->addClient(new ClientConnection('B', 'NickB', $connB, self::NOW, 0, new RateLimiter(10, self::NOW)));
 
 		$capturedB = null;
 		$connA->expects($this->once())->method('send'); // sender also receives

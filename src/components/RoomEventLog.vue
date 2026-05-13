@@ -212,7 +212,7 @@ function labelFor(event: EventLogEntry): string {
 }
 
 /**
- * Compact actor chip text. For `client` we show the short clientId; for
+ * Compact actor chip text. For `client` we show the nickname; for
  * `owner`/`admin` we show the userId; `system` has no actor.
  *
  * @param event the entry whose actor should be labelled
@@ -222,7 +222,7 @@ function actorLabel(event: EventLogEntry): string {
 		return t('playbacksync', 'system')
 	}
 	if (event.actor === 'client') {
-		return event.actorId ? event.actorId.slice(0, 8) : t('playbacksync', 'client')
+		return event.actorId ?? t('playbacksync', 'client')
 	}
 	if (event.actor === 'owner') {
 		return event.actorId ?? t('playbacksync', 'owner')
@@ -244,22 +244,22 @@ function dataSummary(event: EventLogEntry): string {
 		}
 	}
 	if (event.type === 'client_left') {
-		const cid = event.data?.clientId as string | undefined
+		const nickname = event.data?.nickname as string | undefined
 		const reason = event.data?.reason as string | undefined
-		if (cid && reason) {
-			return t('playbacksync', '{clientId} · reason: {reason}', { clientId: cid, reason })
+		if (nickname && reason) {
+			return t('playbacksync', '{nickname} · reason: {reason}', { nickname, reason })
 		}
-		if (cid) {
-			return cid
+		if (nickname) {
+			return nickname
 		}
 		if (reason) {
 			return t('playbacksync', 'reason: {reason}', { reason })
 		}
 	}
 	if (event.type === 'client_joined' || event.type === 'client_kicked') {
-		const cid = event.data?.clientId as string | undefined
-		if (cid) {
-			return cid
+		const nickname = event.data?.nickname as string | undefined
+		if (nickname) {
+			return nickname
 		}
 	}
 	if (event.type === 'room_renamed') {

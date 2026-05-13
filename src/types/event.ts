@@ -14,7 +14,7 @@ export interface EventLogEntry {
 	actorId: string | null
 	/** Room the event belongs to. */
 	roomUuid: string
-	/** Type-specific extra fields (e.g. `{ videoPos }` or `{ clientId, reason }`). */
+	/** Type-specific extra fields (e.g. `{ videoPos }` or `{ nickname, reason }`). */
 	data: Record<string, unknown> | null
 }
 

@@ -41,7 +41,7 @@ class PresenceController {
 	 * @param list<string> $uuids
 	 * @return array<string, array{
 	 *     connectedCount: int,
-	 *     clients: list<array{clientId: string, isBuffering: bool, lastSeenMs: int}>,
+	 *     clients: list<array{clientId: string, nickname: string, isBuffering: bool, lastSeenMs: int}>,
 	 *     playerState: string,
 	 *     videoPos: float,
 	 *     contentIdentity: ?array{providerId: string, episodeId: string, pageUrl: string, contentKey: string},
@@ -63,7 +63,7 @@ class PresenceController {
 	/**
 	 * @return array{
 	 *     connectedCount: int,
-	 *     clients: list<array{clientId: string, isBuffering: bool, lastSeenMs: int}>,
+	 *     clients: list<array{clientId: string, nickname: string, isBuffering: bool, lastSeenMs: int}>,
 	 *     playerState: string,
 	 *     videoPos: float,
 	 *     contentIdentity: ?array{providerId: string, episodeId: string, pageUrl: string, contentKey: string},
@@ -82,6 +82,7 @@ class PresenceController {
 			if (count($clients) < $this->maxClientsPerRoom) {
 				$clients[] = [
 					'clientId' => $client->clientId,
+					'nickname' => $client->nickname,
 					'isBuffering' => $client->isBuffering,
 					'lastSeenMs' => $client->lastSeenMs,
 				];

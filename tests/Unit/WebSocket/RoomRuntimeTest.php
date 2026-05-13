@@ -16,6 +16,7 @@ class RoomRuntimeTest extends TestCase {
 	private function makeClient(string $clientId, ?ConnectionInterface $conn, int $nowMs = 0, int $lastEventId = 0): ClientConnection {
 		return new ClientConnection(
 			$clientId,
+			'Nick' . $clientId,
 			$conn,
 			$nowMs,
 			$lastEventId,
@@ -137,7 +138,8 @@ class RoomRuntimeTest extends TestCase {
 		$room->addClient($stale);
 
 		$dropped = $room->pruneExpiredTombstones(2000);
-		$this->assertSame(['stale'], $dropped);
+		$this->assertCount(1, $dropped);
+		$this->assertSame('stale', $dropped[0]->clientId);
 		$this->assertNotNull($room->getClient('alive'));
 		$this->assertNotNull($room->getClient('fresh'));
 		$this->assertNull($room->getClient('stale'));

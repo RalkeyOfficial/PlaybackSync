@@ -35,6 +35,7 @@ class ClientConnection {
 
 	public function __construct(
 		public readonly string $clientId,
+		public readonly string $nickname,
 		?ConnectionInterface $conn,
 		int $nowMs,
 		int $lastEventId,

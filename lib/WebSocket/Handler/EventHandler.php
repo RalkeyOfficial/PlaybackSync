@@ -62,7 +62,7 @@ class EventHandler {
 		$runtime->pushEvent(
 			$payload['event'],
 			$payload['event'] === 'seek' ? $payload['value'] : null,
-			$ctx->clientId,
+			$client->nickname,
 			$nowMs,
 			$eventId,
 		);

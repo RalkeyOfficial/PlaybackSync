@@ -47,7 +47,8 @@ class KickController {
 		if ($runtime === null) {
 			return self::RESULT_ROOM_NOT_FOUND;
 		}
-		if ($runtime->getClient($clientId) === null) {
+		$client = $runtime->getClient($clientId);
+		if ($client === null) {
 			return self::RESULT_CLIENT_NOT_FOUND;
 		}
 
@@ -57,7 +58,7 @@ class KickController {
 			'category' => 'presence',
 			'actor' => 'owner',
 			'actorId' => $ownerUserId,
-			'data' => ['clientId' => $clientId],
+			'data' => ['nickname' => $client->nickname],
 		]);
 
 		$kicked = $runtime->kickClient($clientId, $this->encoder, $this->config->kickBlockMs, $nowMs);

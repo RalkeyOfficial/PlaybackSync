@@ -136,7 +136,7 @@ class MessageRouter implements MessageComponentInterface {
 					'category' => 'presence',
 					'actor' => 'system',
 					'actorId' => null,
-					'data' => ['clientId' => $ctx->clientId, 'reason' => $reason],
+					'data' => ['nickname' => $client->nickname, 'reason' => $reason],
 				]);
 			}
 		}

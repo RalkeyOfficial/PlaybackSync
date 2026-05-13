@@ -17,7 +17,7 @@ final class RoomLiveState {
 	 * @param int $connectedCount True total of currently-connected clients
 	 *                            in the room (may exceed `clients` length when
 	 *                            the daemon truncated the list).
-	 * @param list<array{clientId: string, isBuffering: bool, lastSeenMs: int}> $clients
+	 * @param list<array{clientId: string, nickname: string, isBuffering: bool, lastSeenMs: int}> $clients
 	 * @param string $playerState  `'playing'` | `'paused'` | `'buffering'`.
 	 * @param float  $videoPos     Server-extrapolated playback position, seconds.
 	 * @param array{providerId: string, episodeId: string, pageUrl: string, contentKey: string}|null $contentIdentity
@@ -49,11 +49,12 @@ final class RoomLiveState {
 
 		$clients = [];
 		foreach ($raw['clients'] as $c) {
-			if (!is_array($c) || !isset($c['clientId'], $c['lastSeenMs'])) {
+			if (!is_array($c) || !isset($c['clientId'], $c['nickname'], $c['lastSeenMs'])) {
 				continue;
 			}
 			$clients[] = [
 				'clientId' => (string)$c['clientId'],
+				'nickname' => (string)$c['nickname'],
 				'isBuffering' => (bool)($c['isBuffering'] ?? false),
 				'lastSeenMs' => (int)$c['lastSeenMs'],
 			];
@@ -85,7 +86,7 @@ final class RoomLiveState {
 	/**
 	 * @return array{
 	 *     connectedCount: int,
-	 *     clients: list<array{clientId: string, isBuffering: bool, lastSeenMs: int}>,
+	 *     clients: list<array{clientId: string, nickname: string, isBuffering: bool, lastSeenMs: int}>,
 	 *     playerState: string,
 	 *     videoPos: float,
 	 *     contentIdentity: ?array{providerId: string, episodeId: string, pageUrl: string, contentKey: string},

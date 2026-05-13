@@ -110,6 +110,7 @@ class PresenceControllerTest extends TestCase {
 	private function makeClient(string $id, int $nowMs, ?ConnectionInterface $conn): ClientConnection {
 		return new ClientConnection(
 			clientId: $id,
+			nickname: 'Nick' . $id,
 			conn: $conn,
 			nowMs: $nowMs,
 			lastEventId: 0,

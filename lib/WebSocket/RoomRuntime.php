@@ -108,31 +108,30 @@ class RoomRuntime {
 	/**
 	 * Push a playback event (`play`, `pause`, `seek`, `reset`) into the ring
 	 * and fan it out to subscribers. Preserves the legacy semantics of the
-	 * old `pushEvent(type, value, clientId, ts, eventId)` signature for callers
+	 * old `pushEvent(type, value, actorId, ts, eventId)` signature for callers
 	 * that already drive `PlaybackState::applyPlay`/etc.
 	 *
 	 * `eventId` is the playback state version (per-room); the SSE wire id is
 	 * allocated separately from the registry.
 	 *
-	 * @param string $type     play|pause|seek|reset (use the strings already in use).
-	 * @param mixed  $value    Type-specific scalar (e.g. seek videoPos). Stored under `data.value`.
-	 * @param string $clientId Originating clientId; `'admin'` for owner-via-dashboard until the
-	 *                        actor refactor lands.
+	 * @param string $type    play|pause|seek|reset|episode_change (use the strings already in use).
+	 * @param mixed  $value   Type-specific scalar (e.g. seek videoPos). Stored under `data.value`.
+	 * @param string $actorId Client nickname, or `'admin'` sentinel for owner-via-dashboard.
 	 */
-	public function pushEvent(string $type, mixed $value, string $clientId, int $tsMs, int $eventId): void {
+	public function pushEvent(string $type, mixed $value, string $actorId, int $tsMs, int $eventId): void {
 		// `'admin'` is a legacy sentinel meaning "the room owner acting via
 		// the dashboard loopback" — it is NOT a Nextcloud administrator. Map
 		// it to `actor: 'owner'` and drop the sentinel from `actorId` so the
 		// UI can fall back to a clean "owner" label instead of literally
 		// rendering the string "admin".
-		$isOwnerLoopback = $clientId === 'admin';
+		$isOwnerLoopback = $actorId === 'admin';
 		$envelope = [
 			'id' => $this->registry?->allocateEventId() ?? $eventId,
 			'ts' => $tsMs,
 			'type' => $type,
 			'category' => 'playback',
 			'actor' => $isOwnerLoopback ? 'owner' : 'client',
-			'actorId' => $isOwnerLoopback ? null : $clientId,
+			'actorId' => $isOwnerLoopback ? null : $actorId,
 			'roomUuid' => $this->uuid,
 			'data' => $value === null ? null : ['value' => $value],
 			'playbackEventId' => $eventId,
@@ -232,16 +231,16 @@ class RoomRuntime {
 	}
 
 	/**
-	 * Drop tombstoned-and-expired clients. Returns the IDs that were dropped.
+	 * Drop tombstoned-and-expired clients. Returns the removed connections.
 	 *
-	 * @return list<string>
+	 * @return list<ClientConnection>
 	 */
 	public function pruneExpiredTombstones(int $nowMs): array {
 		$dropped = [];
 		foreach ($this->clients as $clientId => $client) {
 			if ($client->isExpiredTombstone($nowMs)) {
 				unset($this->clients[$clientId]);
-				$dropped[] = $clientId;
+				$dropped[] = $client;
 			}
 		}
 		return $dropped;

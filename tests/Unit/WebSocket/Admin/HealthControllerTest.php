@@ -35,6 +35,7 @@ class HealthControllerTest extends TestCase {
 	private function addClient(\OCA\PlaybackSync\WebSocket\RoomRuntime $runtime, string $clientId): void {
 		$runtime->addClient(new ClientConnection(
 			$clientId,
+			'Nick' . $clientId,
 			null,
 			nowMs: 0,
 			lastEventId: 0,

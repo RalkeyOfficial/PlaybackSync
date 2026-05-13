@@ -60,14 +60,14 @@ class Tick {
 				continue;
 			}
 
-			foreach ($runtime->pruneExpiredTombstones($nowMs) as $droppedClientId) {
+			foreach ($runtime->pruneExpiredTombstones($nowMs) as $dropped) {
 				$runtime->pushEnvelope([
 					'ts' => $nowMs,
 					'type' => 'client_left',
 					'category' => 'presence',
 					'actor' => 'system',
 					'actorId' => null,
-					'data' => ['clientId' => $droppedClientId, 'reason' => 'tombstone_expired'],
+					'data' => ['nickname' => $dropped->nickname, 'reason' => 'tombstone_expired'],
 				]);
 			}
 			$runtime->pruneExpiredKickBlocks($nowMs);

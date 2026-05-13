@@ -213,7 +213,7 @@
 								class="room-detail__viewer-dot"
 								:style="{ backgroundColor: chip.color }" />
 							<code class="room-detail__viewer-id" :title="chip.clientId">
-								{{ chip.label }}
+								{{ chip.nickname }}
 							</code>
 							<span v-if="chip.isBuffering" class="room-detail__viewer-buffering">
 								<IconBuffer :size="14" class="room-detail__spin" />
@@ -305,7 +305,7 @@
 		:canClose="kicking === null"
 		@update:open="(v) => { if (!v) { confirmingClientId = null } }">
 		<p class="room-detail__confirm-prompt">
-			{{ t('playbacksync', 'Disconnect client {clientId}?', { clientId: confirmingClientLabel }) }}
+			{{ t('playbacksync', 'Disconnect client {nickname}?', { nickname: confirmingClientLabel }) }}
 		</p>
 		<p class="room-detail__confirm-detail">
 			{{ t('playbacksync', 'They will be disconnected immediately and blocked from rejoining for 30 seconds.') }}
@@ -444,9 +444,11 @@ const status = computed(() => getRoomStatus(
 	now.value,
 ))
 
-const confirmingClientLabel = computed(() => (
-	confirmingClientId.value ? confirmingClientId.value.slice(0, 8) : ''
-))
+const confirmingClientLabel = computed(() => {
+	if (!confirmingClientId.value) return ''
+	const chip = clientChips.value.find((c) => c.clientId === confirmingClientId.value)
+	return chip?.nickname ?? confirmingClientId.value
+})
 
 /**
  * Re-fetch the room and replace `freshLive`. Called on dialog open and
@@ -601,7 +603,7 @@ const clientChips = computed(() => {
 		.sort((a, b) => b.lastSeenMs - a.lastSeenMs)
 		.map((c) => ({
 			clientId: c.clientId,
-			label: c.clientId.slice(0, 8),
+			nickname: c.nickname,
 			color: clientChipColor(c.clientId),
 			isBuffering: c.isBuffering,
 		}))

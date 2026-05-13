@@ -14,6 +14,7 @@ class ClientConnectionTest extends TestCase {
 	private function makeClient(?ConnectionInterface $conn, int $nowMs = 1000): ClientConnection {
 		return new ClientConnection(
 			'client-id',
+			'WittyTest42',
 			$conn,
 			$nowMs,
 			0,

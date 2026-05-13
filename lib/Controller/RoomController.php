@@ -273,7 +273,7 @@ class RoomController extends Controller {
 	 *     shareLink: string,
 	 *     live: ?array{
 	 *         connectedCount: int,
-	 *         clients: list<array{clientId: string, isBuffering: bool, lastSeenMs: int}>,
+	 *         clients: list<array{clientId: string, nickname: string, isBuffering: bool, lastSeenMs: int}>,
 	 *         playerState: string,
 	 *         videoPos: float,
 	 *         contentIdentity: ?array{providerId: string, episodeId: string, pageUrl: string, contentKey: string},

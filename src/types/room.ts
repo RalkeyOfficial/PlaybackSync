@@ -1,5 +1,6 @@
 export interface ConnectedClient {
 	clientId: string
+	nickname: string
 	isBuffering: boolean
 	lastSeenMs: number
 }

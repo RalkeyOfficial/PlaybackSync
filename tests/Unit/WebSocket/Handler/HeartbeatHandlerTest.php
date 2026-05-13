@@ -35,7 +35,7 @@ class HeartbeatHandlerTest extends TestCase {
 	private function setupClient(int $playEventTs = 0): array {
 		$runtime = $this->registry->getOrCreate(self::UUID, self::NOW + 60_000);
 		$conn = $this->createMock(ConnectionInterface::class);
-		$client = new ClientConnection('A', $conn, self::NOW, 0, new RateLimiter(10, self::NOW));
+		$client = new ClientConnection('A', 'NickA', $conn, self::NOW, 0, new RateLimiter(10, self::NOW));
 		$runtime->addClient($client);
 		// Pretend room is currently playing, started at videoPos=0 at $playEventTs.
 		$runtime->state = new PlaybackState(PlaybackState::PLAYING, 0.0, $playEventTs, $playEventTs, 0);
