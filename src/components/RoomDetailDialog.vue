@@ -32,6 +32,21 @@
 					type="button"
 					role="tab"
 					class="room-detail__tab"
+					:class="{ 'room-detail__tab--active': activeTab === 'playlist' }"
+					:aria-selected="activeTab === 'playlist'"
+					@click="activeTab = 'playlist'">
+					{{ t('playbacksync', 'Playlist') }}
+					<span
+						v-if="room.playlist.length > 0"
+						class="room-detail__tab-badge"
+						:title="t('playbacksync', '{n} entries', { n: room.playlist.length })">
+						{{ room.playlist.length }}
+					</span>
+				</button>
+				<button
+					type="button"
+					role="tab"
+					class="room-detail__tab"
 					:class="{ 'room-detail__tab--active': activeTab === 'eventLog' }"
 					:aria-selected="activeTab === 'eventLog'"
 					@click="activeTab = 'eventLog'">
@@ -242,7 +257,7 @@
 					</NcNoteCard>
 				</section>
 
-				<!-- Now watching: cursor entry (playlist + cursor UX in a future spec) -->
+				<!-- Now watching: cursor entry. Full management in the Playlist tab. -->
 				<section v-if="cursorEntry" class="room-detail__section">
 					<div class="room-detail__section-head">
 						<IconMovie :size="16" />
@@ -261,6 +276,13 @@
 							{{ cursorEntry.pageUrl }}
 						</span>
 					</a>
+					<button
+						type="button"
+						class="room-detail__open-playlist"
+						@click="activeTab = 'playlist'">
+						{{ t('playbacksync', 'Open playlist') }}
+						<IconArrowRight :size="16" />
+					</button>
 				</section>
 
 				<!-- Identity ---------------------------------------------------- -->
@@ -271,6 +293,10 @@
 					</div>
 					<code class="room-detail__uuid">{{ room.uuid }}</code>
 				</section>
+			</div>
+
+			<div v-show="activeTab === 'playlist'" class="room-detail__pane">
+				<PlaylistEditor :room="room" />
 			</div>
 
 			<div v-show="activeTab === 'eventLog'" class="room-detail__pane room-detail__pane--log">
@@ -367,6 +393,7 @@ import IconPulse from 'vue-material-design-icons/Pulse.vue'
 import IconSkipBackward from 'vue-material-design-icons/SkipBackward.vue'
 import IconHourglass from 'vue-material-design-icons/TimerSandComplete.vue'
 import IconWeb from 'vue-material-design-icons/Web.vue'
+import PlaylistEditor from './PlaylistEditor.vue'
 import RoomEventLog from './RoomEventLog.vue'
 import StatusDot from './StatusDot.vue'
 import { useEventSource } from '../composables/useEventSource.ts'
@@ -440,7 +467,9 @@ const seekInput = ref<string>('')
 const live = computed(() => (freshLive.value === undefined ? props.room.live : freshLive.value))
 
 const cursorEntry = computed(() => {
-	if (props.room.cursorEntryId === null) return null
+	if (props.room.cursorEntryId === null) {
+		return null
+	}
 	return props.room.playlist.find((entry) => entry.entryId === props.room.cursorEntryId) ?? null
 })
 
@@ -450,7 +479,9 @@ const status = computed(() => getRoomStatus(
 ))
 
 const confirmingClientLabel = computed(() => {
-	if (!confirmingClientId.value) return ''
+	if (!confirmingClientId.value) {
+		return ''
+	}
 	const chip = clientChips.value.find((c) => c.clientId === confirmingClientId.value)
 	return chip?.nickname ?? confirmingClientId.value
 })
@@ -489,7 +520,7 @@ const {
  * Currently-visible tab in the detail dialog. Defaults to `overview` on
  * each open so the dialog never lands on a stale tab.
  */
-const activeTab = ref<'overview' | 'eventLog'>('overview')
+const activeTab = ref<'overview' | 'playlist' | 'eventLog'>('overview')
 
 watch(() => props.open, (isOpen) => {
 	if (!isOpen) {
@@ -1230,6 +1261,24 @@ function onSeek() {
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
+}
+
+.room-detail__open-playlist {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	margin-top: 6px;
+	padding: 4px 0;
+	background: transparent;
+	border: 0;
+	color: var(--color-primary-element);
+	cursor: pointer;
+	font-size: 13px;
+	font-weight: 500;
+}
+
+.room-detail__open-playlist:hover {
+	text-decoration: underline;
 }
 
 .room-detail__confirm-prompt {

@@ -29,6 +29,27 @@ export interface AddPlaylistEntryPayload {
 	seasonNumber?: number | null
 }
 
+/**
+ * Payload accepted by `PATCH /api/v1/rooms/{uuid}/playlist/entries/{entryId}`.
+ * All fields are optional; only the supplied ones are applied. `source` may
+ * only be set to `"curated"` (promotion); other values are rejected with
+ * `invalid_entry_patch`. Position moves are rejected in single mode.
+ */
+export interface UpdatePlaylistEntryPayload {
+	label?: string | null
+	episodeNumber?: number | null
+	seasonNumber?: number | null
+	position?: number | null
+	source?: 'curated' | null
+}
+
+/**
+ * Build a fully-qualified `/api/v1/rooms/{uuid}{path}` URL the playlist
+ * endpoints share.
+ *
+ * @param uuid the room's UUID
+ * @param path the path suffix after `/rooms/{uuid}`, including the leading slash
+ */
 function roomUrl(uuid: string, path: string = ''): string {
 	return generateUrl('/apps/playbacksync/api/v1/rooms/' + encodeURIComponent(uuid) + path)
 }
@@ -48,8 +69,12 @@ export async function updateRoomSettings(
 	freeformMode: boolean | null,
 ): Promise<void> {
 	const body: { singleMode?: boolean | null, freeformMode?: boolean | null } = {}
-	if (singleMode !== null) body.singleMode = singleMode
-	if (freeformMode !== null) body.freeformMode = freeformMode
+	if (singleMode !== null) {
+		body.singleMode = singleMode
+	}
+	if (freeformMode !== null) {
+		body.freeformMode = freeformMode
+	}
 	await axios.post(roomUrl(uuid, '/settings'), body)
 }
 
@@ -76,6 +101,40 @@ export async function addPlaylistEntry(uuid: string, entry: AddPlaylistEntryPayl
  */
 export async function removePlaylistEntry(uuid: string, entryId: string): Promise<void> {
 	await axios.delete(roomUrl(uuid, '/playlist/entries/' + encodeURIComponent(entryId)))
+}
+
+/**
+ * Patch a single playlist entry. Used for label edits, repositioning
+ * (reorder), and "convert to curated" promotions.
+ *
+ * @param uuid the room's UUID
+ * @param entryId the entry to patch
+ * @param patch fields to apply; only supplied ones are changed
+ * @return the full playlist snapshot after the patch
+ */
+export async function updatePlaylistEntry(
+	uuid: string,
+	entryId: string,
+	patch: UpdatePlaylistEntryPayload,
+): Promise<PlaylistSnapshot> {
+	const { data } = await axios.patch<PlaylistSnapshot>(
+		roomUrl(uuid, '/playlist/entries/' + encodeURIComponent(entryId)),
+		patch,
+	)
+	return data
+}
+
+/**
+ * Wipe the playlist and reset the cursor. Defends against accidental
+ * DELETE requests with a required `X-Playbacksync-Confirm-Clear: true`
+ * header. Rejected with 409 `single_mode_locked` in single mode.
+ *
+ * @param uuid the room's UUID
+ */
+export async function clearPlaylist(uuid: string): Promise<void> {
+	await axios.delete(roomUrl(uuid, '/playlist'), {
+		headers: { 'X-Playbacksync-Confirm-Clear': 'true' },
+	})
 }
 
 /**

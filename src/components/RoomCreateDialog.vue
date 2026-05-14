@@ -47,6 +47,33 @@
 					step="1"
 					inputmode="numeric" />
 			</div>
+
+			<fieldset class="room-create-form__modes">
+				<legend>{{ t('playbacksync', 'Playlist behaviour') }}</legend>
+				<NcCheckboxRadioSwitch
+					:modelValue="singleMode"
+					:disabled="freeformMode"
+					type="switch"
+					@update:checked="onSingleModeChange">
+					{{ t('playbacksync', 'Single mode') }}
+				</NcCheckboxRadioSwitch>
+				<p class="room-create-form__mode-hint">
+					{{ t('playbacksync', 'Lock the playlist to one video. Use for a single shared clip.') }}
+				</p>
+				<NcCheckboxRadioSwitch
+					:modelValue="freeformMode"
+					:disabled="singleMode"
+					type="switch"
+					@update:checked="onFreeformModeChange">
+					{{ t('playbacksync', 'Freeform mode') }}
+				</NcCheckboxRadioSwitch>
+				<p class="room-create-form__mode-hint">
+					{{ t('playbacksync', 'Follow whoever switches video, append on the fly. Use for movie nights.') }}
+				</p>
+				<p v-if="singleMode || freeformMode" class="room-create-form__mode-hint room-create-form__mode-hint--exclusive">
+					{{ t('playbacksync', 'Single and freeform are mutually exclusive — only one can be on.') }}
+				</p>
+			</fieldset>
 		</form>
 
 		<template #actions>
@@ -69,6 +96,7 @@ import { loadState } from '@nextcloud/initial-state'
 import { translate as t } from '@nextcloud/l10n'
 import { computed, ref, watch } from 'vue'
 import NcButton from '@nextcloud/vue/components/NcButton'
+import NcCheckboxRadioSwitch from '@nextcloud/vue/components/NcCheckboxRadioSwitch'
 import NcDialog from '@nextcloud/vue/components/NcDialog'
 import NcLoadingIcon from '@nextcloud/vue/components/NcLoadingIcon'
 import NcSelect from '@nextcloud/vue/components/NcSelect'
@@ -97,6 +125,8 @@ const name = ref('')
 const bootstrapUrl = ref('')
 const customHours = ref(1)
 const customMinutes = ref(0)
+const singleMode = ref(false)
+const freeformMode = ref(false)
 
 interface TtlOption {
 	value: number
@@ -195,8 +225,30 @@ watch(() => props.open, (isOpen) => {
 		ttlPreset.value = defaultTtlPreset.value
 		customHours.value = Math.min(1, maxCustomHours.value)
 		customMinutes.value = 0
+		singleMode.value = false
+		freeformMode.value = false
 	}
 })
+
+/**
+ * Apply a single-mode change. Mutual exclusion with freeform mode is
+ * enforced at the toggle level (`:disabled` on the inactive switch), so
+ * this handler only fires when the toggle is reachable.
+ *
+ * @param value new switch state from NcCheckboxRadioSwitch
+ */
+function onSingleModeChange(value: boolean) {
+	singleMode.value = value
+}
+
+/**
+ * Apply a freeform-mode change. Same gating story as `onSingleModeChange`.
+ *
+ * @param value new switch state from NcCheckboxRadioSwitch
+ */
+function onFreeformModeChange(value: boolean) {
+	freeformMode.value = value
+}
 
 /**
  * Forward the dialog's open-state change to the parent. Suppresses close
@@ -224,6 +276,8 @@ async function submit() {
 		bootstrapUrl: bootstrapUrl.value.trim(),
 		name: name.value.trim() || null,
 		ttl: effectiveTtl.value,
+		singleMode: singleMode.value,
+		freeformMode: freeformMode.value,
 	})
 	if (ok) {
 		emit('update:open', false)
@@ -285,5 +339,30 @@ function formatTtlLimit(seconds: number): string {
 	grid-template-columns: 1fr 1fr;
 	gap: 12px;
 	align-items: start;
+}
+
+.room-create-form__modes {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	margin: 0;
+	padding: 8px 0 0;
+	border: 0;
+}
+
+.room-create-form__modes legend {
+	font-weight: 600;
+	margin-bottom: 4px;
+}
+
+.room-create-form__mode-hint {
+	margin: 0 0 8px 36px;
+	color: var(--color-text-maxcontrast);
+	font-size: 0.85rem;
+}
+
+.room-create-form__mode-hint--exclusive {
+	margin-left: 0;
+	font-style: italic;
 }
 </style>

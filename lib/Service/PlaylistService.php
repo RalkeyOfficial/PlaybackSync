@@ -9,6 +9,7 @@ use OCA\PlaybackSync\Db\Room;
 use OCA\PlaybackSync\Db\RoomMapper;
 use OCA\PlaybackSync\Service\Exceptions\CursorEntryNotFoundException;
 use OCA\PlaybackSync\Service\Exceptions\CursorLockedEntryException;
+use OCA\PlaybackSync\Service\Exceptions\InvalidEntryPatchException;
 use OCA\PlaybackSync\Service\Exceptions\PlaylistCapExceededException;
 use OCA\PlaybackSync\Service\Exceptions\PlaylistLockedException;
 use OCA\PlaybackSync\Service\Exceptions\RoomNotFoundException;
@@ -347,6 +348,125 @@ class PlaylistService {
 				throw new CursorEntryNotFoundException('entry ' . $entryId . ' not found');
 			}
 			$room->setPlaylistEntries($updated);
+			$this->mapper->update($room);
+		});
+	}
+
+	/**
+	 * Patch a single playlist entry. Supports label/episodeNumber/seasonNumber
+	 * edits, an explicit position move (renumbering the rest of the list),
+	 * and the one valid source transition: `scraped` / `auto_appended` →
+	 * `curated`. Other source values raise `InvalidEntryPatchException`.
+	 *
+	 * Position moves count as reorders and are rejected in single mode with
+	 * `PlaylistLockedException`. Label / metadata / source-only patches are
+	 * permitted under single mode because they don't grow or reorder the
+	 * playlist — they only refine an existing locked entry.
+	 *
+	 * Returns the updated entry. Caller is responsible for broadcasting the
+	 * matching `PLAYLIST_UPDATE` frame on the WS layer.
+	 */
+	public function updateEntry(
+		string $roomUuid,
+		string $entryId,
+		?string $label,
+		?int $episodeNumber,
+		?int $seasonNumber,
+		?int $position,
+		?string $source,
+	): PlaylistEntry {
+		if ($source !== null && $source !== PlaylistEntry::SOURCE_CURATED) {
+			throw new InvalidEntryPatchException(
+				'source can only be promoted to curated (got "' . $source . '")',
+			);
+		}
+
+		return $this->withRoomLock($roomUuid, function (Room $room) use ($entryId, $label, $episodeNumber, $seasonNumber, $position, $source): PlaylistEntry {
+			$entries = $room->getPlaylistEntries();
+			$found = null;
+			foreach ($entries as $entry) {
+				if ($entry->entryId === $entryId) {
+					$found = $entry;
+					break;
+				}
+			}
+			if ($found === null) {
+				throw new CursorEntryNotFoundException('entry ' . $entryId . ' not found');
+			}
+
+			$reorderRequested = $position !== null && $position !== $found->position;
+			if ($reorderRequested && $room->getSingleMode()) {
+				throw new PlaylistLockedException('playlist is locked while single mode is enabled');
+			}
+
+			$patched = $found->with(
+				label: $label ?? $found->label,
+				episodeNumber: $episodeNumber ?? $found->episodeNumber,
+				seasonNumber: $seasonNumber ?? $found->seasonNumber,
+				source: $source ?? $found->source,
+			);
+
+			if ($reorderRequested) {
+				$target = max(1, min((int)$position, count($entries)));
+				$without = [];
+				foreach ($entries as $entry) {
+					if ($entry->entryId !== $entryId) {
+						$without[] = $entry;
+					}
+				}
+				$reordered = [];
+				$pos = 1;
+				$inserted = false;
+				foreach ($without as $entry) {
+					if (!$inserted && $pos === $target) {
+						$reordered[] = $patched->with(position: $pos);
+						$pos++;
+						$inserted = true;
+					}
+					$reordered[] = $entry->with(position: $pos);
+					$pos++;
+				}
+				if (!$inserted) {
+					$reordered[] = $patched->with(position: $pos);
+				}
+				$room->setPlaylistEntries($reordered);
+				$this->mapper->update($room);
+				foreach ($reordered as $entry) {
+					if ($entry->entryId === $entryId) {
+						return $entry;
+					}
+				}
+				// Unreachable — the patched entry was just placed in the list.
+				return $patched;
+			}
+
+			$next = [];
+			foreach ($entries as $entry) {
+				$next[] = $entry->entryId === $entryId ? $patched : $entry;
+			}
+			$room->setPlaylistEntries($next);
+			$this->mapper->update($room);
+			return $patched;
+		});
+	}
+
+	/**
+	 * Wipe the playlist and clear the cursor. Owner-driven bulk action
+	 * documented in CONTENT_MODEL_DEFAULT.md §"Cursor pointing at a deleted
+	 * entry": "Bulk 'clear all' is a separate explicit action with its own
+	 * confirmation; not the same code path as single-entry delete." So the
+	 * `cursor_locked_entry` guard does not apply here — the cursor goes to
+	 * `null` along with the playlist in one atomic write.
+	 *
+	 * Rejected in single mode (the playlist is immutable while locked).
+	 */
+	public function clearAll(string $roomUuid): void {
+		$this->withRoomLock($roomUuid, function (Room $room): void {
+			if ($room->getSingleMode()) {
+				throw new PlaylistLockedException('playlist is locked while single mode is enabled');
+			}
+			$room->setPlaylistEntries([]);
+			$room->setCursorEntryId(null);
 			$this->mapper->update($room);
 		});
 	}

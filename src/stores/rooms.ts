@@ -1,5 +1,5 @@
+import type { AddPlaylistEntryPayload, UpdatePlaylistEntryPayload } from '../services/playlistApi.ts'
 import type { PlaybackAction } from '../services/roomsApi.ts'
-import type { AddPlaylistEntryPayload } from '../services/playlistApi.ts'
 import type { CreatedRoom, CreateRoomPayload, Room, RoomLiveState } from '../types/room.ts'
 
 import { showError } from '@nextcloud/dialogs'
@@ -7,18 +7,20 @@ import { translate as t } from '@nextcloud/l10n'
 import { getLoggerBuilder } from '@nextcloud/logger'
 import { defineStore } from 'pinia'
 import {
+	addPlaylistEntry,
+	clearPlaylist,
+	removePlaylistEntry,
+	setRoomCursor,
+	updatePlaylistEntry,
+	updateRoomSettings,
+} from '../services/playlistApi.ts'
+import {
 	createRoom,
 	deleteRoom,
 	kickRoomClient,
 	listRooms,
 	sendPlaybackCommand,
 } from '../services/roomsApi.ts'
-import {
-	addPlaylistEntry,
-	removePlaylistEntry,
-	setRoomCursor,
-	updateRoomSettings,
-} from '../services/playlistApi.ts'
 
 const logger = getLoggerBuilder().setApp('playbacksync').detectUser().build()
 
@@ -213,6 +215,66 @@ export const useRoomsStore = defineStore('rooms', {
 					showError(t('playbacksync', 'Playlist size limit reached.'))
 				} else {
 					const message = extractErrorMessage(error) ?? t('playbacksync', 'Could not add playlist entry.')
+					showError(message)
+				}
+				return false
+			}
+		},
+
+		/**
+		 * Patch a single playlist entry. Used by the dashboard playlist
+		 * editor for label edits, repositioning, and "convert to curated"
+		 * promotions. `source` may only be set to `"curated"`.
+		 *
+		 * @param uuid the room's UUID
+		 * @param entryId the entry to patch
+		 * @param patch fields to apply; only supplied ones are changed
+		 * @return true on success, false on any failure (toast already shown)
+		 */
+		async updatePlaylistEntry(
+			uuid: string,
+			entryId: string,
+			patch: UpdatePlaylistEntryPayload,
+		): Promise<boolean> {
+			try {
+				await updatePlaylistEntry(uuid, entryId, patch)
+				void this.refresh()
+				return true
+			} catch (error) {
+				logger.error('Failed to update playlist entry', { error, uuid, entryId })
+				const code = extractErrorCode(error)
+				if (code === 'single_mode_locked') {
+					showError(t('playbacksync', 'The playlist is locked while single mode is enabled.'))
+				} else if (code === 'invalid_entry_patch') {
+					showError(t('playbacksync', 'That change is not allowed.'))
+				} else {
+					const message = extractErrorMessage(error) ?? t('playbacksync', 'Could not update playlist entry.')
+					showError(message)
+				}
+				return false
+			}
+		},
+
+		/**
+		 * Wipe the playlist and reset the cursor. The `X-Playbacksync-
+		 * Confirm-Clear: true` header is supplied by the API wrapper; the
+		 * dashboard should still fire its own confirm dialog before calling.
+		 *
+		 * @param uuid the room's UUID
+		 * @return true on success, false on any failure (toast already shown)
+		 */
+		async clearPlaylist(uuid: string): Promise<boolean> {
+			try {
+				await clearPlaylist(uuid)
+				void this.refresh()
+				return true
+			} catch (error) {
+				logger.error('Failed to clear playlist', { error, uuid })
+				const code = extractErrorCode(error)
+				if (code === 'single_mode_locked') {
+					showError(t('playbacksync', 'The playlist is locked while single mode is enabled.'))
+				} else {
+					const message = extractErrorMessage(error) ?? t('playbacksync', 'Could not clear playlist.')
 					showError(message)
 				}
 				return false

@@ -15,6 +15,7 @@ use OCA\PlaybackSync\Service\Exceptions\ClientNotFoundException;
 use OCA\PlaybackSync\Service\Exceptions\CreateRestrictedException;
 use OCA\PlaybackSync\Service\Exceptions\CursorEntryNotFoundException;
 use OCA\PlaybackSync\Service\Exceptions\CursorLockedEntryException;
+use OCA\PlaybackSync\Service\Exceptions\InvalidEntryPatchException;
 use OCA\PlaybackSync\Service\Exceptions\InvalidRoomInputException;
 use OCA\PlaybackSync\Service\Exceptions\KickFailedException;
 use OCA\PlaybackSync\Service\Exceptions\NotInPlaylistException;
@@ -383,6 +384,102 @@ class RoomController extends Controller {
 
 		$this->broadcaster->broadcastPlaylistUpdate($uuid, $this->userId);
 		return new DataResponse($this->serializePlaylist($uuid));
+	}
+
+	/**
+	 * Patch a single playlist entry. Used by the dashboard playlist editor
+	 * for label edits, position moves (reorder), and "convert to curated"
+	 * promotions. All fields are optional; the service applies only the
+	 * supplied ones.
+	 *
+	 * @param string      $uuid          Room UUID.
+	 * @param string      $entryId       Server-assigned entry id (`e_…`).
+	 * @param string|null $label         New label, or `null` to leave the label unchanged.
+	 * @param int|null    $episodeNumber New episode number, or `null` to leave unchanged.
+	 * @param int|null    $seasonNumber  New season number, or `null` to leave unchanged.
+	 * @param int|null    $position      Target 1-based position. Renumbers neighbours. Rejected in single mode.
+	 * @param string|null $source        Only `"curated"` is a valid value (promotion). Other values rejected.
+	 */
+	#[NoAdminRequired]
+	public function updatePlaylistEntry(
+		string $uuid,
+		string $entryId,
+		?string $label = null,
+		?int $episodeNumber = null,
+		?int $seasonNumber = null,
+		?int $position = null,
+		?string $source = null,
+	): DataResponse {
+		if ($this->userId === null) {
+			return new DataResponse(['error' => 'Authentication required.'], Http::STATUS_UNAUTHORIZED);
+		}
+
+		try {
+			$this->service->getOwnedRoom($this->userId, $uuid);
+		} catch (RoomNotFoundException $e) {
+			return new DataResponse(['error' => $e->getMessage()], Http::STATUS_NOT_FOUND);
+		}
+
+		try {
+			$this->playlistService->updateEntry(
+				$uuid,
+				$entryId,
+				$label,
+				$episodeNumber,
+				$seasonNumber,
+				$position,
+				$source,
+			);
+		} catch (PlaylistLockedException $e) {
+			return new DataResponse(['error' => $e->getMessage(), 'code' => 'single_mode_locked'], Http::STATUS_CONFLICT);
+		} catch (InvalidEntryPatchException $e) {
+			return new DataResponse(['error' => $e->getMessage(), 'code' => 'invalid_entry_patch'], Http::STATUS_BAD_REQUEST);
+		} catch (CursorEntryNotFoundException $e) {
+			return new DataResponse(['error' => $e->getMessage()], Http::STATUS_NOT_FOUND);
+		} catch (RoomNotFoundException $e) {
+			return new DataResponse(['error' => $e->getMessage()], Http::STATUS_NOT_FOUND);
+		}
+
+		$this->broadcaster->broadcastPlaylistUpdate($uuid, $this->userId);
+		return new DataResponse($this->serializePlaylist($uuid));
+	}
+
+	/**
+	 * Bulk "clear all" — wipes the playlist and resets the cursor in one
+	 * atomic write. Distinct code path from single-entry delete: the
+	 * cursor-lock guard does not apply (per CONTENT_MODEL_DEFAULT.md). Defends
+	 * against accidental DELETE requests by requiring an
+	 * `X-Playbacksync-Confirm-Clear: true` header.
+	 */
+	#[NoAdminRequired]
+	public function clearPlaylist(string $uuid): DataResponse {
+		if ($this->userId === null) {
+			return new DataResponse(['error' => 'Authentication required.'], Http::STATUS_UNAUTHORIZED);
+		}
+
+		if ($this->request->getHeader('X-Playbacksync-Confirm-Clear') !== 'true') {
+			return new DataResponse(
+				['error' => 'missing X-Playbacksync-Confirm-Clear: true header', 'code' => 'missing_confirm_header'],
+				Http::STATUS_BAD_REQUEST,
+			);
+		}
+
+		try {
+			$this->service->getOwnedRoom($this->userId, $uuid);
+		} catch (RoomNotFoundException $e) {
+			return new DataResponse(['error' => $e->getMessage()], Http::STATUS_NOT_FOUND);
+		}
+
+		try {
+			$this->playlistService->clearAll($uuid);
+		} catch (PlaylistLockedException $e) {
+			return new DataResponse(['error' => $e->getMessage(), 'code' => 'single_mode_locked'], Http::STATUS_CONFLICT);
+		} catch (RoomNotFoundException $e) {
+			return new DataResponse(['error' => $e->getMessage()], Http::STATUS_NOT_FOUND);
+		}
+
+		$this->broadcaster->broadcastPlaylistUpdate($uuid, $this->userId);
+		return new DataResponse(null, Http::STATUS_NO_CONTENT);
 	}
 
 	#[NoAdminRequired]
