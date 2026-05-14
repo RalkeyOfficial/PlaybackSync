@@ -1,4 +1,5 @@
 import type { PlaybackAction } from '../services/roomsApi.ts'
+import type { AddPlaylistEntryPayload } from '../services/playlistApi.ts'
 import type { CreatedRoom, CreateRoomPayload, Room, RoomLiveState } from '../types/room.ts'
 
 import { showError } from '@nextcloud/dialogs'
@@ -12,6 +13,12 @@ import {
 	listRooms,
 	sendPlaybackCommand,
 } from '../services/roomsApi.ts'
+import {
+	addPlaylistEntry,
+	removePlaylistEntry,
+	setRoomCursor,
+	updateRoomSettings,
+} from '../services/playlistApi.ts'
 
 const logger = getLoggerBuilder().setApp('playbacksync').detectUser().build()
 
@@ -150,6 +157,116 @@ export const useRoomsStore = defineStore('rooms', {
 		dismissLastCreated() {
 			this.lastCreated = null
 		},
+
+		/**
+		 * Flip one or both mode toggles on a room. Refreshes the rooms list
+		 * on success so other tabs / dashboard widgets reconcile. Errors
+		 * surface as toasts; `toggle_conflict` gets a focused message.
+		 *
+		 * @param uuid the room's UUID
+		 * @param singleMode new value or `null` to leave alone
+		 * @param freeformMode new value or `null` to leave alone
+		 * @return true on success, false on any failure (toast already shown)
+		 */
+		async updateSettings(
+			uuid: string,
+			singleMode: boolean | null,
+			freeformMode: boolean | null,
+		): Promise<boolean> {
+			try {
+				await updateRoomSettings(uuid, singleMode, freeformMode)
+				void this.refresh()
+				return true
+			} catch (error) {
+				logger.error('Failed to update room settings', { error, uuid })
+				const code = extractErrorCode(error)
+				if (code === 'toggle_conflict') {
+					showError(t('playbacksync', 'Single mode and freeform mode are mutually exclusive.'))
+				} else {
+					const message = extractErrorMessage(error) ?? t('playbacksync', 'Could not update room settings.')
+					showError(message)
+				}
+				return false
+			}
+		},
+
+		/**
+		 * Add one curated entry to the room's playlist. Optimistic refresh
+		 * after success; the SSE event log also surfaces a
+		 * `playlist_update` envelope for other connected dashboards.
+		 *
+		 * @param uuid the room's UUID
+		 * @param entry the curated entry to add
+		 * @return true on success, false on any failure (toast already shown)
+		 */
+		async addPlaylistEntry(uuid: string, entry: AddPlaylistEntryPayload): Promise<boolean> {
+			try {
+				await addPlaylistEntry(uuid, entry)
+				void this.refresh()
+				return true
+			} catch (error) {
+				logger.error('Failed to add playlist entry', { error, uuid })
+				const code = extractErrorCode(error)
+				if (code === 'single_mode_locked') {
+					showError(t('playbacksync', 'The playlist is locked while single mode is enabled.'))
+				} else if (code === 'playlist_cap_exceeded' || code === 'per_message_cap' || code === 'per_room_cap') {
+					showError(t('playbacksync', 'Playlist size limit reached.'))
+				} else {
+					const message = extractErrorMessage(error) ?? t('playbacksync', 'Could not add playlist entry.')
+					showError(message)
+				}
+				return false
+			}
+		},
+
+		async removePlaylistEntry(uuid: string, entryId: string): Promise<boolean> {
+			try {
+				await removePlaylistEntry(uuid, entryId)
+				void this.refresh()
+				return true
+			} catch (error) {
+				logger.error('Failed to remove playlist entry', { error, uuid, entryId })
+				const code = extractErrorCode(error)
+				if (code === 'single_mode_locked') {
+					showError(t('playbacksync', 'The playlist is locked while single mode is enabled.'))
+				} else if (code === 'cursor_locked_entry') {
+					showError(t('playbacksync', 'This entry is currently playing. Advance the cursor first.'))
+				} else {
+					const message = extractErrorMessage(error) ?? t('playbacksync', 'Could not remove playlist entry.')
+					showError(message)
+				}
+				return false
+			}
+		},
+
+		/**
+		 * Move the cursor to an existing playlist entry. Identical reaction
+		 * matrix to the WS `CURSOR_CHANGE_REQUEST` path; the broadcast to
+		 * connected clients happens daemon-side after the DB write.
+		 *
+		 * @param uuid the room's UUID
+		 * @param targetEntryId the entry to set as the cursor
+		 * @return true on success, false on any failure (toast already shown)
+		 */
+		async setCursor(uuid: string, targetEntryId: string): Promise<boolean> {
+			try {
+				await setRoomCursor(uuid, targetEntryId)
+				void this.refresh()
+				return true
+			} catch (error) {
+				logger.error('Failed to set cursor', { error, uuid, targetEntryId })
+				const code = extractErrorCode(error)
+				if (code === 'single_mode_locked') {
+					showError(t('playbacksync', 'The playlist is locked while single mode is enabled.'))
+				} else if (code === 'not_in_playlist') {
+					showError(t('playbacksync', 'That entry is not in the playlist.'))
+				} else {
+					const message = extractErrorMessage(error) ?? t('playbacksync', 'Could not change the cursor.')
+					showError(message)
+				}
+				return false
+			}
+		},
 	},
 })
 
@@ -197,6 +314,25 @@ function extractStatus(error: unknown): number | null {
 		const response = (error as { response?: { status?: number } }).response
 		if (typeof response?.status === 'number') {
 			return response.status
+		}
+	}
+	return null
+}
+
+/**
+ * Pull the server-supplied error code out of an axios failure. The new
+ * playlist / cursor / settings endpoints include a `code` field
+ * alongside `error` so the dashboard can branch on a stable identifier
+ * (`single_mode_locked`, `toggle_conflict`, …) rather than the prose.
+ *
+ * @param error the value caught from a failed axios call
+ * @return the server's error code, or null if none could be extracted
+ */
+function extractErrorCode(error: unknown): string | null {
+	if (typeof error === 'object' && error !== null && 'response' in error) {
+		const response = (error as { response?: { data?: { code?: string } } }).response
+		if (typeof response?.data?.code === 'string') {
+			return response.data.code
 		}
 	}
 	return null

@@ -23,7 +23,7 @@ class HealthControllerTest extends TestCase {
 			tombstoneMs: 30_000,
 			kickBlockMs: 30_000,
 			eventLogSize: 200,
-			rateLimitEventsPerSec: 10,
+			rateLimitEventsPerSec: 10, rateLimitPlaylistPerSec: 2,
 			driftNudgeThresholdMs: 200,
 			driftSeekThresholdMs: 500,
 			driftCooldownMs: 3_000,
@@ -40,6 +40,7 @@ class HealthControllerTest extends TestCase {
 			nowMs: 0,
 			lastEventId: 0,
 			rateLimiter: new RateLimiter(10, 0),
+			playlistRateLimiter: new RateLimiter(2, 0),
 		));
 	}
 

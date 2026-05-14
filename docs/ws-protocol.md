@@ -1,19 +1,18 @@
-# PlaybackSync — WebSocket Protocol (v1)
+# PlaybackSync — WebSocket Protocol (v2)
 
 This document is the wire-format contract for clients connecting to the
 PlaybackSync sync daemon. The audience is anyone implementing a client
 (browser extension, Vue frontend, scripted test harness): everything they
 need to talk to the server should be here. For deployment details see
-[`ws-sync-server.md`](ws-sync-server.md).
+[`ws-sync-server.md`](ws-sync-server.md). For the conceptual model
+behind playlist + cursor + toggles, read
+[`CONTENT_MODEL.md`](../CONTENT_MODEL.md) at the repo root.
 
-> **Transitional state.** The frames documented here are the v1 wire
-> contract from before the playlist + cursor data substrate landed. The
-> server still emits the same field shape — `providerId` / `episodeId`
-> (carries the new `videoId`) / `pageUrl` / `contentKey` are now derived
-> from the room's current cursor entry — so existing clients keep working.
-> A follow-up protocol spec (rename to `CURSOR_CHANGE`, add
-> `PLAYLIST_UPDATE`, change steering rules) is planned but not in effect
-> yet.
+> **v2 (current).** The wire frames now reflect the playlist + cursor
+> data substrate. `EPISODE_CHANGE_REQUEST` / `EPISODE_CHANGE` /
+> `CONTENT_MISMATCH` have been retired; `CURSOR_CHANGE_REQUEST` /
+> `CURSOR_CHANGE` / `PLAYLIST_UPDATE` take their place. Pre-launch
+> rename, no compatibility shim — older clients won't work.
 
 ## Connecting
 
@@ -68,9 +67,21 @@ including replaying any events the client missed.
   "password": "abc123XYZ...",
   "clientId": "optional-from-prior-session",
   "lastEventId": 17,
-  "episodeId": "S01E01",
-  "providerId": "netflix",
-  "pageUrl": "https://example.com/watch/12345"
+  "currentlyShowing": {
+    "providerId": "crunchyroll",
+    "videoId": "frieren-s01e03",
+    "pageUrl": "https://www.crunchyroll.com/watch/..."
+  },
+  "catalogFragment": [
+    {
+      "providerId": "crunchyroll",
+      "videoId": "frieren-s01e01",
+      "pageUrl": "...",
+      "label": "Episode 1",
+      "episodeNumber": 1,
+      "seasonNumber": 1
+    }
+  ]
 }
 ```
 
@@ -80,20 +91,42 @@ including replaying any events the client missed.
 - `lastEventId` (integer, optional) — the last `eventId` the client saw
   before its previous connection dropped. The server replays anything newer
   in `ROOM_STATE.recentEvents`.
-- `episodeId`, `providerId`, `pageUrl` (string, optional, all-or-nothing) —
-  payload fields carried over for backwards compatibility with existing
-  clients. **Server-side handling:** the values are accepted by the
-  message validator but the join handler currently ignores them — the
-  content-identity reconciliation path documented historically (see below)
-  has been retired in favour of the playlist+cursor model. They will be
-  consumed again by the follow-up cursor-change flow.
-- (historical, no longer enforced) once a content
-  ≤ 1024 chars each) — content fingerprint. If the room already has an
-  identity was established, these three had to hash to the same
-  `contentKey` or the connection was rejected with `CONTENT_MISMATCH`.
-  Retired in the data substrate spec — joiners are no longer steered based
-  on these fields; the playlist+cursor model handles that responsibility
-  in the protocol spec.
+- `currentlyShowing` (object, optional) — `(providerId, videoId, pageUrl)`
+  triple describing the video the client's tab is currently on. Used for
+  **JOIN steering** (see below) and as the seed video for an empty
+  playlist. Omitted when the client is on a generic "join page" rather
+  than a real video page.
+- `catalogFragment` (array, optional, ≤ 200 entries) — additional video
+  entries the client scraped from the page (e.g. an episode sidebar). The
+  server merges them into the playlist with `source: "scraped"` using the
+  rules in [`CONTENT_MODEL_DATA.md`](../CONTENT_MODEL_DATA.md#merge-rules).
+  Silently ignored in single-mode rooms (the playlist is locked).
+
+#### JOIN steering reaction matrix
+
+After authenticating the joiner and merging any `catalogFragment`, the
+server compares `currentlyShowing` against the room's cursor and decides
+whether to unicast a `CURSOR_CHANGE` back to that connection so the
+extension can navigate the tab to the right video. The new client always
+receives `ROOM_STATE` first; steering, when it happens, follows
+immediately.
+
+| Mode | Joiner state | Server action |
+|---|---|---|
+| Default | `currentlyShowing` matches cursor | `ROOM_STATE` only |
+| Default | in playlist but ≠ cursor | `ROOM_STATE` + unicast `CURSOR_CHANGE` |
+| Default | not in playlist (playlist non-empty) | unicast `CURSOR_CHANGE` |
+| Default | playlist empty, `currentlyShowing` present | seed playlist + set cursor + (no steer needed; cursor already matches) |
+| Single | matches cursor | `ROOM_STATE` only |
+| Single | else (any) | unicast `CURSOR_CHANGE` (`catalogFragment` ignored) |
+| Freeform | matches cursor | `ROOM_STATE` only |
+| Freeform | else, polite-follow (current behaviour) | unicast `CURSOR_CHANGE` |
+| Freeform | playlist empty, `currentlyShowing` present | auto-append + set cursor |
+| Any | `currentlyShowing` omitted | `ROOM_STATE` only — no steer target |
+
+The freeform "eager append" alternative (whereby the joiner's video
+becomes the new cursor instead of being steered) is deferred to the
+freeform-mode UX spec.
 
 ### `EVENT`
 
@@ -108,27 +141,91 @@ including replaying any events the client missed.
 - `clientTs` (ms) is the client's wall clock when it sent the message; used
   by the server only for logging and is **not** authoritative.
 
-Rate-limited per connection: 10 explicit events per second (default).
-Excess events get `ERROR RATE_LIMITED` and the connection stays open.
+Rate-limited per connection: 10 explicit events per second by default
+(`ws_rate_limit_events_per_sec`). Excess events get `ERROR RATE_LIMITED`
+and the connection stays open. Shares its bucket with
+`CURSOR_CHANGE_REQUEST`.
 
-### `EPISODE_CHANGE_REQUEST`
+### `CURSOR_CHANGE_REQUEST`
+
+Ask the room to move the cursor to a different entry. Two forms:
+
+```json
+{ "type": "CURSOR_CHANGE_REQUEST", "targetEntryId": "e_05", "clientTs": 1700000000000 }
+```
 
 ```json
 {
-  "type": "EPISODE_CHANGE_REQUEST",
-  "episodeId": "S02E03",
-  "providerId": "netflix",
-  "pageUrl": "https://example.com/watch/67890",
+  "type": "CURSOR_CHANGE_REQUEST",
+  "target": {
+    "providerId": "youtube",
+    "videoId": "newVidId",
+    "pageUrl": "https://...",
+    "label": "Some new video",
+    "episodeNumber": null,
+    "seasonNumber": null
+  },
   "clientTs": 1700000000000
 }
 ```
 
-A hard reset. Resets `videoPos` to 0, `playerState` to `paused`, and
-broadcasts an `EPISODE_CHANGE` frame carrying the new cursor entry's
-fields. Same rate-limit bucket as `EVENT`. Today the handler is a
-transitional in-memory shim — it overwrites the runtime's cursor without
-persisting to the `playlist` JSON column. Persisted playlist + cursor
-mutations through this path will land with the follow-up protocol spec.
+Exactly one of `targetEntryId` or `target` must be present.
+
+Server behaviour by mode (matches
+[CONTENT_MODEL_PROTOCOL.md §reaction matrix](../CONTENT_MODEL_PROTOCOL.md#cursor_change_request-client--server)):
+
+| Mode | Target form | Reaction |
+|---|---|---|
+| Single | `targetEntryId` of an existing entry | Accept — cursor moves between locked entries. |
+| Single | `target` (raw) | Reject `single_mode_locked`. |
+| Default | `targetEntryId` | Accept if entry exists, else `not_in_playlist`. |
+| Default | `target` whose `(providerId, videoId)` already exists | Resolve to existing entry id, accept. |
+| Default | `target` not in playlist | Reject `not_in_playlist` — sender must `PLAYLIST_UPDATE` first. |
+| Freeform | `targetEntryId` | Accept if entry exists. |
+| Freeform | `target` whose `(providerId, videoId)` already exists | Resolve to existing entry id, accept. |
+| Freeform | `target` not in playlist | Auto-append with `source: "auto_appended"`, then move cursor. Server broadcasts `PLAYLIST_UPDATE` first, then `CURSOR_CHANGE`. |
+
+On success the playback state resets (paused at position 0) — the new
+cursor starts fresh. Same rate-limit bucket as `EVENT`.
+
+### `PLAYLIST_UPDATE`
+
+Client → server: contribute scraped entries to the playlist (typically
+sent from a series-aware page where the extension can read the episode
+list).
+
+```json
+{
+  "type": "PLAYLIST_UPDATE",
+  "entries": [
+    {
+      "providerId": "crunchyroll",
+      "videoId": "frieren-s01e04",
+      "pageUrl": "https://...",
+      "label": "Episode 4",
+      "episodeNumber": 4,
+      "seasonNumber": 1,
+      "source": "scraped"
+    }
+  ],
+  "clientTs": 1700000000000
+}
+```
+
+- `entries` — non-empty list; ≤ 200 entries per frame.
+- Per-entry `source` is optional; defaults to `"scraped"` if omitted.
+- Server merges by `(providerId, videoId)` per the merge rules.
+- Rejected with `single_mode_locked` in single-mode rooms.
+- Rejected with `playlist_cap_exceeded` if the merge would push the
+  playlist past 1000 entries (per-room cap).
+
+Rate-limited via a **separate** per-connection bucket
+(`ws_rate_limit_playlist_per_sec`, default 2) so a scrape on JOIN
+doesn't eat the playback-event budget.
+
+After a successful merge the server broadcasts a `PLAYLIST_UPDATE`
+frame back to every connection (including the sender) carrying the
+full post-merge playlist so all clients converge.
 
 ### `HEARTBEAT`
 
@@ -187,26 +284,39 @@ Sent immediately after a successful `JOIN` and again after every
 {
   "type": "ROOM_STATE",
   "clientId": "5c4df08c5b4a4e2d8f3aab0c0123abcd",
+  "singleMode": false,
+  "freeformMode": false,
+  "cursor": {
+    "entryId": "e_02",
+    "providerId": "crunchyroll",
+    "videoId": "frieren-s01e02",
+    "pageUrl": "https://...",
+    "label": "Episode 2"
+  },
+  "playlistVersion": "v8c4d3b2a1f0e9d7b",
   "playerState": "playing",
   "videoPos": 42.71,
   "lastEventId": 19,
   "serverTs": 1700000000000,
-  "providerId": "netflix",
-  "episodeId": "S01E01",
-  "pageUrl": "https://example.com/watch/12345",
-  "contentKey": "fc4...",
   "recentEvents": [
-    { "type": "play",  "value": null, "clientId": "...", "ts": 1700000000000, "eventId": 18 },
-    { "type": "seek",  "value": 30.0, "clientId": "...", "ts": 1700000000000, "eventId": 19 }
+    { "type": "play", "value": null, "clientId": "...", "ts": 1700000000000, "eventId": 18 },
+    { "type": "seek", "value": 30.0, "clientId": "...", "ts": 1700000000000, "eventId": 19 }
   ]
 }
 ```
 
+- `cursor` is `null` when the room's playlist is empty (e.g. an
+  unscraped default-mode room before the first joiner, or a fresh
+  freeform room).
 - `videoPos` is the server-extrapolated position right now — for a playing
   room the value is `lastSeekPos + (now - lastUpdate) / 1000`.
+- `playlistVersion` is a stable hash over the playlist's entries
+  (`v` + 16 hex chars). Clients hold the previous version and compare
+  it against subsequent `ROOM_STATE` / `PLAYLIST_UPDATE` frames to skip
+  redundant reconciles. The full playlist is fetched out-of-band via
+  `GET /api/v1/rooms/{uuid}/playlist` — see [`api.md`](api.md).
 - `recentEvents` is present only when the client passed `lastEventId` in
   `JOIN` and there are events newer than that in the ring buffer.
-- `contentKey` is `sha256(lower(providerId) + ':' + lower(episodeId) + ':' + pageUrl)`.
 
 ### `STATE`
 
@@ -224,18 +334,56 @@ processed.
 }
 ```
 
-### `EPISODE_CHANGE`
+### `CURSOR_CHANGE`
 
-Broadcast to every member of the room after `EPISODE_CHANGE_REQUEST`.
+Broadcast to every member of the room after a successful
+`CURSOR_CHANGE_REQUEST` (from the extension) or `POST /cursor` (from the
+dashboard). Also **unicast** to a freshly-joined client when JOIN steering
+fires (same payload shape, different addressing).
 
 ```json
 {
-  "type": "EPISODE_CHANGE",
-  "eventId": 21,
-  "providerId": "netflix",
-  "episodeId": "S02E03",
-  "pageUrl": "https://example.com/watch/67890",
-  "contentKey": "9a7...",
+  "type": "CURSOR_CHANGE",
+  "cursor": {
+    "entryId": "e_05",
+    "providerId": "crunchyroll",
+    "videoId": "frieren-s01e05",
+    "pageUrl": "https://...",
+    "label": "Episode 5"
+  },
+  "eventId": 142,
+  "serverTs": 1700000000000
+}
+```
+
+On receipt, clients reset their player to paused at position 0 and
+navigate the tab to `cursor.pageUrl`.
+
+### `PLAYLIST_UPDATE` (server → client)
+
+Broadcast after every successful merge (from a client `PLAYLIST_UPDATE`,
+a freeform auto-append, or an HTTP dashboard call). Carries the full
+post-merge playlist so clients converge without per-entry diffing.
+
+```json
+{
+  "type": "PLAYLIST_UPDATE",
+  "entries": [
+    {
+      "entryId": "e_01",
+      "position": 1,
+      "providerId": "crunchyroll",
+      "videoId": "frieren-s01e01",
+      "pageUrl": "https://...",
+      "label": "Episode 1",
+      "episodeNumber": 1,
+      "seasonNumber": 1,
+      "source": "scraped",
+      "addedAt": 1700000000,
+      "lastSeenAt": 1700000000
+    }
+  ],
+  "playlistVersion": "v8c4d3b2a1f0e9d7b",
   "serverTs": 1700000000000
 }
 ```
@@ -279,7 +427,7 @@ Suppressed entirely while the client is `buffering` and during the
 { "type": "ERROR", "code": "AUTH_FAILED", "message": "Incorrect room password", "serverTs": 1700000000000 }
 ```
 
-`code` values used by v1:
+`code` values:
 
 | Code | Meaning | Connection closed? |
 |---|---|---|
@@ -290,38 +438,32 @@ Suppressed entirely while the client is `buffering` and during the
 | `ROOM_NOT_FOUND` | URL UUID doesn't match a room | yes |
 | `ROOM_EXPIRED` | Room is past its TTL | yes |
 | `AUTH_FAILED` | Wrong password | yes |
-| `CONTENT_MISMATCH` | JOIN content identity disagrees with the room | yes |
 | `CLIENT_ID_IN_USE` | A live connection already holds this `clientId` | yes |
 | `KICKED` | Room owner forcibly disconnected this client | yes |
 | `NOT_JOINED` | Sent EVENT/HEARTBEAT/etc. without a prior JOIN | yes |
-| `RATE_LIMITED` | Token bucket empty | no |
+| `ALREADY_JOINED` | Sent a second JOIN on the same connection | no |
+| `RATE_LIMITED` | Token bucket empty (events or playlist) | no |
+| `single_mode_locked` | Mutation attempted on a single-mode room | no |
+| `not_in_playlist` | `CURSOR_CHANGE_REQUEST` referenced a video not in the playlist (default mode) | no |
+| `playlist_cap_exceeded` | `PLAYLIST_UPDATE` would push playlist past the 1000-entry per-room cap | no |
 | `INTERNAL_ERROR` | Unexpected server-side failure | yes |
 
-### `CONTENT_MISMATCH`
-
-Sent before the closing `ERROR` when a JOIN's content identity disagrees
-with the room's. Lets the client surface a friendly "you're on the wrong
-episode" message before the socket closes.
-
-```json
-{
-  "type": "CONTENT_MISMATCH",
-  "expectedContentKey": "fc4...",
-  "reportedContentKey": "abc...",
-  "serverTs": 1700000000000
-}
-```
+(`toggle_conflict` and `cursor_locked_entry` only surface via the HTTP
+API — see [`api.md`](api.md). They cannot be triggered through the WS
+wire because the corresponding mutations aren't WS-exposed.)
 
 ---
 
-## Sequence: typical first connect
+## Sequence: typical first connect (default mode, anime room)
 
 ```
 Client                                  Server
   |--WS upgrade GET /apps/.../ws/UUID--->|   (101 Switching Protocols)
   |<------------------------------------|
-  |--JOIN{password}--------------------->|
-  |<-ROOM_STATE{clientId, playerState…}--|   (save clientId)
+  |--JOIN{password, currentlyShowing, catalogFragment[ep 1-4]}-->|
+  |   (server merges fragment, sets cursor=ep3 from currentlyShowing)
+  |<-ROOM_STATE{clientId, cursor=ep3, playlistVersion, ...}--|   (save clientId)
+  |   (no steer — currentlyShowing matched the seeded cursor)
   |--CLOCK_PING-------------------------->|
   |<-CLOCK_PONG--------------------------|
   |   (3–5 times, then sparingly)         |
@@ -329,6 +471,17 @@ Client                                  Server
   |--HEARTBEAT every ~5 s---------------->|
   |   …                                   |
   |<-SYNC_ADJUST (only if drift)----------|
+```
+
+## Sequence: stale-tab joiner gets steered
+
+```
+Client                                  Server
+  |--JOIN{password, currentlyShowing=ep1}-->|
+  |   (cursor is on ep3 — mismatch)
+  |<-ROOM_STATE{cursor=ep3, ...}-----------|
+  |<-CURSOR_CHANGE{cursor=ep3}-------------|   (unicast, not broadcast)
+  |   (extension navigates the tab to ep3)
 ```
 
 ## Sequence: another client triggers a play
@@ -340,32 +493,61 @@ A          Server          B          (B is already JOINed)
 |              |--STATE----->|
 ```
 
+## Sequence: freeform-mode auto-append on cursor change
+
+```
+A          Server          B
+|--CURSOR_CHANGE_REQUEST{target: {videoId:vid_b,...}}->|
+|   (server auto-appends vid_b with source=auto_appended)
+|<-PLAYLIST_UPDATE{entries:[..., vid_b]}---|
+|              |--PLAYLIST_UPDATE--->|
+|<-CURSOR_CHANGE{cursor:vid_b}------|
+|              |--CURSOR_CHANGE---->|
+```
+
+## Sequence: A drops, reconnects, replays missed events
+
+```
+A           Server
+|<close>     | (server tombstones A for 30 s)
+|            | (A misses events 19 and 20 broadcast in the meantime)
+|--JOIN{clientId, lastEventId=18}->|
+|<-ROOM_STATE{lastEventId:20, recentEvents:[19,20]}-|
+```
+
 ## Admin HTTP
 
-In addition to the WebSocket port, the daemon binds a **loopback-only** HTTP endpoint that lets the Nextcloud rooms API surface live presence and playback state. This section documents the wire format. **Browser clients (Vue, browser extension) do not call this endpoint** — only the PHP request layer running on the same host does.
+In addition to the WebSocket port, the daemon binds a **loopback-only** HTTP endpoint that lets the Nextcloud rooms API surface live presence, drive owner-initiated playback, and broadcast post-write WS frames after dashboard mutations. This section documents the wire format. **Browser clients (Vue, browser extension) do not call this endpoint** — only the PHP request layer running on the same host does.
 
-### Endpoint
+### Endpoints
 
 ```
-GET http://<ws_admin_host>:<ws_admin_port>/admin/rooms/presence?uuids=<csv>
+GET  /admin/rooms/presence?uuids=<csv>
+POST /admin/rooms/{uuid}/playback
+POST /admin/rooms/{uuid}/broadcast
+POST /admin/rooms/{uuid}/clients/{clientId}/disconnect
+GET  /admin/rooms/{uuid}/events/stream
+GET  /admin/events/stream
+POST /admin/events
+GET  /healthz
 ```
 
-Defaults: `127.0.0.1:8766`. The `uuids` query parameter is a comma-separated list of room UUIDv4 values. UUIDs the daemon doesn't currently hold a runtime for are silently absent from the response.
+Defaults: `127.0.0.1:8766`.
 
 ### Authentication
 
-Every request must carry an `X-PBSync-Admin` header:
+Every request (except `/healthz`) must carry an `X-PBSync-Admin` header:
 
 ```
 X-PBSync-Admin: t=<unix-ms>,sig=<hex>
 ```
 
 - `t` — current time in milliseconds since epoch. Requests outside ±30 s of the daemon's clock are rejected with 401.
-- `sig` — `hmac_sha256(ws_admin_secret, "{method}\n{requestTarget}\n{t}")`. `requestTarget` is the path with query string exactly as it appears on the wire — tampering with `?uuids=…` invalidates the signature.
+- `sig` — `hmac_sha256(ws_admin_secret, "{method}\n{requestTarget}\n{t}")`. `requestTarget` is the path with query string exactly as it appears on the wire — tampering invalidates the signature.
 
 If `ws_admin_secret` is empty the daemon refuses to start the admin endpoint.
 
-### Response (200)
+### `GET /admin/rooms/presence`
 
 ```json
 {
@@ -385,26 +567,31 @@ If `ws_admin_secret` is empty the daemon refuses to start the admin endpoint.
 ```
 
 - `connectedCount` is the true total of currently-connected clients in the room. The `clients` array is capped at 50 entries; `connectedCount` may exceed `clients.length`.
-- `videoPos` is the server-extrapolated position right now (same definition as `ROOM_STATE.videoPos`), not the last-stored value.
+- `videoPos` is the server-extrapolated position right now.
 - `lastActivityMs` is the latest of (a) any client's `lastSeenMs` and (b) the most recent event's `ts`. `null` for a runtime that has never had a client.
-- The `contentIdentity` field was retired in the data substrate spec — the daemon no longer maintains an in-memory content-identity slot. The PHP side reads the persisted `playlist` / `cursor_entry_id` columns directly when it needs to project a "now watching" view.
+
+### `POST /admin/rooms/{uuid}/broadcast`
+
+Triggered by the Nextcloud PHP layer after a DB write (playlist add/remove via dashboard, owner-driven cursor change, toggle flip) so the daemon re-hydrates its runtime cache and fans out the matching WS frame.
+
+```json
+{ "kind": "cursor_change", "userId": "alice" }
+```
+
+`kind` ∈ `cursor_change` / `playlist_update` / `room_state`. `userId` is the Nextcloud owner, forwarded to the event log envelope. The daemon's runtime is re-read from the DB; the appropriate broadcast goes to every connected client.
+
+Returns `200 {"result":"broadcast"}` on success, or `200 {"result":"no_runtime"}` when no client is connected (next JOIN re-hydrates from DB anyway).
+
+### `POST /admin/rooms/{uuid}/playback`, `POST .../clients/.../disconnect`, `GET .../events/stream`, `GET /admin/events/stream`, `POST /admin/events`, `GET /healthz`
+
+Documented inline in the PHP-side service classes (`AdminPlaybackClient`, `AdminKickClient`, `AdminEventClient`, the SSE controllers). They predate v2 and are unchanged.
 
 ### Error codes
 
 | Status | Body | Meaning |
 |---|---|---|
-| `400` | `{"error":"missing_request"}` | The HTTP frame couldn't be parsed. |
+| `400` | `{"error":"missing_request"}` / `{"error":"invalid_json"}` / `{"error":"invalid_action"}` / `{"error":"invalid_kind"}` | The HTTP frame couldn't be parsed or the payload was malformed. |
 | `401` | `{"error":"unauthorized"}` | Missing, malformed, expired, or wrong-signature `X-PBSync-Admin` header. |
-| `404` | `{"error":"not_found"}` | Path other than `/admin/rooms/presence`. |
-| `405` | `{"error":"method_not_allowed"}` | Verb other than `GET`. |
+| `404` | `{"error":"not_found"}` / `{"error":"room_not_found"}` / `{"error":"client_not_found"}` | Path or resource not recognised. |
+| `405` | `{"error":"method_not_allowed"}` | Wrong verb on a known path. |
 | `500` | `{"error":"internal_error"}` | Unexpected daemon-side failure (also logged). |
-
-## Sequence: A drops, reconnects, replays missed events
-
-```
-A           Server
-|<close>     | (server tombstones A for 30 s)
-|            | (A misses events 19 and 20 broadcast in the meantime)
-|--JOIN{clientId, lastEventId=18}->|
-|<-ROOM_STATE{lastEventId:20, recentEvents:[19,20]}-|
-```

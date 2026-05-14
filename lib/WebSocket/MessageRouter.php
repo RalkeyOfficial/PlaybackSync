@@ -6,10 +6,11 @@ namespace OCA\PlaybackSync\WebSocket;
 
 use OCA\PlaybackSync\WebSocket\Handler\BufferHandler;
 use OCA\PlaybackSync\WebSocket\Handler\ClockHandler;
-use OCA\PlaybackSync\WebSocket\Handler\EpisodeChangeHandler;
+use OCA\PlaybackSync\WebSocket\Handler\CursorChangeHandler;
 use OCA\PlaybackSync\WebSocket\Handler\EventHandler;
 use OCA\PlaybackSync\WebSocket\Handler\HeartbeatHandler;
 use OCA\PlaybackSync\WebSocket\Handler\JoinHandler;
+use OCA\PlaybackSync\WebSocket\Handler\PlaylistUpdateHandler;
 use Psr\Log\LoggerInterface;
 use Ratchet\ConnectionInterface;
 use Ratchet\MessageComponentInterface;
@@ -41,7 +42,8 @@ class MessageRouter implements MessageComponentInterface {
 		private readonly MessageEncoder $encoder,
 		private readonly JoinHandler $joinHandler,
 		private readonly EventHandler $eventHandler,
-		private readonly EpisodeChangeHandler $episodeHandler,
+		private readonly CursorChangeHandler $cursorHandler,
+		private readonly PlaylistUpdateHandler $playlistHandler,
 		private readonly HeartbeatHandler $heartbeatHandler,
 		private readonly ClockHandler $clockHandler,
 		private readonly BufferHandler $bufferHandler,
@@ -90,7 +92,8 @@ class MessageRouter implements MessageComponentInterface {
 			match ($type) {
 				'JOIN' => $this->joinHandler->handle($from, $ctx, $this->validator->validateJoin($envelope), $nowMs),
 				'EVENT' => $this->eventHandler->handle($from, $ctx, $this->validator->validateEvent($envelope), $nowMs),
-				'EPISODE_CHANGE_REQUEST' => $this->episodeHandler->handle($from, $ctx, $this->validator->validateEpisodeChange($envelope), $nowMs),
+				'CURSOR_CHANGE_REQUEST' => $this->cursorHandler->handle($from, $ctx, $this->validator->validateCursorChangeRequest($envelope), $nowMs),
+				'PLAYLIST_UPDATE' => $this->playlistHandler->handle($from, $ctx, $this->validator->validatePlaylistUpdate($envelope), $nowMs),
 				'HEARTBEAT' => $this->heartbeatHandler->handle($from, $ctx, $this->validator->validateHeartbeat($envelope), $nowMs),
 				'CLOCK_PING' => $this->clockHandler->handle($from, $ctx, $this->validator->validateClockPing($envelope), $nowMs),
 				'BUFFER_START' => $this->bufferHandler->handleStart($from, $ctx, $this->validator->validateBuffer($envelope), $nowMs),

@@ -6,6 +6,8 @@ namespace OCA\PlaybackSync\Tests\Unit\WebSocket\Handler;
 
 use OCA\PlaybackSync\Db\Room;
 use OCA\PlaybackSync\Db\RoomMapper;
+use OCA\PlaybackSync\Service\CursorService;
+use OCA\PlaybackSync\Service\PlaylistService;
 use OCA\PlaybackSync\Service\RoomService;
 use OCA\PlaybackSync\WebSocket\ConnectionContext;
 use OCA\PlaybackSync\WebSocket\Handler\JoinHandler;
@@ -16,12 +18,15 @@ use OCA\PlaybackSync\WebSocket\WsConfig;
 use OCP\AppFramework\Db\DoesNotExistException;
 use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
+use Psr\Log\NullLogger;
 use Ratchet\ConnectionInterface;
 
 class JoinHandlerTest extends TestCase {
 
 	private RoomMapper&MockObject $mapper;
 	private RoomService&MockObject $service;
+	private PlaylistService&MockObject $playlistService;
+	private CursorService&MockObject $cursorService;
 	private RoomRegistry $registry;
 	private MessageEncoder $encoder;
 	private WsConfig $config;
@@ -34,10 +39,21 @@ class JoinHandlerTest extends TestCase {
 		parent::setUp();
 		$this->mapper = $this->createMock(RoomMapper::class);
 		$this->service = $this->createMock(RoomService::class);
+		$this->playlistService = $this->createMock(PlaylistService::class);
+		$this->cursorService = $this->createMock(CursorService::class);
 		$this->registry = new RoomRegistry(eventLogSize: 50);
 		$this->encoder = new MessageEncoder();
-		$this->config = new WsConfig(5000, 30000, 30000, 30000, 50, 10, 200, 500, 3000, 50);
-		$this->handler = new JoinHandler($this->mapper, $this->service, $this->registry, $this->encoder, $this->config);
+		$this->config = new WsConfig(5000, 30000, 30000, 30000, 50, 10, 2, 200, 500, 3000, 50);
+		$this->handler = new JoinHandler(
+			$this->mapper,
+			$this->service,
+			$this->playlistService,
+			$this->cursorService,
+			$this->registry,
+			$this->encoder,
+			$this->config,
+			new NullLogger(),
+		);
 	}
 
 	private function makeRoom(int $expiresAtMs): Room {
@@ -181,6 +197,7 @@ class JoinHandlerTest extends TestCase {
 			self::NOW_MS,
 			0,
 			new \OCA\PlaybackSync\WebSocket\RateLimiter(10, self::NOW_MS),
+			new \OCA\PlaybackSync\WebSocket\RateLimiter(2, self::NOW_MS),
 		));
 		$runtime->kickClient('bannedId', $this->encoder, blockMs: 30_000, nowMs: self::NOW_MS);
 
@@ -203,9 +220,8 @@ class JoinHandlerTest extends TestCase {
 			'password' => 'secret',
 			'clientId' => null,
 			'lastEventId' => null,
-			'episodeId' => null,
-			'providerId' => null,
-			'pageUrl' => null,
+			'currentlyShowing' => null,
+			'catalogFragment' => [],
 		];
 	}
 }

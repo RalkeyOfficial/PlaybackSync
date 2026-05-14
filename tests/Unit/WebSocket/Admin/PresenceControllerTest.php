@@ -97,6 +97,7 @@ class PresenceControllerTest extends TestCase {
 			nowMs: $nowMs,
 			lastEventId: 0,
 			rateLimiter: new RateLimiter(ratePerSecond: 10, nowMs: $nowMs),
+			playlistRateLimiter: new RateLimiter(ratePerSecond: 2, nowMs: $nowMs),
 		);
 	}
 

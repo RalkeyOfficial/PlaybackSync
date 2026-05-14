@@ -21,6 +21,7 @@ class RoomRuntimeTest extends TestCase {
 			$nowMs,
 			$lastEventId,
 			new RateLimiter(10, $nowMs),
+			new RateLimiter(2, $nowMs),
 		);
 	}
 

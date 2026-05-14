@@ -19,6 +19,7 @@ class ClientConnectionTest extends TestCase {
 			$nowMs,
 			0,
 			new RateLimiter(10, $nowMs),
+			new RateLimiter(2, $nowMs),
 		);
 	}
 

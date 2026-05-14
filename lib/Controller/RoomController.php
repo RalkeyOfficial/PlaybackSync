@@ -5,20 +5,30 @@ declare(strict_types=1);
 namespace OCA\PlaybackSync\Controller;
 
 use OCA\PlaybackSync\Db\Room;
+use OCA\PlaybackSync\Db\RoomMapper;
 use OCA\PlaybackSync\Http\SseStreamResponse;
 use OCA\PlaybackSync\Service\AdminEventClient;
+use OCA\PlaybackSync\Service\CursorService;
+use OCA\PlaybackSync\Service\Dto\CursorTarget;
 use OCA\PlaybackSync\Service\Dto\RoomLiveState;
 use OCA\PlaybackSync\Service\Exceptions\ClientNotFoundException;
 use OCA\PlaybackSync\Service\Exceptions\CreateRestrictedException;
+use OCA\PlaybackSync\Service\Exceptions\CursorEntryNotFoundException;
+use OCA\PlaybackSync\Service\Exceptions\CursorLockedEntryException;
 use OCA\PlaybackSync\Service\Exceptions\InvalidRoomInputException;
 use OCA\PlaybackSync\Service\Exceptions\KickFailedException;
+use OCA\PlaybackSync\Service\Exceptions\NotInPlaylistException;
 use OCA\PlaybackSync\Service\Exceptions\PlaybackCommandFailedException;
 use OCA\PlaybackSync\Service\Exceptions\PlaylistCapExceededException;
+use OCA\PlaybackSync\Service\Exceptions\PlaylistLockedException;
 use OCA\PlaybackSync\Service\Exceptions\RoomNotFoundException;
 use OCA\PlaybackSync\Service\Exceptions\RoomNotLiveException;
 use OCA\PlaybackSync\Service\Exceptions\ToggleConflictException;
+use OCA\PlaybackSync\Service\PlaylistService;
+use OCA\PlaybackSync\Service\RoomBroadcaster;
 use OCA\PlaybackSync\Service\RoomLiveStateEnricher;
 use OCA\PlaybackSync\Service\RoomService;
+use OCP\AppFramework\Db\DoesNotExistException;
 use OCP\AppFramework\Controller;
 use OCP\AppFramework\Http;
 use OCP\AppFramework\Http\Attribute\NoAdminRequired;
@@ -38,6 +48,10 @@ class RoomController extends Controller {
 		private IURLGenerator $urlGenerator,
 		private RoomLiveStateEnricher $liveStateEnricher,
 		private AdminEventClient $eventClient,
+		private PlaylistService $playlistService,
+		private CursorService $cursorService,
+		private RoomBroadcaster $broadcaster,
+		private RoomMapper $roomMapper,
 	) {
 		parent::__construct($appName, $request);
 	}
@@ -285,6 +299,189 @@ class RoomController extends Controller {
 			return $query;
 		}
 		return null;
+	}
+
+	/**
+	 * Flip one or both mode toggles. Either argument may be `null` to
+	 * leave that toggle alone. Rejects the `(true, true)` combination
+	 * with `toggle_conflict`.
+	 */
+	#[NoAdminRequired]
+	public function settings(string $uuid, ?bool $singleMode = null, ?bool $freeformMode = null): DataResponse {
+		if ($this->userId === null) {
+			return new DataResponse(['error' => 'Authentication required.'], Http::STATUS_UNAUTHORIZED);
+		}
+
+		try {
+			$room = $this->service->setToggles($this->userId, $uuid, $singleMode, $freeformMode);
+		} catch (RoomNotFoundException $e) {
+			return new DataResponse(['error' => $e->getMessage()], Http::STATUS_NOT_FOUND);
+		} catch (ToggleConflictException $e) {
+			return new DataResponse(['error' => $e->getMessage(), 'code' => 'toggle_conflict'], Http::STATUS_BAD_REQUEST);
+		}
+
+		$this->broadcaster->broadcastRoomState($uuid, $this->userId);
+		return new DataResponse($this->serializeRoom($room));
+	}
+
+	/**
+	 * Add one curated entry to the room's playlist. Called from the
+	 * dashboard "add video" flow. Wraps `PlaylistService::merge` with
+	 * a single-entry candidate list so the merge rules apply uniformly.
+	 *
+	 * @param string $uuid Room UUID.
+	 * @param string $providerId Provider slug (`youtube`, `crunchyroll`, …).
+	 * @param string $videoId Provider's video identifier; forms half of the natural key.
+	 * @param string $pageUrl Canonical URL the extension should navigate to.
+	 * @param string|null $label Optional human label; auto-filled (e.g. via oEmbed) when omitted.
+	 * @param int|null $episodeNumber Optional series episode number.
+	 * @param int|null $seasonNumber Optional series season number.
+	 */
+	#[NoAdminRequired]
+	public function addPlaylistEntry(
+		string $uuid,
+		string $providerId,
+		string $videoId,
+		string $pageUrl,
+		?string $label = null,
+		?int $episodeNumber = null,
+		?int $seasonNumber = null,
+	): DataResponse {
+		if ($this->userId === null) {
+			return new DataResponse(['error' => 'Authentication required.'], Http::STATUS_UNAUTHORIZED);
+		}
+
+		// Reuse the owner-check helper for opaque 404s on non-owned rooms.
+		try {
+			$this->service->getOwnedRoom($this->userId, $uuid);
+		} catch (RoomNotFoundException $e) {
+			return new DataResponse(['error' => $e->getMessage()], Http::STATUS_NOT_FOUND);
+		}
+
+		try {
+			$this->playlistService->merge(
+				$uuid,
+				[[
+					'providerId' => $providerId,
+					'videoId' => $videoId,
+					'pageUrl' => $pageUrl,
+					'label' => $label,
+					'episodeNumber' => $episodeNumber,
+					'seasonNumber' => $seasonNumber,
+					'source' => 'curated',
+				]],
+				'curated',
+				$this->userId,
+			);
+		} catch (PlaylistLockedException $e) {
+			return new DataResponse(['error' => $e->getMessage(), 'code' => 'single_mode_locked'], Http::STATUS_CONFLICT);
+		} catch (PlaylistCapExceededException $e) {
+			return new DataResponse(['error' => $e->getMessage(), 'code' => $e->capCode], Http::STATUS_BAD_REQUEST);
+		} catch (RoomNotFoundException $e) {
+			return new DataResponse(['error' => $e->getMessage()], Http::STATUS_NOT_FOUND);
+		}
+
+		$this->broadcaster->broadcastPlaylistUpdate($uuid, $this->userId);
+		return new DataResponse($this->serializePlaylist($uuid));
+	}
+
+	#[NoAdminRequired]
+	public function removePlaylistEntry(string $uuid, string $entryId): DataResponse {
+		if ($this->userId === null) {
+			return new DataResponse(['error' => 'Authentication required.'], Http::STATUS_UNAUTHORIZED);
+		}
+
+		try {
+			$this->service->getOwnedRoom($this->userId, $uuid);
+		} catch (RoomNotFoundException $e) {
+			return new DataResponse(['error' => $e->getMessage()], Http::STATUS_NOT_FOUND);
+		}
+
+		try {
+			$this->playlistService->removeEntry($uuid, $entryId);
+		} catch (PlaylistLockedException $e) {
+			return new DataResponse(['error' => $e->getMessage(), 'code' => 'single_mode_locked'], Http::STATUS_CONFLICT);
+		} catch (CursorLockedEntryException $e) {
+			return new DataResponse(['error' => $e->getMessage(), 'code' => 'cursor_locked_entry'], Http::STATUS_CONFLICT);
+		} catch (CursorEntryNotFoundException $e) {
+			return new DataResponse(['error' => $e->getMessage()], Http::STATUS_NOT_FOUND);
+		} catch (RoomNotFoundException $e) {
+			return new DataResponse(['error' => $e->getMessage()], Http::STATUS_NOT_FOUND);
+		}
+
+		$this->broadcaster->broadcastPlaylistUpdate($uuid, $this->userId);
+		return new DataResponse(null, Http::STATUS_NO_CONTENT);
+	}
+
+	/**
+	 * Owner-driven cursor move from the dashboard picker. Uses the same
+	 * `CursorService::requestChange` path as the WS handler so per-mode
+	 * rules apply (single-mode locks new videos; default mode requires
+	 * the entry to exist; freeform auto-appends raw video refs).
+	 */
+	#[NoAdminRequired]
+	public function setCursor(string $uuid, string $targetEntryId): DataResponse {
+		if ($this->userId === null) {
+			return new DataResponse(['error' => 'Authentication required.'], Http::STATUS_UNAUTHORIZED);
+		}
+
+		try {
+			$this->service->getOwnedRoom($this->userId, $uuid);
+		} catch (RoomNotFoundException $e) {
+			return new DataResponse(['error' => $e->getMessage()], Http::STATUS_NOT_FOUND);
+		}
+
+		try {
+			$this->cursorService->requestChange($uuid, CursorTarget::byEntryId($targetEntryId), $this->userId);
+		} catch (PlaylistLockedException $e) {
+			return new DataResponse(['error' => $e->getMessage(), 'code' => 'single_mode_locked'], Http::STATUS_CONFLICT);
+		} catch (NotInPlaylistException $e) {
+			return new DataResponse(['error' => $e->getMessage(), 'code' => 'not_in_playlist'], Http::STATUS_BAD_REQUEST);
+		} catch (CursorEntryNotFoundException $e) {
+			return new DataResponse(['error' => $e->getMessage(), 'code' => 'not_in_playlist'], Http::STATUS_BAD_REQUEST);
+		} catch (RoomNotFoundException $e) {
+			return new DataResponse(['error' => $e->getMessage()], Http::STATUS_NOT_FOUND);
+		}
+
+		$this->broadcaster->broadcastCursorChange($uuid, $this->userId);
+		return new DataResponse(null, Http::STATUS_NO_CONTENT);
+	}
+
+	#[NoAdminRequired]
+	public function playlist(string $uuid): DataResponse {
+		if ($this->userId === null) {
+			return new DataResponse(['error' => 'Authentication required.'], Http::STATUS_UNAUTHORIZED);
+		}
+
+		try {
+			$this->service->getOwnedRoom($this->userId, $uuid);
+		} catch (RoomNotFoundException $e) {
+			return new DataResponse(['error' => $e->getMessage()], Http::STATUS_NOT_FOUND);
+		}
+
+		return new DataResponse($this->serializePlaylist($uuid));
+	}
+
+	/**
+	 * Re-read the room and project the current playlist + version onto
+	 * the wire shape used by `GET /playlist` and the response of
+	 * `POST /playlist/entries`. Centralised so the version string is
+	 * computed the same way the WS encoder computes it.
+	 *
+	 * @return array{entries: list<array<string, mixed>>, cursorEntryId: ?string, playlistVersion: string}
+	 */
+	private function serializePlaylist(string $uuid): array {
+		try {
+			$room = $this->roomMapper->findByUuid($uuid);
+		} catch (DoesNotExistException) {
+			return ['entries' => [], 'cursorEntryId' => null, 'playlistVersion' => 'v0'];
+		}
+		$entries = $room->getPlaylistEntries();
+		return [
+			'entries' => array_map(static fn ($e) => $e->toArray(), $entries),
+			'cursorEntryId' => $room->getCursorEntryId(),
+			'playlistVersion' => \OCA\PlaybackSync\WebSocket\MessageEncoder::playlistVersion($entries),
+		];
 	}
 
 	/**

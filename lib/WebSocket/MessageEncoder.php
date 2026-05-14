@@ -7,18 +7,14 @@ namespace OCA\PlaybackSync\WebSocket;
 use OCA\PlaybackSync\Db\PlaylistEntry;
 
 /**
- * Builds JSON envelopes for every server→client message in the v1 protocol.
+ * Builds JSON envelopes for every server→client message in the v2
+ * protocol. Every method returns the wire-format string ready for
+ * `ConnectionInterface::send()`. Keeping the encoder isolated lets
+ * handlers express intent ("send a ROOM_STATE") instead of hand-rolling
+ * JSON objects and makes the protocol shape easy to spot in one file.
  *
- * Every method returns the wire-format string ready for
- * `ConnectionInterface::send()`. Keeping the encoder isolated lets the
- * handlers express intent ("send a STATE") instead of hand-rolling JSON
- * objects, and makes the protocol shape easy to spot in one file.
- *
- * The v1 wire frames still carry the legacy `providerId` / `episodeId` /
- * `pageUrl` / `contentKey` fields. With the new playlist+cursor data
- * substrate, those fields are derived from the room's current cursor entry
- * — `videoId` plays the role of the old `episodeId` on the wire. The
- * protocol spec will rename these fields and add `entryId` proper.
+ * Wire reference: CONTENT_MODEL_PROTOCOL.md (and the protocol spec at
+ * `agent-os/specs/2026-05-14-1830-content-model-protocol/plan.md`).
  */
 class MessageEncoder {
 
@@ -32,27 +28,31 @@ class MessageEncoder {
 	}
 
 	/**
-	 * @param list<array{type: string, value?: mixed, clientId: string, ts: int, eventId: int}> $recentEvents
+	 * @param list<PlaylistEntry> $playlist Full playlist; used to derive `playlistVersion`.
+	 * @param list<array{type: string, value?: mixed, clientId: string, ts: int, eventId: int}> $recentEvents Tail of playback events the joiner missed on the previous connection.
 	 */
 	public function roomState(
 		string $clientId,
 		PlaybackState $state,
 		?PlaylistEntry $cursorEntry,
+		bool $singleMode,
+		bool $freeformMode,
+		array $playlist,
 		int $serverTsMs,
 		array $recentEvents = [],
 	): string {
 		$payload = [
 			'type' => 'ROOM_STATE',
 			'clientId' => $clientId,
+			'singleMode' => $singleMode,
+			'freeformMode' => $freeformMode,
+			'cursor' => $cursorEntry !== null ? $this->encodeCursor($cursorEntry) : null,
+			'playlistVersion' => self::playlistVersion($playlist),
 			'playerState' => $state->playerState,
 			'videoPos' => $state->expectedTime($serverTsMs),
 			'lastEventId' => $state->eventId,
 			'serverTs' => $serverTsMs,
 		];
-		$cursor = $this->encodeCursor($cursorEntry);
-		if ($cursor !== null) {
-			$payload += $cursor;
-		}
 		if ($recentEvents !== []) {
 			$payload['recentEvents'] = $recentEvents;
 		}
@@ -69,13 +69,34 @@ class MessageEncoder {
 		]);
 	}
 
-	public function episodeChange(int $eventId, PlaylistEntry $cursorEntry, int $serverTsMs): string {
-		$cursor = $this->encodeCursor($cursorEntry);
+	/**
+	 * `CURSOR_CHANGE` is broadcast after a successful cursor move, and
+	 * is also unicast to a freshly-joined client whose `currentlyShowing`
+	 * mismatches the cursor (steering).
+	 */
+	public function cursorChange(PlaylistEntry $cursorEntry, int $eventId, int $serverTsMs): string {
 		return $this->encode([
-			'type' => 'EPISODE_CHANGE',
+			'type' => 'CURSOR_CHANGE',
+			'cursor' => $this->encodeCursor($cursorEntry),
 			'eventId' => $eventId,
 			'serverTs' => $serverTsMs,
-		] + ($cursor ?? []));
+		]);
+	}
+
+	/**
+	 * `PLAYLIST_UPDATE` carries the full post-merge playlist so all
+	 * clients converge on the same view. The `playlistVersion` lets
+	 * recipients detect whether they already hold this snapshot.
+	 *
+	 * @param list<PlaylistEntry> $entries
+	 */
+	public function playlistUpdate(array $entries, int $serverTsMs): string {
+		return $this->encode([
+			'type' => 'PLAYLIST_UPDATE',
+			'entries' => array_map(fn (PlaylistEntry $e) => $this->encodePlaylistEntry($e), $entries),
+			'playlistVersion' => self::playlistVersion($entries),
+			'serverTs' => $serverTsMs,
+		]);
 	}
 
 	public function syncAdjust(int $serverTsMs, float $targetPos, string $mode): string {
@@ -97,39 +118,59 @@ class MessageEncoder {
 	}
 
 	/**
-	 * Project a `PlaylistEntry` onto the legacy v1 wire shape:
-	 * `providerId` / `episodeId` / `pageUrl` / `contentKey`. The
-	 * `episodeId` field carries the entry's `videoId` for backwards
-	 * compatibility; the protocol spec will rename it on the wire.
+	 * Render a `PlaylistEntry` onto the wire shape consumed by clients.
 	 *
-	 * Returns `null` when there is no current cursor (empty playlist).
-	 *
-	 * @return ?array{providerId: string, episodeId: string, pageUrl: string, contentKey: string}
+	 * @return array{entryId: string, position: int, providerId: string, videoId: string, pageUrl: string, label: ?string, episodeNumber: ?int, seasonNumber: ?int, source: string, addedAt: int, lastSeenAt: int}
 	 */
-	private function encodeCursor(?PlaylistEntry $cursorEntry): ?array {
-		if ($cursorEntry === null) {
-			return null;
-		}
+	private function encodePlaylistEntry(PlaylistEntry $entry): array {
 		return [
-			'providerId' => $cursorEntry->providerId,
-			'episodeId' => $cursorEntry->videoId,
-			'pageUrl' => $cursorEntry->pageUrl,
-			'contentKey' => self::deriveContentKey(
-				$cursorEntry->providerId,
-				$cursorEntry->videoId,
-				$cursorEntry->pageUrl,
-			),
+			'entryId' => $entry->entryId,
+			'position' => $entry->position,
+			'providerId' => $entry->providerId,
+			'videoId' => $entry->videoId,
+			'pageUrl' => $entry->pageUrl,
+			'label' => $entry->label,
+			'episodeNumber' => $entry->episodeNumber,
+			'seasonNumber' => $entry->seasonNumber,
+			'source' => $entry->source,
+			'addedAt' => $entry->addedAt,
+			'lastSeenAt' => $entry->lastSeenAt,
 		];
 	}
 
 	/**
-	 * Stable fingerprint used by the v1 wire for content equality. Same
-	 * algorithm as the retired `ContentIdentity::deriveKey`: lowercased
-	 * provider + lowercased videoId + raw pageUrl. The pageUrl is left
-	 * alone because path case can be load-bearing on some sites.
+	 * Cursor projection carried on `CURSOR_CHANGE` and `ROOM_STATE`. Just
+	 * enough for the client to navigate the tab and label the room state.
+	 *
+	 * @return array{entryId: string, providerId: string, videoId: string, pageUrl: string, label: ?string}
 	 */
-	public static function deriveContentKey(string $providerId, string $videoId, string $pageUrl): string {
-		return hash('sha256', strtolower($providerId) . ':' . strtolower($videoId) . ':' . $pageUrl);
+	private function encodeCursor(PlaylistEntry $cursorEntry): array {
+		return [
+			'entryId' => $cursorEntry->entryId,
+			'providerId' => $cursorEntry->providerId,
+			'videoId' => $cursorEntry->videoId,
+			'pageUrl' => $cursorEntry->pageUrl,
+			'label' => $cursorEntry->label,
+		];
+	}
+
+	/**
+	 * Stable fingerprint over the playlist's `(entryId, position, source,
+	 * lastSeenAt)` tuples. Clients hold the previous `playlistVersion` and
+	 * compare it on `ROOM_STATE` / `PLAYLIST_UPDATE` to skip redundant
+	 * reconciles. SHA-256 keeps collision risk negligible.
+	 *
+	 * @param list<PlaylistEntry> $entries
+	 */
+	public static function playlistVersion(array $entries): string {
+		if ($entries === []) {
+			return 'v0';
+		}
+		$parts = [];
+		foreach ($entries as $entry) {
+			$parts[] = $entry->entryId . ':' . $entry->position . ':' . $entry->source . ':' . $entry->lastSeenAt;
+		}
+		return 'v' . substr(hash('sha256', implode('|', $parts)), 0, 16);
 	}
 
 	private function encode(array $payload): string {

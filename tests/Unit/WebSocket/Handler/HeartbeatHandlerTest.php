@@ -28,14 +28,14 @@ class HeartbeatHandlerTest extends TestCase {
 		parent::setUp();
 		$this->registry = new RoomRegistry(eventLogSize: 50);
 		// Long cooldown of 0 to keep tests focused on drift math.
-		$this->config = new WsConfig(5000, 30000, 30000, 30000, 50, 10, 200, 500, 0, 50);
+		$this->config = new WsConfig(5000, 30000, 30000, 30000, 50, 10, 2, 200, 500, 0, 50);
 		$this->handler = new HeartbeatHandler($this->registry, new MessageEncoder(), $this->config);
 	}
 
 	private function setupClient(int $playEventTs = 0): array {
 		$runtime = $this->registry->getOrCreate(self::UUID, self::NOW + 60_000);
 		$conn = $this->createMock(ConnectionInterface::class);
-		$client = new ClientConnection('A', 'NickA', $conn, self::NOW, 0, new RateLimiter(10, self::NOW));
+		$client = new ClientConnection('A', 'NickA', $conn, self::NOW, 0, new RateLimiter(10, self::NOW), new RateLimiter(2, self::NOW));
 		$runtime->addClient($client);
 		// Pretend room is currently playing, started at videoPos=0 at $playEventTs.
 		$runtime->state = new PlaybackState(PlaybackState::PLAYING, 0.0, $playEventTs, $playEventTs, 0);
@@ -85,7 +85,7 @@ class HeartbeatHandlerTest extends TestCase {
 	public function testCooldownSuppressesCorrection(): void {
 		// Use a fresh registry with a non-zero cooldown.
 		$this->registry = new RoomRegistry(eventLogSize: 50);
-		$this->config = new WsConfig(5000, 30000, 30000, 30000, 50, 10, 200, 500, 3000, 50);
+		$this->config = new WsConfig(5000, 30000, 30000, 30000, 50, 10, 2, 200, 500, 3000, 50);
 		$this->handler = new HeartbeatHandler($this->registry, new MessageEncoder(), $this->config);
 
 		// Play happened 1s ago; cooldown is 3s, so no correction even with big drift.

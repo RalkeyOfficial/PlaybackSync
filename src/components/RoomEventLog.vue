@@ -178,6 +178,8 @@ function iconFor(type: string, category: string) {
 		case 'room_deleted': return IconDelete
 		case 'settings_updated': return IconCog
 		case 'admin_secret_rotated': return IconKey
+		case 'cursor_change': return IconSkipBackward
+		case 'playlist_update': return IconPlusCircle
 	}
 	switch (category) {
 		case 'playback': return IconPlay
@@ -207,6 +209,8 @@ function labelFor(event: EventLogEntry): string {
 		case 'room_deleted': return t('playbacksync', 'Room deleted')
 		case 'settings_updated': return t('playbacksync', 'Settings updated')
 		case 'admin_secret_rotated': return t('playbacksync', 'Admin secret rotated')
+		case 'cursor_change': return t('playbacksync', 'Cursor changed')
+		case 'playlist_update': return t('playbacksync', 'Playlist updated')
 		default: return event.type
 	}
 }

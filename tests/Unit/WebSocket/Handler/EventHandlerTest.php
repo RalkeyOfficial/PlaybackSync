@@ -35,8 +35,8 @@ class EventHandlerTest extends TestCase {
 		$runtime = $this->registry->getOrCreate(self::UUID, self::NOW + 60_000);
 		$connA = $this->createMock(ConnectionInterface::class);
 		$connB = $this->createMock(ConnectionInterface::class);
-		$runtime->addClient(new ClientConnection('A', 'NickA', $connA, self::NOW, 0, new RateLimiter(10, self::NOW)));
-		$runtime->addClient(new ClientConnection('B', 'NickB', $connB, self::NOW, 0, new RateLimiter(10, self::NOW)));
+		$runtime->addClient(new ClientConnection('A', 'NickA', $connA, self::NOW, 0, new RateLimiter(10, self::NOW), new RateLimiter(2, self::NOW)));
+		$runtime->addClient(new ClientConnection('B', 'NickB', $connB, self::NOW, 0, new RateLimiter(10, self::NOW), new RateLimiter(2, self::NOW)));
 		return [$runtime, $connA, $connB];
 	}
 

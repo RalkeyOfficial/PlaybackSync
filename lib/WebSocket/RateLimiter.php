@@ -8,8 +8,9 @@ namespace OCA\PlaybackSync\WebSocket;
  * Per-connection token bucket. Capacity equals the per-second rate, so the
  * bucket starts full and refills smoothly; one event consumes one token.
  *
- * Used to throttle explicit playback events (`EVENT`, `EPISODE_CHANGE_REQUEST`)
- * — a misbehaving client can't flood the room with seek storms.
+ * Used to throttle explicit playback events (`EVENT`, `CURSOR_CHANGE_REQUEST`)
+ * and a separate bucket for `PLAYLIST_UPDATE` — a misbehaving client can't
+ * flood the room with seek storms or scrape submissions.
  */
 class RateLimiter {
 	private float $tokens;

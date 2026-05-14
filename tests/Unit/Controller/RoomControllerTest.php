@@ -6,7 +6,9 @@ namespace OCA\PlaybackSync\Tests\Unit\Controller;
 
 use OCA\PlaybackSync\Controller\RoomController;
 use OCA\PlaybackSync\Db\Room;
+use OCA\PlaybackSync\Db\RoomMapper;
 use OCA\PlaybackSync\Service\AdminEventClient;
+use OCA\PlaybackSync\Service\CursorService;
 use OCA\PlaybackSync\Service\Dto\RoomLiveState;
 use OCA\PlaybackSync\Service\Exceptions\ClientNotFoundException;
 use OCA\PlaybackSync\Service\Exceptions\CreateRestrictedException;
@@ -15,6 +17,8 @@ use OCA\PlaybackSync\Service\Exceptions\KickFailedException;
 use OCA\PlaybackSync\Service\Exceptions\PlaybackCommandFailedException;
 use OCA\PlaybackSync\Service\Exceptions\RoomNotFoundException;
 use OCA\PlaybackSync\Service\Exceptions\RoomNotLiveException;
+use OCA\PlaybackSync\Service\PlaylistService;
+use OCA\PlaybackSync\Service\RoomBroadcaster;
 use OCA\PlaybackSync\Service\RoomLiveStateEnricher;
 use OCA\PlaybackSync\Service\RoomService;
 use OCP\AppFramework\Http;
@@ -31,6 +35,10 @@ class RoomControllerTest extends TestCase {
 	private IURLGenerator&MockObject $urlGenerator;
 	private RoomLiveStateEnricher&MockObject $liveStateEnricher;
 	private AdminEventClient&MockObject $eventClient;
+	private PlaylistService&MockObject $playlistService;
+	private CursorService&MockObject $cursorService;
+	private RoomBroadcaster&MockObject $broadcaster;
+	private RoomMapper&MockObject $roomMapper;
 
 	protected function setUp(): void {
 		parent::setUp();
@@ -56,6 +64,10 @@ class RoomControllerTest extends TestCase {
 		// Default no-op for the event client — tests that exercise the stream
 		// proxy can override via `$this->eventClient->method('streamRoom')`.
 		$this->eventClient = $this->createMock(AdminEventClient::class);
+		$this->playlistService = $this->createMock(PlaylistService::class);
+		$this->cursorService = $this->createMock(CursorService::class);
+		$this->broadcaster = $this->createMock(RoomBroadcaster::class);
+		$this->roomMapper = $this->createMock(RoomMapper::class);
 	}
 
 	private function controller(?string $userId): RoomController {
@@ -67,6 +79,10 @@ class RoomControllerTest extends TestCase {
 			$this->urlGenerator,
 			$this->liveStateEnricher,
 			$this->eventClient,
+			$this->playlistService,
+			$this->cursorService,
+			$this->broadcaster,
+			$this->roomMapper,
 		);
 	}
 

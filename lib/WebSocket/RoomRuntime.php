@@ -59,6 +59,10 @@ class RoomRuntime {
 
 	public ?string $cursorEntryId = null;
 
+	public bool $singleMode = false;
+
+	public bool $freeformMode = false;
+
 	public PlaybackState $state;
 
 	public function __construct(
@@ -83,6 +87,8 @@ class RoomRuntime {
 	public function refreshPlaylistFromDb(Room $room): void {
 		$this->playlist = $room->getPlaylistEntries();
 		$this->cursorEntryId = $room->getCursorEntryId();
+		$this->singleMode = $room->getSingleMode();
+		$this->freeformMode = $room->getFreeformMode();
 	}
 
 	/**
@@ -155,7 +161,7 @@ class RoomRuntime {
 	 * `eventId` is the playback state version (per-room); the SSE wire id is
 	 * allocated separately from the registry.
 	 *
-	 * @param string $type    play|pause|seek|reset|episode_change (use the strings already in use).
+	 * @param string $type    play|pause|seek|reset|cursor_change (use the strings already in use).
 	 * @param mixed  $value   Type-specific scalar (e.g. seek videoPos). Stored under `data.value`.
 	 * @param string $actorId Client nickname, or `'admin'` sentinel for owner-via-dashboard.
 	 */

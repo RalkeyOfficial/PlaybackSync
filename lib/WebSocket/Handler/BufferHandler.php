@@ -57,6 +57,9 @@ class BufferHandler {
 			$client->clientId,
 			$runtime->state,
 			$runtime->cursorEntry(),
+			$runtime->singleMode,
+			$runtime->freeformMode,
+			$runtime->playlist,
 			$nowMs,
 		));
 		unset($payload);

@@ -40,6 +40,7 @@ class PresenceHttpServer implements HttpServerInterface {
 
 	private const KICK_PATTERN = '#^/admin/rooms/(?P<uuid>[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/clients/(?P<clientId>[0-9a-f]{1,64})/disconnect$#';
 	private const PLAYBACK_PATTERN = '#^/admin/rooms/(?P<uuid>[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/playback$#';
+	private const BROADCAST_PATTERN = '#^/admin/rooms/(?P<uuid>[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/broadcast$#';
 	private const EVENTS_STREAM_PATTERN = '#^/admin/rooms/(?P<uuid>[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/events/stream$#';
 
 	private ?HealthController $healthController = null;
@@ -49,6 +50,7 @@ class PresenceHttpServer implements HttpServerInterface {
 		private readonly PresenceController $controller,
 		private readonly KickController $kickController,
 		private readonly PlaybackController $playbackController,
+		private readonly RoomBroadcastController $broadcastController,
 		private readonly EventStreamController $eventStreamController,
 		private readonly EventIngestController $eventIngestController,
 		private readonly LoggerInterface $logger,
@@ -147,6 +149,24 @@ class PresenceHttpServer implements HttpServerInterface {
 				return;
 			}
 
+			if ($method === 'POST' && preg_match(self::BROADCAST_PATTERN, strtolower($path), $m) === 1) {
+				$payload = $this->parseJsonBody($request);
+				if ($payload === null) {
+					$this->respond($conn, 400, ['error' => 'invalid_json']);
+					return;
+				}
+				$kind = is_string($payload['kind'] ?? null) ? $payload['kind'] : '';
+				$ownerUserId = is_string($payload['userId'] ?? null) ? $payload['userId'] : null;
+				$result = $this->broadcastController->broadcast($m['uuid'], $kind, $nowMs, $ownerUserId);
+				match ($result) {
+					RoomBroadcastController::RESULT_BROADCAST => $this->respond($conn, 200, ['result' => 'broadcast']),
+					RoomBroadcastController::RESULT_NO_RUNTIME => $this->respond($conn, 200, ['result' => 'no_runtime']),
+					RoomBroadcastController::RESULT_ROOM_NOT_FOUND => $this->respond($conn, 404, ['error' => 'room_not_found']),
+					RoomBroadcastController::RESULT_INVALID_KIND => $this->respond($conn, 400, ['error' => 'invalid_kind']),
+				};
+				return;
+			}
+
 			if ($method === 'POST' && preg_match(self::PLAYBACK_PATTERN, strtolower($path), $m) === 1) {
 				$payload = $this->parseJsonBody($request);
 				if ($payload === null) {
@@ -179,6 +199,7 @@ class PresenceHttpServer implements HttpServerInterface {
 			if (
 				preg_match(self::KICK_PATTERN, strtolower($path)) === 1
 				|| preg_match(self::PLAYBACK_PATTERN, strtolower($path)) === 1
+				|| preg_match(self::BROADCAST_PATTERN, strtolower($path)) === 1
 				|| preg_match(self::EVENTS_STREAM_PATTERN, strtolower($path)) === 1
 				|| $path === self::ROUTE
 				|| $path === self::GLOBAL_EVENTS_STREAM_ROUTE

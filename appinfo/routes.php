@@ -14,6 +14,11 @@ return [
 		['name' => 'room#clients', 'url' => '/api/v1/rooms/{uuid}/clients', 'verb' => 'GET'],
 		['name' => 'room#kickClient', 'url' => '/api/v1/rooms/{uuid}/clients/{clientId}', 'verb' => 'DELETE'],
 		['name' => 'room#playback', 'url' => '/api/v1/rooms/{uuid}/playback', 'verb' => 'POST'],
+		['name' => 'room#settings', 'url' => '/api/v1/rooms/{uuid}/settings', 'verb' => 'POST'],
+		['name' => 'room#addPlaylistEntry', 'url' => '/api/v1/rooms/{uuid}/playlist/entries', 'verb' => 'POST'],
+		['name' => 'room#removePlaylistEntry', 'url' => '/api/v1/rooms/{uuid}/playlist/entries/{entryId}', 'verb' => 'DELETE'],
+		['name' => 'room#setCursor', 'url' => '/api/v1/rooms/{uuid}/cursor', 'verb' => 'POST'],
+		['name' => 'room#playlist', 'url' => '/api/v1/rooms/{uuid}/playlist', 'verb' => 'GET'],
 		['name' => 'room#eventsStream', 'url' => '/api/v1/rooms/{uuid}/events/stream', 'verb' => 'GET'],
 		['name' => 'room#destroy', 'url' => '/api/v1/rooms/{uuid}', 'verb' => 'DELETE'],
 

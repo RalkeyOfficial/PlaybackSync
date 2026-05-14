@@ -188,10 +188,11 @@ sudo -u www-data php occ config:app:set playbacksync <key> --value <value>
 | `ws_tombstone_ms` | `30000` | How long a disconnected client may reconnect with the same `clientId` to resume its event-replay window. |
 | `ws_kick_block_ms` | `30000` | After an owner-initiated kick, how long the same `clientId` is forbidden from rejoining the room. In-memory only; cleared on daemon restart. |
 | `ws_event_log_size` | `200` | Per-room ring buffer size for replaying events to reconnecting clients. |
-| `ws_rate_limit_events_per_sec` | `10` | Per-connection token-bucket cap on `EVENT` / `EPISODE_CHANGE_REQUEST` messages. |
+| `ws_rate_limit_events_per_sec` | `10` | Per-connection token-bucket cap on `EVENT` / `CURSOR_CHANGE_REQUEST` messages. |
+| `ws_rate_limit_playlist_per_sec` | `2` | Per-connection token-bucket cap on `PLAYLIST_UPDATE` messages (separate bucket from `ws_rate_limit_events_per_sec` so a scrape on JOIN doesn't eat the playback-event budget). |
 | `ws_drift_nudge_threshold_ms` | `200` | Drift below this is ignored. Above this and below the seek threshold triggers `SYNC_ADJUST mode=nudge-rate`. |
 | `ws_drift_seek_threshold_ms` | `500` | Drift at or above this triggers `SYNC_ADJUST mode=seek`. |
-| `ws_drift_cooldown_ms` | `3000` | Drift correction is suppressed for this long after every explicit `EVENT` or `EPISODE_CHANGE`. |
+| `ws_drift_cooldown_ms` | `3000` | Drift correction is suppressed for this long after every explicit `EVENT` or `CURSOR_CHANGE`. |
 | `ws_admin_host` | `127.0.0.1` | Interface for the loopback admin HTTP endpoint. **Keep on loopback** — never proxy this. |
 | `ws_admin_port` | `8766` | TCP port for the admin HTTP endpoint. |
 | `ws_admin_secret` | *(auto-generated)* | Shared secret for HMAC-signed admin requests. Auto-generated on `occ app:enable` / `occ upgrade` via a repair step — operators don't need to set this manually. If somehow empty, the daemon refuses to start the admin endpoint (the WS server itself runs regardless); re-running `occ maintenance:repair` regenerates it. |

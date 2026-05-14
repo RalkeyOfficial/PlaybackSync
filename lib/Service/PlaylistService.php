@@ -8,6 +8,7 @@ use OCA\PlaybackSync\Db\PlaylistEntry;
 use OCA\PlaybackSync\Db\Room;
 use OCA\PlaybackSync\Db\RoomMapper;
 use OCA\PlaybackSync\Service\Exceptions\CursorEntryNotFoundException;
+use OCA\PlaybackSync\Service\Exceptions\CursorLockedEntryException;
 use OCA\PlaybackSync\Service\Exceptions\PlaylistCapExceededException;
 use OCA\PlaybackSync\Service\Exceptions\PlaylistLockedException;
 use OCA\PlaybackSync\Service\Exceptions\RoomNotFoundException;
@@ -248,7 +249,7 @@ class PlaylistService {
 			if ($room->getCursorEntryId() === $entryId) {
 				// Predictable: refuse to delete the entry under the cursor.
 				// Owner advances the cursor first, then deletes.
-				throw new PlaylistLockedException('cannot delete the entry currently referenced by the cursor');
+				throw new CursorLockedEntryException('cannot delete the entry currently referenced by the cursor');
 			}
 
 			$entries = $room->getPlaylistEntries();

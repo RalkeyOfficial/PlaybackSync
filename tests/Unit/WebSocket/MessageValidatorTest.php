@@ -31,7 +31,8 @@ class MessageValidatorTest extends TestCase {
 		$out = $this->v->validateJoin(['type' => 'JOIN', 'password' => 'secret']);
 		$this->assertSame('secret', $out['password']);
 		$this->assertNull($out['clientId']);
-		$this->assertNull($out['episodeId']);
+		$this->assertNull($out['currentlyShowing']);
+		$this->assertSame([], $out['catalogFragment']);
 	}
 
 	public function testValidateJoinRequiresPassword(): void {
@@ -39,25 +40,107 @@ class MessageValidatorTest extends TestCase {
 		$this->v->validateJoin(['type' => 'JOIN']);
 	}
 
-	public function testValidateJoinAcceptsAllContentIdentityFields(): void {
+	public function testValidateJoinAcceptsCurrentlyShowing(): void {
 		$out = $this->v->validateJoin([
 			'type' => 'JOIN',
 			'password' => 'secret',
-			'episodeId' => 'S01E01',
-			'providerId' => 'netflix',
-			'pageUrl' => 'https://example.com/watch/1',
+			'currentlyShowing' => [
+				'providerId' => 'netflix',
+				'videoId' => 'S01E01',
+				'pageUrl' => 'https://example.com/watch/1',
+			],
 		]);
-		$this->assertSame('S01E01', $out['episodeId']);
-		$this->assertSame('netflix', $out['providerId']);
+		$this->assertSame('S01E01', $out['currentlyShowing']['videoId']);
+		$this->assertSame('netflix', $out['currentlyShowing']['providerId']);
 	}
 
-	public function testValidateJoinRejectsPartialContentIdentity(): void {
+	public function testValidateJoinAcceptsCatalogFragment(): void {
+		$out = $this->v->validateJoin([
+			'type' => 'JOIN',
+			'password' => 'secret',
+			'catalogFragment' => [
+				[
+					'providerId' => 'netflix',
+					'videoId' => 'S01E01',
+					'pageUrl' => 'https://example.com/watch/1',
+					'label' => 'Episode 1',
+					'episodeNumber' => 1,
+					'seasonNumber' => 1,
+				],
+			],
+		]);
+		$this->assertCount(1, $out['catalogFragment']);
+		$this->assertSame('Episode 1', $out['catalogFragment'][0]['label']);
+	}
+
+	public function testValidateJoinRejectsPartialCurrentlyShowing(): void {
 		$this->expectException(MessageException::class);
 		$this->v->validateJoin([
 			'type' => 'JOIN',
 			'password' => 'secret',
-			'episodeId' => 'S01E01',
+			'currentlyShowing' => ['providerId' => 'netflix'],
 		]);
+	}
+
+	public function testValidateCursorChangeRequiresEntryOrTarget(): void {
+		$this->expectException(MessageException::class);
+		$this->v->validateCursorChangeRequest(['type' => 'CURSOR_CHANGE_REQUEST', 'clientTs' => 1]);
+	}
+
+	public function testValidateCursorChangeAcceptsEntryId(): void {
+		$out = $this->v->validateCursorChangeRequest([
+			'type' => 'CURSOR_CHANGE_REQUEST',
+			'targetEntryId' => 'e_01',
+			'clientTs' => 1,
+		]);
+		$this->assertSame('e_01', $out['targetEntryId']);
+		$this->assertNull($out['target']);
+	}
+
+	public function testValidateCursorChangeAcceptsRawTarget(): void {
+		$out = $this->v->validateCursorChangeRequest([
+			'type' => 'CURSOR_CHANGE_REQUEST',
+			'target' => [
+				'providerId' => 'youtube',
+				'videoId' => 'abc',
+				'pageUrl' => 'https://yt/watch?v=abc',
+			],
+			'clientTs' => 1,
+		]);
+		$this->assertNull($out['targetEntryId']);
+		$this->assertSame('abc', $out['target']['videoId']);
+	}
+
+	public function testValidateCursorChangeRejectsBothFormsAtOnce(): void {
+		$this->expectException(MessageException::class);
+		$this->v->validateCursorChangeRequest([
+			'type' => 'CURSOR_CHANGE_REQUEST',
+			'targetEntryId' => 'e_01',
+			'target' => ['providerId' => 'a', 'videoId' => 'b', 'pageUrl' => 'c'],
+			'clientTs' => 1,
+		]);
+	}
+
+	public function testValidatePlaylistUpdateRequiresNonEmptyEntries(): void {
+		$this->expectException(MessageException::class);
+		$this->v->validatePlaylistUpdate(['type' => 'PLAYLIST_UPDATE', 'entries' => [], 'clientTs' => 1]);
+	}
+
+	public function testValidatePlaylistUpdateAcceptsScrapedEntries(): void {
+		$out = $this->v->validatePlaylistUpdate([
+			'type' => 'PLAYLIST_UPDATE',
+			'entries' => [
+				[
+					'providerId' => 'cr',
+					'videoId' => 'ep01',
+					'pageUrl' => 'https://cr/ep01',
+					'source' => 'scraped',
+				],
+			],
+			'clientTs' => 1,
+		]);
+		$this->assertCount(1, $out['entries']);
+		$this->assertSame('scraped', $out['entries'][0]['source']);
 	}
 
 	public function testValidateEventRequiresValueForSeek(): void {

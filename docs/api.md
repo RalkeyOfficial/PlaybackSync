@@ -14,6 +14,11 @@ All endpoints live under the prefix `/apps/playbacksync/api/v1/rooms`. The `v1` 
 | `DELETE` | `/rooms/{uuid}`         | Permanently delete one of caller's rooms | `204 No Content`   | Logged in    |
 | `DELETE` | `/rooms/{uuid}/clients/{clientId}` | Forcibly disconnect one connected client | `204 No Content`   | Logged in    |
 | `POST`   | `/rooms/{uuid}/playback` | Owner-initiated play/pause/seek/reset broadcast to every client | `204 No Content` | Logged in |
+| `POST`   | `/rooms/{uuid}/settings` | Flip `singleMode` / `freeformMode`            | `200 OK`           | Logged in    |
+| `POST`   | `/rooms/{uuid}/playlist/entries` | Add one curated playlist entry          | `200 OK`           | Logged in    |
+| `DELETE` | `/rooms/{uuid}/playlist/entries/{entryId}` | Remove a playlist entry           | `204 No Content`   | Logged in    |
+| `POST`   | `/rooms/{uuid}/cursor`  | Move the cursor to an existing entry          | `204 No Content`   | Logged in    |
+| `GET`    | `/rooms/{uuid}/playlist` | Fetch the room's full playlist + version     | `200 OK`           | Logged in    |
 | `GET`    | `/ws/status`            | Whether the WebSocket sync service is usable (installed, configured, and the daemon is reachable) | `200 OK` | Logged in |
 | `GET`    | `/health`               | WebSocket sync daemon liveness + light stats | `200 OK` | Public |
 | `GET`    | `/r/{uuid}`[²]          | Public share link — Basic Auth gate, then 302 to target with sync params | `302 Found` | Public (Basic Auth password) |
@@ -429,6 +434,179 @@ curl -u alice:alice \
   'https://nextcloud.example/index.php/apps/playbacksync/api/v1/rooms/5a66524f-5ba1-4f3d-8897-7c5838c0bd80/playback'
 ```
 
+### Update room settings (toggle modes)
+
+```
+POST /apps/playbacksync/api/v1/rooms/{uuid}/settings
+```
+
+Flip one or both mode toggles. Either field may be omitted (or `null`) to leave that toggle unchanged. The two are mutually exclusive — enabling both in one call (or enabling one when the other is already on, without also disabling it) is rejected with `toggle_conflict`.
+
+#### Request body
+
+```json
+{ "singleMode": true, "freeformMode": false }
+```
+
+| Field          | Type             | Required | Constraints                                                                                  |
+|----------------|------------------|----------|----------------------------------------------------------------------------------------------|
+| `singleMode`   | boolean \| null  | No       | Lock the playlist when `true`. Mutually exclusive with `freeformMode`.                       |
+| `freeformMode` | boolean \| null  | No       | Relax cursor handling when `true`. Mutually exclusive with `singleMode`.                     |
+
+#### Success response
+
+`HTTP 200 OK`. Body is the updated Room object (same shape as `GET /rooms/{uuid}` without `live`).
+
+After the DB write the daemon is asked to re-hydrate its runtime cache via the loopback admin endpoint — connected clients pick up the new toggles on the next `JOIN` / `BUFFER_END` `ROOM_STATE` push.
+
+#### Failure modes
+
+| Status | Trigger                                            | Example body                                                                                |
+|--------|----------------------------------------------------|---------------------------------------------------------------------------------------------|
+| 400    | Both toggles would end up `true` after the update. | `{"error":"singleMode and freeformMode are mutually exclusive.", "code":"toggle_conflict"}` |
+| 404    | Room not yours or doesn't exist.                   | `{"error":"Room not found."}`                                                               |
+
+### Add a curated playlist entry
+
+```
+POST /apps/playbacksync/api/v1/rooms/{uuid}/playlist/entries
+```
+
+Append one entry to the playlist with `source: "curated"`. Same merge rules as `PLAYLIST_UPDATE` over the WebSocket (see [`ws-protocol.md`](ws-protocol.md)) — duplicate `(providerId, videoId)` short-circuits to a `lastSeenAt` refresh and the curated label is preserved.
+
+#### Request body
+
+```json
+{
+  "providerId":   "youtube",
+  "videoId":      "abc111",
+  "pageUrl":      "https://www.youtube.com/watch?v=abc111",
+  "label":        "Hardcore Minecraft Ep 1",
+  "episodeNumber": 1,
+  "seasonNumber":  null
+}
+```
+
+| Field           | Type             | Required | Notes                                                                                       |
+|-----------------|------------------|----------|---------------------------------------------------------------------------------------------|
+| `providerId`    | string           | Yes      | Provider slug (`youtube`, `crunchyroll`, …).                                                |
+| `videoId`       | string           | Yes      | Provider's video identifier; forms half of the `(providerId, videoId)` natural key.         |
+| `pageUrl`       | string           | Yes      | Tab-navigation target carried on `CURSOR_CHANGE` frames.                                    |
+| `label`         | string \| null   | No       | Human label; the dashboard may auto-fill via oEmbed before sending.                         |
+| `episodeNumber` | integer \| null  | No       | Series episode number.                                                                      |
+| `seasonNumber`  | integer \| null  | No       | Series season number.                                                                       |
+
+#### Success response
+
+`HTTP 200 OK`. Body is the full playlist snapshot:
+
+```json
+{
+  "entries": [
+    {
+      "entryId":   "e_a3f5b2c1d4e6f708",
+      "position":  1,
+      "providerId": "youtube",
+      "videoId":    "abc111",
+      "pageUrl":    "https://www.youtube.com/watch?v=abc111",
+      "label":      "Hardcore Minecraft Ep 1",
+      "episodeNumber": 1,
+      "seasonNumber":  null,
+      "source":     "curated",
+      "addedBy":    "alice",
+      "addedAt":    1778325445,
+      "lastSeenAt": 1778325445
+    }
+  ],
+  "cursorEntryId":   null,
+  "playlistVersion": "v8c4d3b2a1f0e9d7b"
+}
+```
+
+The daemon broadcasts a `PLAYLIST_UPDATE` frame to every connected client.
+
+#### Failure modes
+
+| Status | Trigger                                              | Example body                                                                                |
+|--------|------------------------------------------------------|---------------------------------------------------------------------------------------------|
+| 400    | Adding this entry would exceed the per-room cap.     | `{"error":"playlist would exceed per-room cap of 1000", "code":"playlist_cap_exceeded"}`    |
+| 409    | Room has `singleMode: true`.                         | `{"error":"playlist is locked while single mode is enabled", "code":"single_mode_locked"}`  |
+| 404    | Room not yours or doesn't exist.                     | `{"error":"Room not found."}`                                                               |
+
+### Remove a playlist entry
+
+```
+DELETE /apps/playbacksync/api/v1/rooms/{uuid}/playlist/entries/{entryId}
+```
+
+Remove the entry by `entryId`. Renumbers `position` to stay contiguous. Refused when the entry is the current cursor — advance the cursor first.
+
+#### Success response
+
+`HTTP 204 No Content`. Daemon broadcasts a `PLAYLIST_UPDATE` carrying the post-state.
+
+#### Failure modes
+
+| Status | Trigger                                                  | Example body                                                                                |
+|--------|----------------------------------------------------------|---------------------------------------------------------------------------------------------|
+| 409    | Room has `singleMode: true`.                             | `{"error":"playlist is locked while single mode is enabled", "code":"single_mode_locked"}`  |
+| 409    | The entry is the current cursor.                         | `{"error":"cannot delete the entry currently referenced by the cursor", "code":"cursor_locked_entry"}` |
+| 404    | Room not yours, entry doesn't exist, or room doesn't exist. | `{"error":"Room not found."}` / `{"error":"entry e_… not found"}`                        |
+
+### Move the cursor
+
+```
+POST /apps/playbacksync/api/v1/rooms/{uuid}/cursor
+```
+
+Owner-driven cursor move from the dashboard picker. Same per-mode reaction matrix as the WebSocket `CURSOR_CHANGE_REQUEST` path: default + single accept existing `entryId`s; freeform also accepts them. Raw-video auto-append on this endpoint is not supported — for freeform's "jump to a new video" flow, the extension's WS `CURSOR_CHANGE_REQUEST` is the path.
+
+#### Request body
+
+```json
+{ "targetEntryId": "e_05" }
+```
+
+#### Success response
+
+`HTTP 204 No Content`. Daemon broadcasts `CURSOR_CHANGE` to every connected client; playback state resets to paused at position 0.
+
+#### Failure modes
+
+| Status | Trigger                                                  | Example body                                                                                |
+|--------|----------------------------------------------------------|---------------------------------------------------------------------------------------------|
+| 400    | `targetEntryId` doesn't match any entry in the playlist. | `{"error":"cursor target e_… is not in the playlist", "code":"not_in_playlist"}`            |
+| 409    | Caller is trying something single-mode forbids.          | `{"error":"playlist is locked while single mode is enabled", "code":"single_mode_locked"}`  |
+| 404    | Room not yours or doesn't exist.                         | `{"error":"Room not found."}`                                                               |
+
+### Get the playlist
+
+```
+GET /apps/playbacksync/api/v1/rooms/{uuid}/playlist
+```
+
+Fetch the room's full playlist plus its `playlistVersion`. Useful when a client's cached `playlistVersion` is stale relative to what arrived on `ROOM_STATE` and it needs to reconcile.
+
+#### Success response
+
+`HTTP 200 OK`. Same shape as the response of `POST /playlist/entries`:
+
+```json
+{
+  "entries": [ { "entryId": "e_01", "position": 1, "providerId": "...", "videoId": "...", ... } ],
+  "cursorEntryId":   "e_01",
+  "playlistVersion": "v8c4d3b2a1f0e9d7b"
+}
+```
+
+`entries` is sorted by `position` ascending. `playlistVersion` is the same hash the WebSocket encoder emits, so clients can compare it byte-for-byte.
+
+#### Failure modes
+
+| Status | Trigger                          | Example body                  |
+|--------|----------------------------------|-------------------------------|
+| 404    | Room not yours or doesn't exist. | `{"error":"Room not found."}` |
+
 ### WebSocket service status
 
 Tells the caller whether the WebSocket sync service is *usable* on this Nextcloud instance — meaning installed, configured, and the daemon is currently reachable from PHP. Use it to decide whether to expose sync UI in the client and which help affordance to show when sync is not usable.
@@ -621,7 +799,7 @@ You'll notice every example above passes `-H 'OCS-APIRequest: true'`. This is te
 
 ## Forward-looking: future spec deltas
 
-The current `v1` contract above is the playlist+cursor data substrate. Follow-up specs (wire-protocol rename, per-mode behaviour, dashboard UX) will add new endpoints — playlist CRUD (`POST/DELETE/PATCH /rooms/{uuid}/playlist/entries`, `POST /rooms/{uuid}/playlist/reorder`, `PATCH /rooms/{uuid}/cursor`, `PATCH /rooms/{uuid}/settings` for toggle flips) — but never break the shape of the Room or PlaylistEntry objects documented here.
+The endpoints above cover the playlist + cursor data substrate **and** the v2 wire-protocol surface (settings, playlist CRUD, cursor move, playlist read). Per-mode UX specs (`CONTENT_MODEL_DEFAULT.md`, `_SINGLE.md`, `_FREEFORM.md`) will add: reorder (`POST /rooms/{uuid}/playlist/reorder`), promote-to-curated (`POST /rooms/{uuid}/playlist/entries/{entryId}/promote`), and the freeform auto-prune knobs. The Room and PlaylistEntry shapes above are stable — future endpoints add behaviour, they don't break field contracts.
 
 The share endpoint is intentionally separate from the management API. It lives at a different path (`/r/{uuid}` rather than `/api/v1/rooms/{uuid}`), it doesn't require a Nextcloud login, and it's the only place where unauthenticated traffic interacts with PlaybackSync (alongside the public `/health` probe). Keeping it cordoned off makes it easy to reason about the public attack surface in isolation.
 

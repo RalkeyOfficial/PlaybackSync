@@ -23,7 +23,17 @@ class ClientConnection {
 	public ?float $clockOffsetMs = null;
 	public ?float $rttMs = null;
 	public bool $isBuffering = false;
+	/**
+	 * Token bucket for playback-rate traffic: `EVENT` and
+	 * `CURSOR_CHANGE_REQUEST`. Tuned by `ws_rate_limit_events_per_sec`.
+	 */
 	public RateLimiter $rateLimiter;
+	/**
+	 * Separate token bucket for `PLAYLIST_UPDATE` traffic. A scrape on
+	 * JOIN shouldn't eat the same budget as playback events. Tuned by
+	 * `ws_rate_limit_playlist_per_sec`.
+	 */
+	public RateLimiter $playlistRateLimiter;
 	/**
 	 * Reason recorded by the daemon when it initiates a socket close
 	 * out-of-band (e.g. `Tick` killing an idle client). Read by
@@ -40,11 +50,13 @@ class ClientConnection {
 		int $nowMs,
 		int $lastEventId,
 		RateLimiter $rateLimiter,
+		RateLimiter $playlistRateLimiter,
 	) {
 		$this->conn = $conn;
 		$this->lastSeenMs = $nowMs;
 		$this->lastEventId = $lastEventId;
 		$this->rateLimiter = $rateLimiter;
+		$this->playlistRateLimiter = $playlistRateLimiter;
 	}
 
 	public function markSeen(int $nowMs): void {
