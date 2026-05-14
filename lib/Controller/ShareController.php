@@ -23,7 +23,7 @@ use OCP\IURLGenerator;
  *
  * Visitors hit `/apps/playbacksync/r/{uuid}` with the link the room owner
  * shared. The browser surfaces a native password prompt; on a correct
- * password we redirect to `room.targetUrl` with `sync_url` and `sync_password`
+ * password we redirect to `room.bootstrapUrl` with `sync_url` and `sync_password`
  * query parameters appended so a downstream consumer (browser extension,
  * embedded player) can join the synchronized session.
  *
@@ -69,7 +69,7 @@ class ShareController extends Controller {
 			return $this->unauthorized($uuid, throttle: true);
 		}
 
-		$redirectUrl = $this->buildRedirectUrl($room->getTargetUrl(), $uuid, $password);
+		$redirectUrl = $this->buildRedirectUrl($room->getBootstrapUrl(), $uuid, $password);
 		// Explicit 302 — RedirectResponse defaults to 303, which would change
 		// the method semantics from the OLD_CODE contract.
 		return new RedirectResponse($redirectUrl, Http::STATUS_FOUND);
@@ -118,15 +118,15 @@ class ShareController extends Controller {
 	 * `sync_password` (the plaintext just verified) into the target URL's
 	 * query string, preserving any existing parameters and the fragment.
 	 */
-	private function buildRedirectUrl(string $targetUrl, string $uuid, string $password): string {
+	private function buildRedirectUrl(string $bootstrapUrl, string $uuid, string $password): string {
 		$wsUrl = $this->buildWebSocketUrl($uuid);
 
-		$parts = parse_url($targetUrl);
+		$parts = parse_url($bootstrapUrl);
 		if ($parts === false) {
-			// Defensive: targetUrl was validated at room-creation time, so
+			// Defensive: bootstrapUrl was validated at room-creation time, so
 			// reaching here would mean the row is corrupt. Fall back to the
 			// raw URL with the params appended — better than 500ing.
-			$parts = ['path' => $targetUrl];
+			$parts = ['path' => $bootstrapUrl];
 		}
 
 		$existing = [];

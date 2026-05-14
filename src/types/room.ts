@@ -5,11 +5,21 @@ export interface ConnectedClient {
 	lastSeenMs: number
 }
 
-export interface ContentIdentity {
+export type PlaylistEntrySource = 'scraped' | 'curated' | 'auto_appended'
+
+export interface PlaylistEntry {
+	entryId: string
+	position: number
 	providerId: string
-	episodeId: string
+	videoId: string
 	pageUrl: string
-	contentKey: string
+	label: string | null
+	episodeNumber: number | null
+	seasonNumber: number | null
+	source: PlaylistEntrySource
+	addedBy: string
+	addedAt: number
+	lastSeenAt: number
 }
 
 export interface RoomLiveState {
@@ -17,24 +27,39 @@ export interface RoomLiveState {
 	clients: ConnectedClient[]
 	playerState: string
 	videoPos: number
-	contentIdentity: ContentIdentity | null
 	lastActivityMs: number | null
 }
 
 export interface Room {
 	uuid: string
 	name: string | null
-	targetUrl: string
+	bootstrapUrl: string
+	singleMode: boolean
+	freeformMode: boolean
+	playlist: PlaylistEntry[]
+	cursorEntryId: string | null
 	createdAt: number
 	expiresAt: number
 	shareLink: string
 	live: RoomLiveState | null
 }
 
+export interface InitialPlaylistEntry {
+	providerId: string
+	videoId: string
+	pageUrl: string
+	label?: string | null
+	episodeNumber?: number | null
+	seasonNumber?: number | null
+}
+
 export interface CreateRoomPayload {
-	targetUrl: string
+	bootstrapUrl: string
 	name?: string | null
 	ttl?: number | null
+	singleMode?: boolean
+	freeformMode?: boolean
+	initialEntries?: InitialPlaylistEntry[]
 }
 
 export interface CreatedRoom extends Room {

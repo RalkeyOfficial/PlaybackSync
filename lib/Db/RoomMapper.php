@@ -31,6 +31,35 @@ class RoomMapper extends QBMapper {
 	}
 
 	/**
+	 * Fetch a room row with a pessimistic row lock so the caller can
+	 * read-modify-write the JSON `playlist` blob without racing another
+	 * writer. Must be invoked inside an open transaction — the lock is
+	 * released on commit/rollback.
+	 *
+	 * @throws DoesNotExistException
+	 */
+	public function lockRoomForUpdate(string $uuid): Room {
+		$qb = $this->db->getQueryBuilder();
+		$qb->select('*')
+			->from($this->tableName)
+			->where($qb->expr()->eq('uuid', $qb->createNamedParameter($uuid)));
+
+		// `FOR UPDATE` is supported by every database backend the QBMapper
+		// stack runs on (MySQL/MariaDB/PostgreSQL); SQLite is single-writer
+		// already so the statement is harmless there.
+		$sql = $qb->getSQL() . ' FOR UPDATE';
+		$stmt = $this->db->executeQuery($sql, $qb->getParameters(), $qb->getParameterTypes());
+		$row = $stmt->fetchAssociative();
+		$stmt->closeCursor();
+
+		if ($row === false) {
+			throw new DoesNotExistException('Room not found: ' . $uuid);
+		}
+
+		return Room::fromRow($row);
+	}
+
+	/**
 	 * Active (non-expired) rooms owned by a user, newest first.
 	 *
 	 * @return Room[]

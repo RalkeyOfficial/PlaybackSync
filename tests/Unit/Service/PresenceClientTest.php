@@ -76,7 +76,6 @@ class PresenceClientTest extends TestCase {
 					],
 					'playerState' => 'playing',
 					'videoPos' => 42.71,
-					'contentIdentity' => null,
 					'lastActivityMs' => 1_700_000_002_000,
 				],
 			],
@@ -91,7 +90,6 @@ class PresenceClientTest extends TestCase {
 		$this->assertSame('playing', $dto->playerState);
 		$this->assertSame(42.71, $dto->videoPos);
 		$this->assertSame(1_700_000_002_000, $dto->lastActivityMs);
-		$this->assertNull($dto->contentIdentity);
 	}
 
 	public function testGracefullyHandlesNon200Status(): void {
@@ -131,7 +129,6 @@ class PresenceClientTest extends TestCase {
 					'clients' => [],
 					'playerState' => 'paused',
 					'videoPos' => 0.0,
-					'contentIdentity' => null,
 					'lastActivityMs' => null,
 				],
 			],

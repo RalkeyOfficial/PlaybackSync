@@ -36,7 +36,6 @@ class RoomLiveStateEnricherTest extends TestCase {
 			clients: [['clientId' => 'alice', 'isBuffering' => false, 'lastSeenMs' => 1_700_000_000_000]],
 			playerState: 'playing',
 			videoPos: 12.5,
-			contentIdentity: null,
 			lastActivityMs: 1_700_000_000_000,
 		);
 

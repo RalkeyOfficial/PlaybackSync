@@ -9,12 +9,12 @@ use OCA\PlaybackSync\Db\RoomMapper;
 use OCA\PlaybackSync\Service\RoomService;
 use OCA\PlaybackSync\WebSocket\ClientConnection;
 use OCA\PlaybackSync\WebSocket\ConnectionContext;
-use OCA\PlaybackSync\WebSocket\ContentIdentity;
 use OCA\PlaybackSync\WebSocket\MessageEncoder;
 use OCA\PlaybackSync\WebSocket\MessageException;
 use OCA\PlaybackSync\WebSocket\NicknameGenerator;
 use OCA\PlaybackSync\WebSocket\RateLimiter;
 use OCA\PlaybackSync\WebSocket\RoomRegistry;
+use OCA\PlaybackSync\WebSocket\RoomRuntime;
 use OCA\PlaybackSync\WebSocket\WsConfig;
 use OCP\AppFramework\Db\DoesNotExistException;
 use Ratchet\ConnectionInterface;
@@ -22,13 +22,16 @@ use React\EventLoop\Loop;
 
 /**
  * Handles the `JOIN` message: authenticates the connection against the
- * room password, reattaches tombstoned clients, reconciles content
- * identity, and sends back the initial `ROOM_STATE` (with a tail of
- * recent events when this is a reconnect).
+ * room password, reattaches tombstoned clients, hydrates the room
+ * runtime's playlist + cursor cache from the database (so a daemon
+ * restart doesn't lose what the room was watching), and sends back the
+ * initial `ROOM_STATE` (with a tail of recent events when this is a
+ * reconnect).
  *
- * Error contract: any failure throws `MessageException`. The router maps
- * fatal codes (auth/room missing/content mismatch) to a close-after-error
- * frame; the handler does not close the connection itself.
+ * Content-identity reconciliation and joiner steering live in the
+ * protocol spec — under the new playlist+cursor model the wire payload
+ * carries `(providerId, episodeId, pageUrl)` only for backwards
+ * compatibility, and the handler currently ignores it.
  */
 class JoinHandler {
 
@@ -61,8 +64,10 @@ class JoinHandler {
 		}
 
 		$runtime = $this->registry->getOrCreate($room->getUuid(), (int)$room->getExpiresAt());
-
-		$this->reconcileContentIdentity($runtime, $payload, $nowMs);
+		// Hydrate (or refresh) the runtime's playlist + cursor cache from
+		// persisted state. Cheap when the runtime already existed — the
+		// JSON column round-trip plus a sort. Idempotent.
+		$this->hydrateRuntime($runtime, $room);
 
 		$client = $this->reattachOrCreateClient(
 			$runtime,
@@ -96,7 +101,7 @@ class JoinHandler {
 		$conn->send($this->encoder->roomState(
 			$client->clientId,
 			$runtime->state,
-			$runtime->contentIdentity,
+			$runtime->cursorEntry(),
 			$nowMs,
 			$replay,
 		));
@@ -115,37 +120,16 @@ class JoinHandler {
 	}
 
 	/**
-	 * @param array{episodeId: ?string, providerId: ?string, pageUrl: ?string} $payload
+	 * Mirror the persisted playlist + cursor onto the runtime cache. If
+	 * the runtime already has entries it's overwritten — the DB is the
+	 * source of truth.
 	 */
-	private function reconcileContentIdentity(\OCA\PlaybackSync\WebSocket\RoomRuntime $runtime, array $payload, int $nowMs): void {
-		// All-three or none was already enforced by the validator.
-		if ($payload['episodeId'] === null) {
-			return;
-		}
-		$reportedKey = ContentIdentity::deriveKey(
-			$payload['providerId'],
-			$payload['episodeId'],
-			$payload['pageUrl'],
-		);
-		if ($runtime->contentIdentity === null) {
-			$runtime->contentIdentity = new ContentIdentity(
-				$payload['providerId'],
-				$payload['episodeId'],
-				$payload['pageUrl'],
-			);
-			return;
-		}
-		if (!hash_equals($runtime->contentIdentity->contentKey, $reportedKey)) {
-			throw new MessageException(
-				'CONTENT_MISMATCH',
-				'Reported content identity does not match the room',
-				closeAfter: true,
-			);
-		}
+	private function hydrateRuntime(RoomRuntime $runtime, Room $room): void {
+		$runtime->refreshPlaylistFromDb($room);
 	}
 
 	private function reattachOrCreateClient(
-		\OCA\PlaybackSync\WebSocket\RoomRuntime $runtime,
+		RoomRuntime $runtime,
 		ConnectionInterface $conn,
 		?string $requestedClientId,
 		int $clientLastEventId,

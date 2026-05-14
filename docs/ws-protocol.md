@@ -6,6 +6,15 @@ PlaybackSync sync daemon. The audience is anyone implementing a client
 need to talk to the server should be here. For deployment details see
 [`ws-sync-server.md`](ws-sync-server.md).
 
+> **Transitional state.** The frames documented here are the v1 wire
+> contract from before the playlist + cursor data substrate landed. The
+> server still emits the same field shape — `providerId` / `episodeId`
+> (carries the new `videoId`) / `pageUrl` / `contentKey` are now derived
+> from the room's current cursor entry — so existing clients keep working.
+> A follow-up protocol spec (rename to `CURSOR_CHANGE`, add
+> `PLAYLIST_UPDATE`, change steering rules) is planned but not in effect
+> yet.
+
 ## Connecting
 
 ```
@@ -71,10 +80,20 @@ including replaying any events the client missed.
 - `lastEventId` (integer, optional) — the last `eventId` the client saw
   before its previous connection dropped. The server replays anything newer
   in `ROOM_STATE.recentEvents`.
-- `episodeId`, `providerId`, `pageUrl` (string, optional, all-or-nothing,
+- `episodeId`, `providerId`, `pageUrl` (string, optional, all-or-nothing) —
+  payload fields carried over for backwards compatibility with existing
+  clients. **Server-side handling:** the values are accepted by the
+  message validator but the join handler currently ignores them — the
+  content-identity reconciliation path documented historically (see below)
+  has been retired in favour of the playlist+cursor model. They will be
+  consumed again by the follow-up cursor-change flow.
+- (historical, no longer enforced) once a content
   ≤ 1024 chars each) — content fingerprint. If the room already has an
-  identity established, these three must hash to the same `contentKey` or
-  the connection is rejected with `CONTENT_MISMATCH`.
+  identity was established, these three had to hash to the same
+  `contentKey` or the connection was rejected with `CONTENT_MISMATCH`.
+  Retired in the data substrate spec — joiners are no longer steered based
+  on these fields; the playlist+cursor model handles that responsibility
+  in the protocol spec.
 
 ### `EVENT`
 
@@ -105,7 +124,11 @@ Excess events get `ERROR RATE_LIMITED` and the connection stays open.
 ```
 
 A hard reset. Resets `videoPos` to 0, `playerState` to `paused`, and
-publishes the new `ContentIdentity`. Same rate-limit bucket as `EVENT`.
+broadcasts an `EPISODE_CHANGE` frame carrying the new cursor entry's
+fields. Same rate-limit bucket as `EVENT`. Today the handler is a
+transitional in-memory shim — it overwrites the runtime's cursor without
+persisting to the `playlist` JSON column. Persisted playlist + cursor
+mutations through this path will land with the follow-up protocol spec.
 
 ### `HEARTBEAT`
 
@@ -355,12 +378,6 @@ If `ws_admin_secret` is empty the daemon refuses to start the admin endpoint.
       ],
       "playerState": "playing",
       "videoPos": 42.71,
-      "contentIdentity": {
-        "providerId": "netflix",
-        "episodeId": "S01E03",
-        "pageUrl": "https://www.example.com/watch/12345",
-        "contentKey": "fc4…"
-      },
       "lastActivityMs": 1700000005000
     }
   }
@@ -369,8 +386,8 @@ If `ws_admin_secret` is empty the daemon refuses to start the admin endpoint.
 
 - `connectedCount` is the true total of currently-connected clients in the room. The `clients` array is capped at 50 entries; `connectedCount` may exceed `clients.length`.
 - `videoPos` is the server-extrapolated position right now (same definition as `ROOM_STATE.videoPos`), not the last-stored value.
-- `contentIdentity` is `null` until the first JOIN with content fields establishes one.
 - `lastActivityMs` is the latest of (a) any client's `lastSeenMs` and (b) the most recent event's `ts`. `null` for a runtime that has never had a client.
+- The `contentIdentity` field was retired in the data substrate spec — the daemon no longer maintains an in-memory content-identity slot. The PHP side reads the persisted `playlist` / `cursor_entry_id` columns directly when it needs to project a "now watching" view.
 
 ### Error codes
 

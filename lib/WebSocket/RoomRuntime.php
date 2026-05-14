@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace OCA\PlaybackSync\WebSocket;
 
+use OCA\PlaybackSync\Db\PlaylistEntry;
+use OCA\PlaybackSync\Db\Room;
 use Ratchet\ConnectionInterface;
 
 /**
@@ -45,7 +47,18 @@ class RoomRuntime {
 	 */
 	private array $kickBlocks = [];
 
-	public ?ContentIdentity $contentIdentity = null;
+	/**
+	 * In-memory cache of the persisted playlist, refreshed on JOIN and
+	 * after every successful service-layer write. The DB is the source of
+	 * truth; this cache exists so handlers can read the cursor entry and
+	 * the playlist without a per-message DB round-trip.
+	 *
+	 * @var list<PlaylistEntry>
+	 */
+	public array $playlist = [];
+
+	public ?string $cursorEntryId = null;
+
 	public PlaybackState $state;
 
 	public function __construct(
@@ -59,6 +72,34 @@ class RoomRuntime {
 
 	public function isExpired(int $nowMs): bool {
 		return $this->expiresAtMs <= $nowMs;
+	}
+
+	/**
+	 * Replace this runtime's playlist + cursor cache with the persisted
+	 * state on the supplied Room entity. Called on first JOIN (when the
+	 * runtime is first hydrated) and after every service-layer write
+	 * that mutates the playlist or the cursor.
+	 */
+	public function refreshPlaylistFromDb(Room $room): void {
+		$this->playlist = $room->getPlaylistEntries();
+		$this->cursorEntryId = $room->getCursorEntryId();
+	}
+
+	/**
+	 * Return the playlist entry currently referenced by `cursorEntryId`,
+	 * or null if the cursor is unset or stale (the referenced entry has
+	 * been removed). Linear scan — fine at the 1000-entry per-room cap.
+	 */
+	public function cursorEntry(): ?PlaylistEntry {
+		if ($this->cursorEntryId === null) {
+			return null;
+		}
+		foreach ($this->playlist as $entry) {
+			if ($entry->entryId === $this->cursorEntryId) {
+				return $entry;
+			}
+		}
+		return null;
 	}
 
 	public function addClient(ClientConnection $client): void {

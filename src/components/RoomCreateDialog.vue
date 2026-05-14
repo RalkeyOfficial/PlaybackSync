@@ -11,12 +11,12 @@
 				:maxlength="100" />
 
 			<NcTextField
-				v-model="targetUrl"
+				v-model="bootstrapUrl"
 				type="url"
-				:label="t('playbacksync', 'Target video URL')"
+				:label="t('playbacksync', 'Bootstrap URL')"
 				placeholder="https://example.com/watch/..."
-				:error="!!targetUrlError"
-				:helperText="targetUrlError ?? t('playbacksync', 'The page participants will be redirected to.')"
+				:error="!!bootstrapUrlError"
+				:helperText="bootstrapUrlError ?? t('playbacksync', 'The page participants will be redirected to.')"
 				required />
 
 			<NcSelect
@@ -94,7 +94,7 @@ const FALLBACK_MAX_TTL_SECONDS = 86400
 const MAX_TTL_SECONDS = loadInitialMaxTtl()
 
 const name = ref('')
-const targetUrl = ref('')
+const bootstrapUrl = ref('')
 const customHours = ref(1)
 const customMinutes = ref(0)
 
@@ -147,8 +147,8 @@ function reduceTtlOption(option: TtlOption): number {
 
 const creating = computed(() => roomsStore.creating)
 
-const targetUrlError = computed<string | null>(() => {
-	const value = targetUrl.value.trim()
+const bootstrapUrlError = computed<string | null>(() => {
+	const value = bootstrapUrl.value.trim()
 	if (value === '') {
 		return null
 	}
@@ -183,15 +183,15 @@ const effectiveTtl = computed(() => {
 })
 
 const canSubmit = computed(() => {
-	return targetUrl.value.trim() !== ''
-		&& targetUrlError.value === null
+	return bootstrapUrl.value.trim() !== ''
+		&& bootstrapUrlError.value === null
 		&& customTtlError.value === null
 })
 
 watch(() => props.open, (isOpen) => {
 	if (isOpen) {
 		name.value = ''
-		targetUrl.value = ''
+		bootstrapUrl.value = ''
 		ttlPreset.value = defaultTtlPreset.value
 		customHours.value = Math.min(1, maxCustomHours.value)
 		customMinutes.value = 0
@@ -221,7 +221,7 @@ async function submit() {
 		return
 	}
 	const ok = await roomsStore.create({
-		targetUrl: targetUrl.value.trim(),
+		bootstrapUrl: bootstrapUrl.value.trim(),
 		name: name.value.trim() || null,
 		ttl: effectiveTtl.value,
 	})

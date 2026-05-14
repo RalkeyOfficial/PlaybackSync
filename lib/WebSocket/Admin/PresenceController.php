@@ -44,7 +44,6 @@ class PresenceController {
 	 *     clients: list<array{clientId: string, nickname: string, isBuffering: bool, lastSeenMs: int}>,
 	 *     playerState: string,
 	 *     videoPos: float,
-	 *     contentIdentity: ?array{providerId: string, episodeId: string, pageUrl: string, contentKey: string},
 	 *     lastActivityMs: ?int
 	 * }>
 	 */
@@ -66,7 +65,6 @@ class PresenceController {
 	 *     clients: list<array{clientId: string, nickname: string, isBuffering: bool, lastSeenMs: int}>,
 	 *     playerState: string,
 	 *     videoPos: float,
-	 *     contentIdentity: ?array{providerId: string, episodeId: string, pageUrl: string, contentKey: string},
 	 *     lastActivityMs: ?int
 	 * }
 	 */
@@ -89,14 +87,6 @@ class PresenceController {
 			}
 		}
 
-		$identity = $runtime->contentIdentity;
-		$identityArr = $identity === null ? null : [
-			'providerId' => $identity->providerId,
-			'episodeId' => $identity->episodeId,
-			'pageUrl' => $identity->pageUrl,
-			'contentKey' => $identity->contentKey,
-		];
-
 		// Playback state surfacing: report the extrapolated position the
 		// server believes is current right now, not the last-stored value —
 		// otherwise a "playing" room appears frozen between events.
@@ -108,7 +98,6 @@ class PresenceController {
 			'clients' => $clients,
 			'playerState' => $runtime->state->playerState,
 			'videoPos' => $videoPos,
-			'contentIdentity' => $identityArr,
 			'lastActivityMs' => $runtime->lastActivityMs(),
 		];
 	}

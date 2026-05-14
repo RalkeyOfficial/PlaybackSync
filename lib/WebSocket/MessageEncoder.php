@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace OCA\PlaybackSync\WebSocket;
 
+use OCA\PlaybackSync\Db\PlaylistEntry;
+
 /**
  * Builds JSON envelopes for every server→client message in the v1 protocol.
  *
@@ -11,6 +13,12 @@ namespace OCA\PlaybackSync\WebSocket;
  * `ConnectionInterface::send()`. Keeping the encoder isolated lets the
  * handlers express intent ("send a STATE") instead of hand-rolling JSON
  * objects, and makes the protocol shape easy to spot in one file.
+ *
+ * The v1 wire frames still carry the legacy `providerId` / `episodeId` /
+ * `pageUrl` / `contentKey` fields. With the new playlist+cursor data
+ * substrate, those fields are derived from the room's current cursor entry
+ * — `videoId` plays the role of the old `episodeId` on the wire. The
+ * protocol spec will rename these fields and add `entryId` proper.
  */
 class MessageEncoder {
 
@@ -29,7 +37,7 @@ class MessageEncoder {
 	public function roomState(
 		string $clientId,
 		PlaybackState $state,
-		?ContentIdentity $ci,
+		?PlaylistEntry $cursorEntry,
 		int $serverTsMs,
 		array $recentEvents = [],
 	): string {
@@ -41,11 +49,9 @@ class MessageEncoder {
 			'lastEventId' => $state->eventId,
 			'serverTs' => $serverTsMs,
 		];
-		if ($ci !== null) {
-			$payload['providerId'] = $ci->providerId;
-			$payload['episodeId'] = $ci->episodeId;
-			$payload['pageUrl'] = $ci->pageUrl;
-			$payload['contentKey'] = $ci->contentKey;
+		$cursor = $this->encodeCursor($cursorEntry);
+		if ($cursor !== null) {
+			$payload += $cursor;
 		}
 		if ($recentEvents !== []) {
 			$payload['recentEvents'] = $recentEvents;
@@ -63,16 +69,13 @@ class MessageEncoder {
 		]);
 	}
 
-	public function episodeChange(int $eventId, ContentIdentity $ci, int $serverTsMs): string {
+	public function episodeChange(int $eventId, PlaylistEntry $cursorEntry, int $serverTsMs): string {
+		$cursor = $this->encodeCursor($cursorEntry);
 		return $this->encode([
 			'type' => 'EPISODE_CHANGE',
 			'eventId' => $eventId,
-			'providerId' => $ci->providerId,
-			'episodeId' => $ci->episodeId,
-			'pageUrl' => $ci->pageUrl,
-			'contentKey' => $ci->contentKey,
 			'serverTs' => $serverTsMs,
-		]);
+		] + ($cursor ?? []));
 	}
 
 	public function syncAdjust(int $serverTsMs, float $targetPos, string $mode): string {
@@ -93,16 +96,40 @@ class MessageEncoder {
 		]);
 	}
 
-	public function contentMismatch(string $expectedKey, ?string $reportedKey, int $serverTsMs): string {
-		$payload = [
-			'type' => 'CONTENT_MISMATCH',
-			'expectedContentKey' => $expectedKey,
-			'serverTs' => $serverTsMs,
-		];
-		if ($reportedKey !== null) {
-			$payload['reportedContentKey'] = $reportedKey;
+	/**
+	 * Project a `PlaylistEntry` onto the legacy v1 wire shape:
+	 * `providerId` / `episodeId` / `pageUrl` / `contentKey`. The
+	 * `episodeId` field carries the entry's `videoId` for backwards
+	 * compatibility; the protocol spec will rename it on the wire.
+	 *
+	 * Returns `null` when there is no current cursor (empty playlist).
+	 *
+	 * @return ?array{providerId: string, episodeId: string, pageUrl: string, contentKey: string}
+	 */
+	private function encodeCursor(?PlaylistEntry $cursorEntry): ?array {
+		if ($cursorEntry === null) {
+			return null;
 		}
-		return $this->encode($payload);
+		return [
+			'providerId' => $cursorEntry->providerId,
+			'episodeId' => $cursorEntry->videoId,
+			'pageUrl' => $cursorEntry->pageUrl,
+			'contentKey' => self::deriveContentKey(
+				$cursorEntry->providerId,
+				$cursorEntry->videoId,
+				$cursorEntry->pageUrl,
+			),
+		];
+	}
+
+	/**
+	 * Stable fingerprint used by the v1 wire for content equality. Same
+	 * algorithm as the retired `ContentIdentity::deriveKey`: lowercased
+	 * provider + lowercased videoId + raw pageUrl. The pageUrl is left
+	 * alone because path case can be load-bearing on some sites.
+	 */
+	public static function deriveContentKey(string $providerId, string $videoId, string $pageUrl): string {
+		return hash('sha256', strtolower($providerId) . ':' . strtolower($videoId) . ':' . $pageUrl);
 	}
 
 	private function encode(array $payload): string {

@@ -43,11 +43,11 @@ class ShareControllerTest extends TestCase {
 		);
 	}
 
-	private function makeRoom(string $targetUrl = 'https://video.example/watch'): Room {
+	private function makeRoom(string $bootstrapUrl = 'https://video.example/watch'): Room {
 		$room = new Room();
 		$room->setUuid(self::UUID);
 		$room->setOwnerUserId('alice');
-		$room->setTargetUrl($targetUrl);
+		$room->setBootstrapUrl($bootstrapUrl);
 		$room->setPasswordHash('$argon2id$v=19$m=...$hashbytes');
 		$room->setCreatedAt(1_700_000_000_000);
 		$room->setExpiresAt(1_700_000_900_000);

@@ -13,10 +13,8 @@ export interface RoomStatus {
  * Derive the at-a-glance status of a room from its TTL and live state.
  *
  * The mapping prefers the most actionable state: an expired room is always
- * grey regardless of any stale live payload; a non-null `live` block with
- * no content identity is "Nothing playing" before we look at playerState,
- * because playerState is meaningless without a loaded video. `live === null`
- * is the normal empty-room state (no daemon runtime for this uuid), not a
+ * grey regardless of any stale live payload; a null `live` block is the
+ * normal empty-room state (no daemon runtime for this uuid), not a
  * daemon-down indicator — that is handled separately by the global
  * "Sync server unavailable" banner.
  *
@@ -39,7 +37,7 @@ export function getRoomStatus(
 		return { variant: 'neutral', label: t('playbacksync', 'Expired') }
 	}
 	const live = input.live
-	if (!live || !live.contentIdentity) {
+	if (!live) {
 		return { variant: 'warning', label: t('playbacksync', 'Nothing playing') }
 	}
 	switch (live.playerState) {

@@ -75,7 +75,7 @@ class RoomControllerTest extends TestCase {
 		$room->setUuid('uuid-1');
 		$room->setOwnerUserId($owner);
 		$room->setName('Friday');
-		$room->setTargetUrl('https://example.com/watch');
+		$room->setBootstrapUrl('https://example.com/watch');
 		$room->setCreatedAt(1_700_000_000_000);
 		$room->setExpiresAt(1_700_000_900_000);
 		return $room;
@@ -191,7 +191,7 @@ class RoomControllerTest extends TestCase {
 	 */
 	public function testCreateReturns201WithPasswordOnSuccess(): void {
 		$this->service->method('createRoom')
-			->with('alice', 'https://example.com/', 'Friday', 3600)
+			->with('alice', 'https://example.com/', 'Friday', 3600, false, false, [])
 			->willReturn(['room' => $this->makeRoom(), 'plainPassword' => 'plain-pw-16chars']);
 
 		$response = $this->controller('alice')->create('https://example.com/', 'Friday', 3600);
@@ -208,12 +208,12 @@ class RoomControllerTest extends TestCase {
 	 * to be safely user-facing.
 	 */
 	public function testCreateReturns400OnInvalidInput(): void {
-		$this->service->method('createRoom')->willThrowException(new InvalidRoomInputException('targetUrl must be a valid http(s) URL.'));
+		$this->service->method('createRoom')->willThrowException(new InvalidRoomInputException('bootstrapUrl must be a valid http(s) URL.'));
 
 		$response = $this->controller('alice')->create('bogus');
 
 		$this->assertSame(Http::STATUS_BAD_REQUEST, $response->getStatus());
-		$this->assertSame(['error' => 'targetUrl must be a valid http(s) URL.'], $response->getData());
+		$this->assertSame(['error' => 'bootstrapUrl must be a valid http(s) URL.'], $response->getData());
 	}
 
 	/**
@@ -443,7 +443,6 @@ class RoomControllerTest extends TestCase {
 			],
 			playerState: 'playing',
 			videoPos: 12.5,
-			contentIdentity: null,
 			lastActivityMs: 1_700_000_000_000,
 		);
 		// Override the default-null mock from setUp.
@@ -493,7 +492,6 @@ class RoomControllerTest extends TestCase {
 			],
 			playerState: 'playing',
 			videoPos: 0.0,
-			contentIdentity: null,
 			lastActivityMs: 1_700_000_002_000,
 		);
 		$this->liveStateEnricher = $this->createMock(RoomLiveStateEnricher::class);

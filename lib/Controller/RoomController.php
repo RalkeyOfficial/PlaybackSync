@@ -13,8 +13,10 @@ use OCA\PlaybackSync\Service\Exceptions\CreateRestrictedException;
 use OCA\PlaybackSync\Service\Exceptions\InvalidRoomInputException;
 use OCA\PlaybackSync\Service\Exceptions\KickFailedException;
 use OCA\PlaybackSync\Service\Exceptions\PlaybackCommandFailedException;
+use OCA\PlaybackSync\Service\Exceptions\PlaylistCapExceededException;
 use OCA\PlaybackSync\Service\Exceptions\RoomNotFoundException;
 use OCA\PlaybackSync\Service\Exceptions\RoomNotLiveException;
+use OCA\PlaybackSync\Service\Exceptions\ToggleConflictException;
 use OCA\PlaybackSync\Service\RoomLiveStateEnricher;
 use OCA\PlaybackSync\Service\RoomService;
 use OCP\AppFramework\Controller;
@@ -96,16 +98,43 @@ class RoomController extends Controller {
 		]);
 	}
 
+	/**
+	 * @param string                                                                                                                                          $bootstrapUrl   Share-link redirect target (http(s) URL).
+	 * @param string|null                                                                                                                                     $name           Optional human-readable label.
+	 * @param int|null                                                                                                                                        $ttl            Time-to-live in seconds; clamped to the app-configured max.
+	 * @param bool                                                                                                                                            $singleMode     When true, the playlist is locked (no PLAYLIST_UPDATE). Mutually exclusive with `$freeformMode`.
+	 * @param bool                                                                                                                                            $freeformMode   When true, the cursor handling relaxes (joiner steering off, auto-append on cursor jump). Mutually exclusive with `$singleMode`.
+	 * @param list<array{providerId: string, videoId: string, pageUrl: string, label?: string|null, episodeNumber?: int|null, seasonNumber?: int|null}>|null $initialEntries Curated entries to seed the playlist with at creation time. Defaults to an empty playlist.
+	 */
 	#[NoAdminRequired]
-	public function create(string $targetUrl, ?string $name = null, ?int $ttl = null): DataResponse {
+	public function create(
+		string $bootstrapUrl,
+		?string $name = null,
+		?int $ttl = null,
+		bool $singleMode = false,
+		bool $freeformMode = false,
+		?array $initialEntries = null,
+	): DataResponse {
 		if ($this->userId === null) {
 			return new DataResponse(['error' => 'Authentication required.'], Http::STATUS_UNAUTHORIZED);
 		}
 
 		try {
-			$result = $this->service->createRoom($this->userId, $targetUrl, $name, $ttl);
+			$result = $this->service->createRoom(
+				$this->userId,
+				$bootstrapUrl,
+				$name,
+				$ttl,
+				$singleMode,
+				$freeformMode,
+				$initialEntries ?? [],
+			);
 		} catch (CreateRestrictedException $e) {
 			return new DataResponse(['error' => $e->getMessage()], Http::STATUS_FORBIDDEN);
+		} catch (ToggleConflictException $e) {
+			return new DataResponse(['error' => $e->getMessage(), 'code' => 'toggle_conflict'], Http::STATUS_BAD_REQUEST);
+		} catch (PlaylistCapExceededException $e) {
+			return new DataResponse(['error' => $e->getMessage(), 'code' => $e->capCode], Http::STATUS_BAD_REQUEST);
 		} catch (InvalidRoomInputException $e) {
 			return new DataResponse(['error' => $e->getMessage()], Http::STATUS_BAD_REQUEST);
 		}
@@ -264,10 +293,31 @@ class RoomController extends Controller {
 	 * undefined keys. `null` means the daemon couldn't be reached or has no
 	 * state for this room; an object means current presence + playback.
 	 *
+	 * The playlist and cursor live in the persisted `Room` shape rather
+	 * than in `live` — they survive a daemon restart and are owner-visible
+	 * even when nobody is connected.
+	 *
 	 * @return array{
 	 *     uuid: string,
 	 *     name: ?string,
-	 *     targetUrl: string,
+	 *     bootstrapUrl: string,
+	 *     singleMode: bool,
+	 *     freeformMode: bool,
+	 *     playlist: list<array{
+	 *         entryId: string,
+	 *         position: int,
+	 *         providerId: string,
+	 *         videoId: string,
+	 *         pageUrl: string,
+	 *         label: ?string,
+	 *         episodeNumber: ?int,
+	 *         seasonNumber: ?int,
+	 *         source: string,
+	 *         addedBy: string,
+	 *         addedAt: int,
+	 *         lastSeenAt: int
+	 *     }>,
+	 *     cursorEntryId: ?string,
 	 *     createdAt: int,
 	 *     expiresAt: int,
 	 *     shareLink: string,
@@ -276,7 +326,6 @@ class RoomController extends Controller {
 	 *         clients: list<array{clientId: string, nickname: string, isBuffering: bool, lastSeenMs: int}>,
 	 *         playerState: string,
 	 *         videoPos: float,
-	 *         contentIdentity: ?array{providerId: string, episodeId: string, pageUrl: string, contentKey: string},
 	 *         lastActivityMs: ?int
 	 *     }
 	 * }
@@ -285,7 +334,14 @@ class RoomController extends Controller {
 		return [
 			'uuid' => $room->getUuid(),
 			'name' => $room->getName(),
-			'targetUrl' => $room->getTargetUrl(),
+			'bootstrapUrl' => $room->getBootstrapUrl(),
+			'singleMode' => $room->getSingleMode(),
+			'freeformMode' => $room->getFreeformMode(),
+			'playlist' => array_map(
+				static fn ($entry) => $entry->toArray(),
+				$room->getPlaylistEntries(),
+			),
+			'cursorEntryId' => $room->getCursorEntryId(),
 			'createdAt' => $room->getCreatedAt(),
 			'expiresAt' => $room->getExpiresAt(),
 			'shareLink' => $this->urlGenerator->getAbsoluteURL('/index.php/apps/playbacksync/r/' . $room->getUuid()),

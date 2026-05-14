@@ -50,23 +50,23 @@
 				<section class="room-detail__section">
 					<div class="room-detail__section-head">
 						<IconWeb :size="16" />
-						<h4>{{ t('playbacksync', 'Target video URL') }}</h4>
+						<h4>{{ t('playbacksync', 'Bootstrap URL') }}</h4>
 					</div>
 					<div class="room-detail__field-row">
 						<a
 							class="room-detail__url"
-							:href="room.targetUrl"
-							:title="room.targetUrl"
+							:href="room.bootstrapUrl"
+							:title="room.bootstrapUrl"
 							target="_blank"
 							rel="noopener noreferrer">
-							{{ room.targetUrl }}
+							{{ room.bootstrapUrl }}
 						</a>
 						<NcButton
-							:aria-label="t('playbacksync', 'Copy target URL')"
-							:title="t('playbacksync', 'Copy target URL')"
-							@click="copy(room.targetUrl, 'targetUrl')">
+							:aria-label="t('playbacksync', 'Copy bootstrap URL')"
+							:title="t('playbacksync', 'Copy bootstrap URL')"
+							@click="copy(room.bootstrapUrl, 'bootstrapUrl')">
 							<template #icon>
-								<IconCheck v-if="copied === 'targetUrl'" :size="20" />
+								<IconCheck v-if="copied === 'bootstrapUrl'" :size="20" />
 								<IconCopy v-else :size="20" />
 							</template>
 						</NcButton>
@@ -242,23 +242,23 @@
 					</NcNoteCard>
 				</section>
 
-				<!-- Content identity ------------------------------------------ -->
-				<section v-if="live?.contentIdentity" class="room-detail__section">
+				<!-- Now watching: cursor entry (playlist + cursor UX in a future spec) -->
+				<section v-if="cursorEntry" class="room-detail__section">
 					<div class="room-detail__section-head">
 						<IconMovie :size="16" />
 						<h4>{{ t('playbacksync', 'Now watching') }}</h4>
 					</div>
 					<a
 						class="room-detail__now-watching"
-						:href="live.contentIdentity.pageUrl"
-						:title="live.contentIdentity.pageUrl"
+						:href="cursorEntry.pageUrl"
+						:title="cursorEntry.pageUrl"
 						target="_blank"
 						rel="noopener noreferrer">
 						<span class="room-detail__now-watching-title">
-							{{ live.contentIdentity.providerId }} · {{ live.contentIdentity.episodeId }}
+							{{ cursorEntry.label ?? (cursorEntry.providerId + ' · ' + cursorEntry.videoId) }}
 						</span>
 						<span class="room-detail__now-watching-url">
-							{{ live.contentIdentity.pageUrl }}
+							{{ cursorEntry.pageUrl }}
 						</span>
 					</a>
 				</section>
@@ -391,7 +391,7 @@ const logger = getLoggerBuilder().setApp('playbacksync').detectUser().build()
 const roomsStore = useRoomsStore()
 
 const now = useNow()
-const copied = ref<'shareLink' | 'targetUrl' | null>(null)
+const copied = ref<'shareLink' | 'bootstrapUrl' | null>(null)
 
 /**
  * Freshly-fetched live state. `null` until the dialog opens and the
@@ -438,6 +438,11 @@ const seekInput = ref<string>('')
  * prop's cached value so the dialog never blanks out the count.
  */
 const live = computed(() => (freshLive.value === undefined ? props.room.live : freshLive.value))
+
+const cursorEntry = computed(() => {
+	if (props.room.cursorEntryId === null) return null
+	return props.room.playlist.find((entry) => entry.entryId === props.room.cursorEntryId) ?? null
+})
 
 const status = computed(() => getRoomStatus(
 	{ live: live.value, expiresAt: props.room.expiresAt },
@@ -758,13 +763,13 @@ function parseSeekInput(raw: string): number | null {
  * @param value the string to copy
  * @param kind which field is being copied — drives the icon swap and toast text
  */
-async function copy(value: string, kind: 'shareLink' | 'targetUrl') {
+async function copy(value: string, kind: 'shareLink' | 'bootstrapUrl') {
 	try {
 		await navigator.clipboard.writeText(value)
 		copied.value = kind
 		showSuccess(kind === 'shareLink'
 			? t('playbacksync', 'Share link copied')
-			: t('playbacksync', 'Target URL copied'))
+			: t('playbacksync', 'Bootstrap URL copied'))
 		setTimeout(() => {
 			if (copied.value === kind) {
 				copied.value = null

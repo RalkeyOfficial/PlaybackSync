@@ -20,7 +20,7 @@ class RoomTest extends TestCase {
 		$room->setUuid('5a66524f-5ba1-4f3d-8897-7c5838c0bd80');
 		$room->setOwnerUserId('alice');
 		$room->setName('Friday movie');
-		$room->setTargetUrl('https://example.com/watch/123');
+		$room->setBootstrapUrl('https://example.com/watch/123');
 		$room->setPasswordHash('3|$argon2id$v=19$m=65536,t=4,p=1$abc');
 		$room->setCreatedAt(1_700_000_000_000);
 		$room->setExpiresAt(1_700_086_400_000);
@@ -28,7 +28,7 @@ class RoomTest extends TestCase {
 		$this->assertSame('5a66524f-5ba1-4f3d-8897-7c5838c0bd80', $room->getUuid());
 		$this->assertSame('alice', $room->getOwnerUserId());
 		$this->assertSame('Friday movie', $room->getName());
-		$this->assertSame('https://example.com/watch/123', $room->getTargetUrl());
+		$this->assertSame('https://example.com/watch/123', $room->getBootstrapUrl());
 		$this->assertSame('3|$argon2id$v=19$m=65536,t=4,p=1$abc', $room->getPasswordHash());
 		$this->assertSame(1_700_000_000_000, $room->getCreatedAt());
 		$this->assertSame(1_700_086_400_000, $room->getExpiresAt());

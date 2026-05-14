@@ -6,7 +6,6 @@ namespace OCA\PlaybackSync\Tests\Unit\WebSocket\Admin;
 
 use OCA\PlaybackSync\WebSocket\Admin\PresenceController;
 use OCA\PlaybackSync\WebSocket\ClientConnection;
-use OCA\PlaybackSync\WebSocket\ContentIdentity;
 use OCA\PlaybackSync\WebSocket\PlaybackState;
 use OCA\PlaybackSync\WebSocket\RateLimiter;
 use OCA\PlaybackSync\WebSocket\RoomRegistry;
@@ -58,25 +57,8 @@ class PresenceControllerTest extends TestCase {
 
 		$this->assertSame(PlaybackState::PLAYING, $entry['playerState']);
 		$this->assertIsFloat($entry['videoPos']);
-		$this->assertNull($entry['contentIdentity']);
+		$this->assertArrayNotHasKey('contentIdentity', $entry, 'contentIdentity was retired in the data substrate spec');
 		$this->assertSame(1_700_000_002_500, $entry['lastActivityMs']);
-	}
-
-	public function testSerializesContentIdentityWhenSet(): void {
-		$registry = new RoomRegistry(eventLogSize: 200);
-		$uuid = '33333333-3333-3333-3333-333333333333';
-		$runtime = $registry->getOrCreate($uuid, expiresAtMs: 9_999_999_999_999);
-		$runtime->contentIdentity = new ContentIdentity('netflix', 'S01E03', 'https://example.test/watch/12345');
-
-		$result = $registry === null ? [] : (new PresenceController($registry))->presenceFor([$uuid]);
-		$this->assertArrayHasKey($uuid, $result);
-
-		$identity = $result[$uuid]['contentIdentity'];
-		$this->assertNotNull($identity);
-		$this->assertSame('netflix', $identity['providerId']);
-		$this->assertSame('S01E03', $identity['episodeId']);
-		$this->assertSame('https://example.test/watch/12345', $identity['pageUrl']);
-		$this->assertSame(64, strlen($identity['contentKey']), 'contentKey is sha256 hex');
 	}
 
 	public function testTruncatesClientListAtCap(): void {

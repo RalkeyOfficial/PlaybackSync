@@ -43,12 +43,12 @@
 
 		<a
 			class="room-card__url"
-			:href="room.targetUrl"
-			:title="room.targetUrl"
+			:href="room.bootstrapUrl"
+			:title="room.bootstrapUrl"
 			target="_blank"
 			rel="noopener noreferrer"
 			@click.stop>
-			{{ room.targetUrl }}
+			{{ room.bootstrapUrl }}
 		</a>
 
 		<div class="room-card__ttl" :aria-live="isExpired ? 'off' : 'polite'">

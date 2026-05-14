@@ -34,25 +34,56 @@ Authorization for individual rooms is by *ownership*. The `oc_playbacksync_rooms
 
 Every successful response that includes a room (or rooms) uses the same field shape, with one variation: the `password` field appears *only* on the response from the create endpoint, and only on that one occasion in the room's lifetime. After that, the plaintext is unrecoverable; the database stores only an `argon2id` hash and there is no API surface that returns it.
 
-| Field        | Type             | Nullable | When present | Description                                                                                                                                                                                                                                                                                                |
-|--------------|------------------|----------|--------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `uuid`       | string (UUID v4) | No       | Always       | Public room identifier. Used as the path parameter for every other endpoint.                                                                                                                                                                                                                               |
-| `name`       | string \| `null` | Yes      | Always       | Human-friendly nickname the owner picked at creation. `null` if the owner did not supply one.                                                                                                                                                                                                              |
-| `targetUrl`  | string (URL)     | No       | Always       | Absolute `http://` or `https://` URL participants will eventually be redirected to. Required at creation, never modified after.                                                                                                                                                                            |
-| `createdAt`  | integer (ms)     | No       | Always       | Unix timestamp in **milliseconds** at which the room was created.                                                                                                                                                                                                                                          |
-| `expiresAt`  | integer (ms)     | No       | Always       | Unix timestamp in **milliseconds** at which the room becomes invalid. After this point the row is invisible to API callers and is physically deleted by the prune job within the next hour.                                                                                                               |
-| `shareLink`  | string (URL)     | No       | Always       | Absolute URL of the public Basic-Auth join endpoint — see [Public share endpoint](#public-share-endpoint-ruuid). Clients should display and copy it; opening it in a browser triggers the password prompt.                                                                                                |
-| `password`   | string           | No       | Create only  | The 16-character plaintext one-time password, returned exactly once at creation time. Only ever appears on the `201` response from `POST /rooms`. The list, show, and delete endpoints never include it.                                                                                                  |
+| Field            | Type              | Nullable | When present | Description                                                                                                                                                                                                                                                                                                |
+|------------------|-------------------|----------|--------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `uuid`           | string (UUID v4)  | No       | Always       | Public room identifier. Used as the path parameter for every other endpoint.                                                                                                                                                                                                                               |
+| `name`           | string \| `null`  | Yes      | Always       | Human-friendly nickname the owner picked at creation. `null` if the owner did not supply one.                                                                                                                                                                                                              |
+| `bootstrapUrl`   | string (URL)      | No       | Always       | Absolute `http://` or `https://` URL the share link redirects new visitors to. Distinct from each playlist entry's per-video `pageUrl` (see `PlaylistEntry` below). Required at creation, never modified after.                                                                                            |
+| `singleMode`     | boolean           | No       | Always       | When `true`, the playlist is locked — `PLAYLIST_UPDATE`-style mutations are rejected with `single_mode_locked`. Mutually exclusive with `freeformMode`. Defaults to `false`.                                                                                                                               |
+| `freeformMode`   | boolean           | No       | Always       | When `true`, cursor handling relaxes: joiners are not steered to the cursor, and a viewer jumping to a video not yet in the playlist auto-appends it. Mutually exclusive with `singleMode`. Defaults to `false`.                                                                                           |
+| `playlist`       | `PlaylistEntry[]` | No       | Always       | Ordered list of videos the room can play. See [PlaylistEntry](#the-playlistentry-object) below. May be empty.                                                                                                                                                                                              |
+| `cursorEntryId`  | string \| `null`  | Yes      | Always       | `entryId` of the entry the room is currently playing, or `null` when the playlist is empty.                                                                                                                                                                                                                |
+| `createdAt`      | integer (ms)      | No       | Always       | Unix timestamp in **milliseconds** at which the room was created.                                                                                                                                                                                                                                          |
+| `expiresAt`      | integer (ms)      | No       | Always       | Unix timestamp in **milliseconds** at which the room becomes invalid. After this point the row is invisible to API callers and is physically deleted by the prune job within the next hour.                                                                                                               |
+| `shareLink`      | string (URL)      | No       | Always       | Absolute URL of the public Basic-Auth join endpoint — see [Public share endpoint](#public-share-endpoint-ruuid). Clients should display and copy it; opening it in a browser triggers the password prompt.                                                                                                |
+| `password`       | string            | No       | Create only  | The 16-character plaintext one-time password, returned exactly once at creation time. Only ever appears on the `201` response from `POST /rooms`. The list, show, and delete endpoints never include it.                                                                                                  |
+
+## The PlaylistEntry object
+
+Each entry in `room.playlist` represents one video the room can play. The API surface and the persisted JSON column hold the same field set.
+
+| Field            | Type              | Nullable | Description                                                                                                                                                                                                                          |
+|------------------|-------------------|----------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `entryId`        | string            | No       | Server-assigned, opaque, stable for the entry's lifetime. Shape: `e_` followed by 16 hex chars. Unique within the room; not globally unique.                                                                                         |
+| `position`       | integer           | No       | 1-based ordering within the playlist. Server-managed; renumbered on insert and reorder. Clients should sort by this field when rendering.                                                                                            |
+| `providerId`     | string            | No       | Provider slug — e.g. `"youtube"`, `"crunchyroll"`. Lowercased for merge comparisons.                                                                                                                                                  |
+| `videoId`        | string            | No       | Provider-specific video identifier. The natural key for merges is `(providerId, videoId)`. Lowercased for merge comparisons.                                                                                                         |
+| `pageUrl`        | string (URL)      | No       | The tab-navigation target for clients when this entry becomes the cursor. Distinct from `room.bootstrapUrl` — that URL is for share-link redirects.                                                                                  |
+| `label`          | string \| `null`  | Yes      | Human-readable title. Scraped, owner-set, or fetched via oEmbed; `null` when the source provided none.                                                                                                                               |
+| `episodeNumber`  | integer \| `null` | Yes      | Series-aware episode index. For YouTube playlists this carries the playlist position. `null` for unordered providers.                                                                                                                |
+| `seasonNumber`   | integer \| `null` | Yes      | Optional season metadata. Omitted (`null`) for non-seasoned providers (e.g. YouTube).                                                                                                                                                 |
+| `source`         | string            | No       | Provenance: `"scraped"` (extension contributed it), `"curated"` (owner added it), or `"auto_appended"` (server added it in freeform mode). Affects merge behaviour — curated entries are not overwritten by later scrapes.            |
+| `addedBy`        | string            | No       | `clientId` (or `"owner"`) that introduced the entry. Provenance only.                                                                                                                                                                |
+| `addedAt`        | integer (s)       | No       | Unix timestamp in **seconds** at insert time.                                                                                                                                                                                        |
+| `lastSeenAt`     | integer (s)       | No       | Unix timestamp in **seconds**; refreshed every time a scrape reports this `(providerId, videoId)`. Dashboards may dim entries with old `lastSeenAt` as "stale".                                                                       |
 
 ### Error response shape
 
-Failures use a uniform JSON shape: a single `error` field with a human-readable message. The HTTP status code is the primary signal; the message is for surfacing to the user when it makes sense to do so. Validation errors in particular are designed to be safely showable verbatim — for example, `"targetUrl must be a valid http(s) URL."` is exactly the string the frontend can display in a toast.
+Failures use a uniform JSON shape: a single `error` field with a human-readable message, plus an optional `code` for the conditions where a machine-readable hint helps the client branch. The HTTP status code is the primary signal; the message is for surfacing to the user when it makes sense to do so. Validation errors in particular are designed to be safely showable verbatim — for example, `"bootstrapUrl must be a valid http(s) URL."` is exactly the string the frontend can display in a toast.
 
 ```json
 {
   "error": "Room creation is restricted to administrators."
 }
 ```
+
+When a `code` is present it is one of:
+
+| `code`                    | Status | Meaning                                                                                                          |
+|---------------------------|--------|------------------------------------------------------------------------------------------------------------------|
+| `toggle_conflict`         | 400    | The request asked for both `singleMode: true` and `freeformMode: true`. The two are mutually exclusive.          |
+| `per_message_cap`         | 400    | `initialEntries` (or a `PLAYLIST_UPDATE` batch elsewhere) exceeds the per-call cap of **200** candidate entries. |
+| `playlist_cap_exceeded`   | 400    | The mutation would push the playlist past the per-room cap of **1000** entries. Whole call rolls back.           |
 
 ### Status codes used across the API
 
@@ -80,17 +111,23 @@ Creates a new room owned by the currently-authenticated user, generates a one-ti
 
 ```json
 {
-  "targetUrl": "https://example.com/watch/123",
-  "name":      "Friday movie",
-  "ttl":       21600
+  "bootstrapUrl":   "https://example.com/watch/123",
+  "name":           "Friday movie",
+  "ttl":            21600,
+  "singleMode":     false,
+  "freeformMode":   false,
+  "initialEntries": []
 }
 ```
 
-| Field        | Type    | Required | Constraints                                                                              | Default                               |
-|--------------|---------|----------|------------------------------------------------------------------------------------------|---------------------------------------|
-| `targetUrl`  | string  | Yes      | Must be a valid `http://` or `https://` URL.                                             | —                                     |
-| `name`       | string  | No       | Max 100 characters after trimming. Empty/whitespace is treated as omitted.               | `null`                                |
-| `ttl`        | integer | No       | Time-to-live in **seconds**. Must satisfy `1 ≤ ttl ≤ 86400` (one day).                    | `default_ttl_seconds` IAppConfig key, 86400 if unset |
+| Field            | Type                 | Required | Constraints                                                                                                                                                                                                                          | Default                               |
+|------------------|----------------------|----------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|---------------------------------------|
+| `bootstrapUrl`   | string               | Yes      | Must be a valid `http://` or `https://` URL.                                                                                                                                                                                         | —                                     |
+| `name`           | string               | No       | Max 100 characters after trimming. Empty/whitespace is treated as omitted.                                                                                                                                                           | `null`                                |
+| `ttl`            | integer              | No       | Time-to-live in **seconds**. Must satisfy `1 ≤ ttl ≤ 86400` (one day).                                                                                                                                                               | `default_ttl_seconds` IAppConfig key, 86400 if unset |
+| `singleMode`     | boolean              | No       | Lock the playlist at creation. Mutually exclusive with `freeformMode`.                                                                                                                                                               | `false`                               |
+| `freeformMode`   | boolean              | No       | Enable freeform cursor handling (no steering, auto-append on jump). Mutually exclusive with `singleMode`.                                                                                                                            | `false`                               |
+| `initialEntries` | `PlaylistEntry`-like[] | No     | Curated entries to seed the playlist with. Each must include `providerId`, `videoId`, `pageUrl`; may include `label`, `episodeNumber`, `seasonNumber`. Server assigns `entryId`, `position`, `source: "curated"`, `addedAt`, `lastSeenAt`. Duplicate `(providerId, videoId)` is rejected. Max 1000. | `[]`                                  |
 
 #### Success response
 
@@ -98,25 +135,32 @@ Creates a new room owned by the currently-authenticated user, generates a one-ti
 
 ```json
 {
-  "uuid":      "5a66524f-5ba1-4f3d-8897-7c5838c0bd80",
-  "name":      "Friday movie",
-  "targetUrl": "https://example.com/watch/123",
-  "createdAt": 1778325445000,
-  "expiresAt": 1778347045000,
-  "shareLink": "https://nextcloud.example/index.php/apps/playbacksync/r/5a66524f-...",
-  "password":  "UIjND2muufTfrrel"
+  "uuid":          "5a66524f-5ba1-4f3d-8897-7c5838c0bd80",
+  "name":          "Friday movie",
+  "bootstrapUrl":  "https://example.com/watch/123",
+  "singleMode":    false,
+  "freeformMode":  false,
+  "playlist":      [],
+  "cursorEntryId": null,
+  "createdAt":     1778325445000,
+  "expiresAt":     1778347045000,
+  "shareLink":     "https://nextcloud.example/index.php/apps/playbacksync/r/5a66524f-...",
+  "password":      "UIjND2muufTfrrel"
 }
 ```
 
 #### Failure modes
 
-| Status | Trigger                                                                                                  | Example `error` message                                  |
-|--------|----------------------------------------------------------------------------------------------------------|----------------------------------------------------------|
-| 400    | `targetUrl` missing, malformed, or not http(s).                                                          | `targetUrl must be a valid http(s) URL.`                 |
-| 400    | `name` longer than 100 characters.                                                                       | `name exceeds maximum length.`                           |
-| 400    | `ttl` outside the `[1, 86400]` range.                                                                    | `ttl must be between 1 and 86400 seconds.`               |
-| 401    | No authenticated Nextcloud user on the request.                                                          | `Authentication required.`                               |
-| 403    | `restrict_to_admins` is enabled and the caller is not an admin.                                          | `Room creation is restricted to administrators.`         |
+| Status | Trigger                                                                                                  | Example body                                                                       |
+|--------|----------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------|
+| 400    | `bootstrapUrl` missing, malformed, or not http(s).                                                       | `{"error":"bootstrapUrl must be a valid http(s) URL."}`                            |
+| 400    | `name` longer than 100 characters.                                                                       | `{"error":"name exceeds maximum length."}`                                         |
+| 400    | `ttl` outside the `[1, 86400]` range.                                                                    | `{"error":"ttl must be between 1 and 86400 seconds."}`                             |
+| 400    | Both `singleMode: true` and `freeformMode: true`.                                                        | `{"error":"singleMode and freeformMode are mutually exclusive.", "code":"toggle_conflict"}` |
+| 400    | `initialEntries` contains duplicate `(providerId, videoId)` or is missing a required field.              | `{"error":"initialEntries contains duplicate (providerId, videoId)."}`             |
+| 400    | `initialEntries` longer than 1000.                                                                       | `{"error":"initialEntries exceeds per-room cap of 1000", "code":"playlist_cap_exceeded"}` |
+| 401    | No authenticated Nextcloud user on the request.                                                          | `{"error":"Authentication required."}`                                             |
+| 403    | `restrict_to_admins` is enabled and the caller is not an admin.                                          | `{"error":"Room creation is restricted to administrators."}`                       |
 
 #### Example
 
@@ -125,7 +169,29 @@ curl -u alice:alice \
   -H 'OCS-APIRequest: true' \
   -H 'Content-Type: application/json' \
   -X POST 'https://nextcloud.example/index.php/apps/playbacksync/api/v1/rooms' \
-  -d '{"targetUrl":"https://example.com/watch/123","name":"Friday movie","ttl":21600}'
+  -d '{"bootstrapUrl":"https://example.com/watch/123","name":"Friday movie","ttl":21600}'
+```
+
+To create a single-mode room with one curated entry locked in at creation:
+
+```bash
+curl -u alice:alice \
+  -H 'OCS-APIRequest: true' \
+  -H 'Content-Type: application/json' \
+  -X POST 'https://nextcloud.example/index.php/apps/playbacksync/api/v1/rooms' \
+  -d '{
+    "bootstrapUrl": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    "name":         "Ricks farewell",
+    "singleMode":   true,
+    "initialEntries": [
+      {
+        "providerId": "youtube",
+        "videoId":    "dQw4w9WgXcQ",
+        "pageUrl":    "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+        "label":      "Rick Astley — Never Gonna Give You Up"
+      }
+    ]
+  }'
 ```
 
 ### List your rooms
@@ -144,12 +210,16 @@ Returns the active (non-expired) rooms owned by the currently-authenticated user
 {
   "rooms": [
     {
-      "uuid":      "5a66524f-5ba1-4f3d-8897-7c5838c0bd80",
-      "name":      "Friday movie",
-      "targetUrl": "https://example.com/watch/123",
-      "createdAt": 1778325445000,
-      "expiresAt": 1778347045000,
-      "shareLink": "https://nextcloud.example/index.php/apps/playbacksync/r/5a66524f-..."
+      "uuid":          "5a66524f-5ba1-4f3d-8897-7c5838c0bd80",
+      "name":          "Friday movie",
+      "bootstrapUrl":  "https://example.com/watch/123",
+      "singleMode":    false,
+      "freeformMode":  false,
+      "playlist":      [],
+      "cursorEntryId": null,
+      "createdAt":     1778325445000,
+      "expiresAt":     1778347045000,
+      "shareLink":     "https://nextcloud.example/index.php/apps/playbacksync/r/5a66524f-..."
     }
   ]
 }
@@ -189,12 +259,16 @@ Returns the room with the given UUID, provided it exists, has not expired, and i
 
 ```json
 {
-  "uuid":      "5a66524f-5ba1-4f3d-8897-7c5838c0bd80",
-  "name":      "Friday movie",
-  "targetUrl": "https://example.com/watch/123",
-  "createdAt": 1778325445000,
-  "expiresAt": 1778347045000,
-  "shareLink": "https://nextcloud.example/index.php/apps/playbacksync/r/5a66524f-..."
+  "uuid":          "5a66524f-5ba1-4f3d-8897-7c5838c0bd80",
+  "name":          "Friday movie",
+  "bootstrapUrl":  "https://example.com/watch/123",
+  "singleMode":    false,
+  "freeformMode":  false,
+  "playlist":      [],
+  "cursorEntryId": null,
+  "createdAt":     1778325445000,
+  "expiresAt":     1778347045000,
+  "shareLink":     "https://nextcloud.example/index.php/apps/playbacksync/r/5a66524f-..."
 }
 ```
 
@@ -416,7 +490,7 @@ curl -u alice:alice \
 GET /apps/playbacksync/r/{uuid}
 ```
 
-The link participants are given when an owner shares a room. This is the only path on the app that does not require a Nextcloud login — instead it gates on the room's password via HTTP Basic Auth and, on success, 302-redirects the visitor to the room's `targetUrl` with two query parameters appended (`sync_url` and `sync_password`) that downstream consumers (a browser extension, an embedded player) use to join the synchronized session.
+The link participants are given when an owner shares a room. This is the only path on the app that does not require a Nextcloud login — instead it gates on the room's password via HTTP Basic Auth and, on success, 302-redirects the visitor to the room's `bootstrapUrl` with two query parameters appended (`sync_url` and `sync_password`) that downstream consumers (a browser extension, an embedded player) use to join the synchronized session.
 
 The route lives outside `/api/v1/` because it isn't a JSON API call — it's a redirect target meant to be opened in a browser. The contract intentionally mirrors the original Fastify implementation in `OLD_CODE/server/src/routes/share.ts` so existing extension code continues to work unchanged.
 
@@ -436,14 +510,14 @@ Failed password attempts are registered with Nextcloud's `IThrottler` under the 
 
 #### Success response
 
-`HTTP 302 Found`. Body is intentionally empty; the `Location` header points at the room's `targetUrl` with `sync_url` and `sync_password` merged into its query string. Existing query parameters on `targetUrl` are preserved; the URL fragment, if any, is preserved after the merged query.
+`HTTP 302 Found`. Body is intentionally empty; the `Location` header points at the room's `bootstrapUrl` with `sync_url` and `sync_password` merged into its query string. Existing query parameters on `bootstrapUrl` are preserved; the URL fragment, if any, is preserved after the merged query.
 
 | Query param      | Value                                                                              |
 |------------------|------------------------------------------------------------------------------------|
 | `sync_url`       | `wss://<nextcloud-host>/apps/playbacksync/ws/{uuid}` (`ws://` for plain-HTTP setups). Derived from `IURLGenerator::getAbsoluteURL` — same host the share link was served from. |
 | `sync_password`  | The plaintext password the visitor just submitted via Basic Auth. Forwarded so the downstream consumer can present it on the WebSocket `JOIN`. |
 
-Example `Location` for a room whose `targetUrl` is `https://video.example/watch?ep=2`:
+Example `Location` for a room whose `bootstrapUrl` is `https://video.example/watch?ep=2`:
 
 ```
 https://video.example/watch?ep=2&sync_url=wss%3A%2F%2Fcloud.example%2Fapps%2Fplaybacksync%2Fws%2F5a66524f-...&sync_password=UIjND2muufTfrrel
@@ -545,14 +619,10 @@ curl -s 'https://nextcloud.example/index.php/apps/playbacksync/api/v1/health'
 
 You'll notice every example above passes `-H 'OCS-APIRequest: true'`. This is technically not required for our endpoints (we are not OCS endpoints), but Nextcloud's CSRF middleware treats the presence of that header as a signal that the request is coming from a programmatic client rather than a browser form, which is exactly the situation `curl` invocations are in. Including it is a habit that prevents intermittent CSRF failures on GET-after-state-change scenarios. The frontend's axios calls don't need it because `@nextcloud/axios` automatically injects the CSRF token cookie value.
 
-## Forward-looking: what changes in Phase 2
+## Forward-looking: future spec deltas
 
-When the WebSocket sync server lands, the API surface grows in two additive ways. Neither change breaks the `v1` contract documented above — that's exactly why the prefix is `v1` and not just `api`.
-
-| Change                     | Today                                                | Phase 2                                                                                                       |
-|----------------------------|------------------------------------------------------|---------------------------------------------------------------------------------------------------------------|
-| `lastState` field          | Absent — column does not exist                        | Present on rooms that have had playback activity. Carries paused flag, current time, provider, episode.       |
+The current `v1` contract above is the playlist+cursor data substrate. Follow-up specs (wire-protocol rename, per-mode behaviour, dashboard UX) will add new endpoints — playlist CRUD (`POST/DELETE/PATCH /rooms/{uuid}/playlist/entries`, `POST /rooms/{uuid}/playlist/reorder`, `PATCH /rooms/{uuid}/cursor`, `PATCH /rooms/{uuid}/settings` for toggle flips) — but never break the shape of the Room or PlaylistEntry objects documented here.
 
 The share endpoint is intentionally separate from the management API. It lives at a different path (`/r/{uuid}` rather than `/api/v1/rooms/{uuid}`), it doesn't require a Nextcloud login, and it's the only place where unauthenticated traffic interacts with PlaybackSync (alongside the public `/health` probe). Keeping it cordoned off makes it easy to reason about the public attack surface in isolation.
 
-The `lastState` field will be optional on the response — omitted entirely on rooms that have never had any playback events — so existing API clients are unaffected by its addition. The MVP omits the database column for the same reason: there is no source for the data yet, and adding the column now would just be an empty `NULL`.
+A future spec will add resume-where-we-left-off persistence (throttled writes of `playerState` / `videoPos` to the room row). That field will be optional on the response — omitted entirely on rooms that have never had any playback events — so existing API clients are unaffected by its addition.

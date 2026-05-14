@@ -193,29 +193,10 @@ class JoinHandlerTest extends TestCase {
 		$this->handler->handle($conn, new ConnectionContext(self::ROOM_UUID), $payload, self::NOW_MS + 1000);
 	}
 
-	public function testContentMismatchClosesConnection(): void {
-		$this->mapper->method('findByUuid')->willReturn($this->makeRoom(self::NOW_MS + 60_000));
-		$this->service->method('verifyPassword')->willReturn(true);
-
-		// Pre-set room content identity.
-		$runtime = $this->registry->getOrCreate(self::ROOM_UUID, self::NOW_MS + 60_000);
-		$runtime->contentIdentity = new \OCA\PlaybackSync\WebSocket\ContentIdentity(
-			'netflix',
-			'S01E01',
-			'https://example.com/watch/1',
-		);
-
-		$conn = $this->createMock(ConnectionInterface::class);
-
-		$payload = $this->payload();
-		$payload['providerId'] = 'hulu';
-		$payload['episodeId'] = 'S01E01';
-		$payload['pageUrl'] = 'https://example.com/watch/1';
-
-		$this->expectException(MessageException::class);
-		$this->expectExceptionMessage('content identity does not match');
-		$this->handler->handle($conn, new ConnectionContext(self::ROOM_UUID), $payload, self::NOW_MS);
-	}
+	// CONTENT_MISMATCH (content-identity reconciliation) was removed in the
+	// CONTENT_MODEL_DATA substrate spec — JoinHandler no longer steers
+	// joiners based on the (providerId, episodeId, pageUrl) wire fields.
+	// Steering belongs to CONTENT_MODEL_PROTOCOL and will be re-tested there.
 
 	private function payload(): array {
 		return [

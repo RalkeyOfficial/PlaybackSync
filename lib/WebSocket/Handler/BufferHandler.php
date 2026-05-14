@@ -56,7 +56,7 @@ class BufferHandler {
 		$conn->send($this->encoder->roomState(
 			$client->clientId,
 			$runtime->state,
-			$runtime->contentIdentity,
+			$runtime->cursorEntry(),
 			$nowMs,
 		));
 		unset($payload);

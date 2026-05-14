@@ -20,7 +20,6 @@ final class RoomLiveState {
 	 * @param list<array{clientId: string, nickname: string, isBuffering: bool, lastSeenMs: int}> $clients
 	 * @param string $playerState  `'playing'` | `'paused'` | `'buffering'`.
 	 * @param float  $videoPos     Server-extrapolated playback position, seconds.
-	 * @param array{providerId: string, episodeId: string, pageUrl: string, contentKey: string}|null $contentIdentity
 	 * @param int|null $lastActivityMs Latest activity timestamp known to the
 	 *                                 daemon (max of client lastSeen and last
 	 *                                 event ts), or null for an inert room.
@@ -30,7 +29,6 @@ final class RoomLiveState {
 		public readonly array $clients,
 		public readonly string $playerState,
 		public readonly float $videoPos,
-		public readonly ?array $contentIdentity,
 		public readonly ?int $lastActivityMs,
 	) {
 	}
@@ -60,25 +58,11 @@ final class RoomLiveState {
 			];
 		}
 
-		$identity = null;
-		if (isset($raw['contentIdentity']) && is_array($raw['contentIdentity'])) {
-			$ci = $raw['contentIdentity'];
-			if (isset($ci['providerId'], $ci['episodeId'], $ci['pageUrl'], $ci['contentKey'])) {
-				$identity = [
-					'providerId' => (string)$ci['providerId'],
-					'episodeId' => (string)$ci['episodeId'],
-					'pageUrl' => (string)$ci['pageUrl'],
-					'contentKey' => (string)$ci['contentKey'],
-				];
-			}
-		}
-
 		return new self(
 			connectedCount: (int)$raw['connectedCount'],
 			clients: $clients,
 			playerState: (string)$raw['playerState'],
 			videoPos: (float)$raw['videoPos'],
-			contentIdentity: $identity,
 			lastActivityMs: isset($raw['lastActivityMs']) ? (int)$raw['lastActivityMs'] : null,
 		);
 	}
@@ -89,7 +73,6 @@ final class RoomLiveState {
 	 *     clients: list<array{clientId: string, nickname: string, isBuffering: bool, lastSeenMs: int}>,
 	 *     playerState: string,
 	 *     videoPos: float,
-	 *     contentIdentity: ?array{providerId: string, episodeId: string, pageUrl: string, contentKey: string},
 	 *     lastActivityMs: ?int
 	 * }
 	 */
@@ -99,7 +82,6 @@ final class RoomLiveState {
 			'clients' => $this->clients,
 			'playerState' => $this->playerState,
 			'videoPos' => $this->videoPos,
-			'contentIdentity' => $this->contentIdentity,
 			'lastActivityMs' => $this->lastActivityMs,
 		];
 	}

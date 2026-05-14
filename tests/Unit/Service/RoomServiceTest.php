@@ -236,7 +236,7 @@ class RoomServiceTest extends TestCase {
 		$this->assertSame($expectedExpiry, $result['room']->getExpiresAt());
 	}
 
-	// ─── createRoom: targetUrl validation ───────────────────────────────
+	// ─── createRoom: bootstrapUrl validation ────────────────────────────
 
 	public static function invalidUrlsProvider(): array {
 		return [
@@ -256,7 +256,7 @@ class RoomServiceTest extends TestCase {
 	 * keeps the share-link contract simple.
 	 */
 	#[DataProvider('invalidUrlsProvider')]
-	public function testCreateRoomRejectsInvalidTargetUrl(string $url): void {
+	public function testCreateRoomRejectsInvalidBootstrapUrl(string $url): void {
 		$this->expectException(InvalidRoomInputException::class);
 		$this->service->createRoom('alice', $url, null, null);
 	}
@@ -276,7 +276,7 @@ class RoomServiceTest extends TestCase {
 	#[DataProvider('validUrlsProvider')]
 	public function testCreateRoomAcceptsValidHttpUrls(string $url): void {
 		$result = $this->service->createRoom('alice', $url, null, null);
-		$this->assertSame($url, $result['room']->getTargetUrl());
+		$this->assertSame($url, $result['room']->getBootstrapUrl());
 	}
 
 	// ─── createRoom: name validation ────────────────────────────────────
