@@ -181,11 +181,20 @@ class JoinHandler {
 	 */
 	private function seedFromCurrentlyShowing(RoomRuntime $runtime, array $currentlyShowing, string $clientId): void {
 		try {
-			// Use CursorService with a video ref — in freeform it
-			// auto-appends, in default it'll either resolve to an entry
-			// the merge just inserted or throw NotInPlaylist. The throw
-			// is fine: it means the joiner's tab is stale relative to a
-			// just-merged catalog and steering will take over below.
+			// Default mode's CursorService path won't create entries — only
+			// freeform auto-appends. So in default mode we first merge the
+			// joiner's `currentlyShowing` as a scraped entry, then let
+			// CursorService resolve to it. Without this, a default-mode
+			// joiner with `currentlyShowing` but no usable `catalogFragment`
+			// would leave the room with an empty playlist and null cursor.
+			if (!$runtime->freeformMode) {
+				$this->playlistService->merge(
+					$runtime->uuid,
+					[$currentlyShowing],
+					PlaylistEntry::SOURCE_SCRAPED,
+					$clientId,
+				);
+			}
 			$target = CursorTarget::byVideoRef($currentlyShowing + ['label' => null, 'episodeNumber' => null, 'seasonNumber' => null]);
 			$this->cursorService->requestChange($runtime->uuid, $target, $clientId);
 			$room = $this->roomMapper->findByUuid($runtime->uuid);

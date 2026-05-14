@@ -51,7 +51,8 @@ These appear over and over. Set them up front and substitute through the rest of
 | `ws_idle_close_ms` | `30000` | Connection closed if no `HEARTBEAT` within this window. |
 | `ws_tombstone_ms` | `30000` | Reconnect-with-replay grace window. |
 | `ws_event_log_size` | `200` | Per-room ring buffer size. |
-| `ws_rate_limit_events_per_sec` | `10` | Per-connection cap on `EVENT` / `EPISODE_CHANGE_REQUEST`. |
+| `ws_rate_limit_events_per_sec` | `10` | Per-connection cap on `EVENT` / `CURSOR_CHANGE_REQUEST`. |
+| `ws_rate_limit_playlist_per_sec` | `2` | Per-connection cap on `PLAYLIST_UPDATE` (separate bucket so a JOIN-time scrape doesn't eat the playback-event budget). |
 | `ws_drift_nudge_threshold_ms` | `200` | Drift below this is ignored. |
 | `ws_drift_seek_threshold_ms` | `500` | Drift at or above this triggers a seek correction. |
 | `ws_drift_cooldown_ms` | `3000` | No drift correction for this long after every explicit event. |
