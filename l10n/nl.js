@@ -216,6 +216,7 @@ OC.L10N.register(
 		"Could not update room settings.": "Kon kamerinstellingen niet bijwerken.",
 		"The playlist is locked while single mode is enabled.": "De afspeellijst is vergrendeld zolang enkelmodus aanstaat.",
 		"Playlist size limit reached.": "Maximumaantal items in de afspeellijst bereikt.",
+		"The freeform playlist is full of curated entries. Clear some before adding more.": "De vrije afspeellijst zit vol gecureerde items. Maak er eerst een paar leeg om verder te kunnen.",
 		"Could not add playlist entry.": "Kon item niet aan de afspeellijst toevoegen.",
 		"This entry is currently playing. Advance the cursor first.": "Dit item speelt nu af. Verzet eerst de cursor.",
 		"Could not remove playlist entry.": "Kon item niet uit de afspeellijst verwijderen.",

@@ -11,11 +11,9 @@ use OCA\PlaybackSync\Service\Dto\CursorChangeOutcome;
 use OCA\PlaybackSync\Service\Dto\CursorTarget;
 use OCA\PlaybackSync\Service\Exceptions\CursorEntryNotFoundException;
 use OCA\PlaybackSync\Service\Exceptions\NotInPlaylistException;
-use OCA\PlaybackSync\Service\Exceptions\PlaylistCapExceededException;
 use OCA\PlaybackSync\Service\Exceptions\PlaylistLockedException;
 use OCA\PlaybackSync\Service\Exceptions\RoomNotFoundException;
 use OCP\AppFramework\Db\DoesNotExistException;
-use OCP\AppFramework\Utility\ITimeFactory;
 use OCP\IDBConnection;
 
 /**
@@ -44,7 +42,7 @@ class CursorService {
 	public function __construct(
 		private readonly RoomMapper $mapper,
 		private readonly IDBConnection $db,
-		private readonly ITimeFactory $timeFactory,
+		private readonly PlaylistService $playlistService,
 	) {
 	}
 
@@ -101,7 +99,11 @@ class CursorService {
 		}
 
 		// Freeform + new video → auto-append + cursor move in one row write.
-		$appended = $this->appendEntry($room, $ref, $clientId);
+		// `appendForFreeformCursor` handles the per-room cap, the freeform
+		// auto-append cap (prune), and sets the cursor in-memory; we still
+		// call `commitCursorMove` so the cursor change is persisted in one
+		// write alongside the appended entry.
+		$appended = $this->playlistService->appendForFreeformCursor($room, $ref, $clientId);
 		return $this->commitCursorMove($room, $appended, appendedEntry: $appended, previousCursorEntryId: $previousCursorEntryId);
 	}
 
@@ -122,43 +124,6 @@ class CursorService {
 			}
 		}
 		return null;
-	}
-
-	/**
-	 * @param array{providerId: string, videoId: string, pageUrl: string, label: ?string, episodeNumber: ?int, seasonNumber: ?int} $ref
-	 */
-	private function appendEntry(Room $room, array $ref, string $clientId): PlaylistEntry {
-		$entries = $room->getPlaylistEntries();
-		if (count($entries) + 1 > PlaylistService::PER_ROOM_CAP) {
-			throw new PlaylistCapExceededException(
-				PlaylistCapExceededException::CODE_PER_ROOM,
-				'playlist would exceed per-room cap of ' . PlaylistService::PER_ROOM_CAP,
-			);
-		}
-		$now = $this->timeFactory->getTime();
-		$highest = 0;
-		foreach ($entries as $entry) {
-			if ($entry->position > $highest) {
-				$highest = $entry->position;
-			}
-		}
-		$entry = new PlaylistEntry(
-			entryId: PlaylistEntry::generateEntryId(),
-			position: $highest + 1,
-			providerId: $ref['providerId'],
-			videoId: $ref['videoId'],
-			pageUrl: $ref['pageUrl'],
-			label: $ref['label'],
-			episodeNumber: $ref['episodeNumber'],
-			seasonNumber: $ref['seasonNumber'],
-			source: PlaylistEntry::SOURCE_AUTO_APPENDED,
-			addedBy: $clientId,
-			addedAt: $now,
-			lastSeenAt: $now,
-		);
-		$entries[] = $entry;
-		$room->setPlaylistEntries($entries);
-		return $entry;
 	}
 
 	private function commitCursorMove(Room $room, PlaylistEntry $cursor, ?PlaylistEntry $appendedEntry, ?string $previousCursorEntryId): CursorChangeOutcome {

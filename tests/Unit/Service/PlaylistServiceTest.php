@@ -10,6 +10,7 @@ use OCA\PlaybackSync\Db\RoomMapper;
 use OCA\PlaybackSync\Service\Exceptions\CursorEntryNotFoundException;
 use OCA\PlaybackSync\Service\Exceptions\InvalidEntryPatchException;
 use OCA\PlaybackSync\Service\Exceptions\PlaylistLockedException;
+use OCA\PlaybackSync\Service\FreeformConfig;
 use OCA\PlaybackSync\Service\PlaylistService;
 use OCP\AppFramework\Utility\ITimeFactory;
 use OCP\IDBConnection;
@@ -38,7 +39,12 @@ class PlaylistServiceTest extends TestCase {
 		$this->db = $this->createMock(IDBConnection::class);
 		$this->timeFactory = $this->createMock(ITimeFactory::class);
 		$this->timeFactory->method('getTime')->willReturn(self::NOW_S);
-		$this->service = new PlaylistService($this->mapper, $this->db, $this->timeFactory);
+		$this->service = new PlaylistService(
+			$this->mapper,
+			$this->db,
+			$this->timeFactory,
+			new FreeformConfig(autoAppendCap: 100),
+		);
 	}
 
 	public function testMergePreservesCuratedLabelOnRescrape(): void {

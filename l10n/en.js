@@ -216,6 +216,7 @@ OC.L10N.register(
 		"Could not update room settings.": "Could not update room settings.",
 		"The playlist is locked while single mode is enabled.": "The playlist is locked while single mode is enabled.",
 		"Playlist size limit reached.": "Playlist size limit reached.",
+		"The freeform playlist is full of curated entries. Clear some before adding more.": "The freeform playlist is full of curated entries. Clear some before adding more.",
 		"Could not add playlist entry.": "Could not add playlist entry.",
 		"This entry is currently playing. Advance the cursor first.": "This entry is currently playing. Advance the cursor first.",
 		"Could not remove playlist entry.": "Could not remove playlist entry.",

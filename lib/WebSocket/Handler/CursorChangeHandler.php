@@ -83,7 +83,7 @@ class CursorChangeHandler {
 		} catch (CursorEntryNotFoundException $e) {
 			throw new MessageException('not_in_playlist', $e->getMessage());
 		} catch (PlaylistCapExceededException $e) {
-			throw new MessageException('playlist_cap_exceeded', $e->getMessage());
+			throw new MessageException($e->capCode, $e->getMessage());
 		} catch (RoomNotFoundException) {
 			throw new MessageException('ROOM_NOT_FOUND', 'Room is no longer active', closeAfter: true);
 		}

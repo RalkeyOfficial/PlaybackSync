@@ -32,11 +32,13 @@ class PlaylistService {
 
 	public const PER_MESSAGE_CAP = 200;
 	public const PER_ROOM_CAP = 1000;
+	public const FREEFORM_DEFAULT_CAP = 100;
 
 	public function __construct(
 		private readonly RoomMapper $mapper,
 		private readonly IDBConnection $db,
 		private readonly ITimeFactory $timeFactory,
+		private readonly FreeformConfig $freeformConfig,
 	) {
 	}
 
@@ -151,8 +153,9 @@ class PlaylistService {
 			}
 
 			$room->setPlaylistEntries($entries);
+			$this->pruneAutoAppendedIfOverCap($room, $this->freeformConfig->autoAppendCap);
 			$this->mapper->update($room);
-			return $entries;
+			return $room->getPlaylistEntries();
 		});
 	}
 
@@ -170,49 +173,157 @@ class PlaylistService {
 	 */
 	public function autoAppend(string $roomUuid, array $entryShape, string $clientId): PlaylistEntry {
 		return $this->withRoomLock($roomUuid, function (Room $room) use ($entryShape, $clientId): PlaylistEntry {
-			if ($room->getSingleMode()) {
-				throw new PlaylistLockedException('playlist is locked while single mode is enabled');
-			}
-
-			$now = $this->timeFactory->getTime();
-			$entries = $room->getPlaylistEntries();
-			$key = $this->mergeKey($entryShape['providerId'], $entryShape['videoId']);
-
-			foreach ($entries as $existing) {
-				if ($this->mergeKey($existing->providerId, $existing->videoId) === $key) {
-					$room->setCursorEntryId($existing->entryId);
-					$this->mapper->update($room);
-					return $existing;
-				}
-			}
-
-			if (count($entries) + 1 > self::PER_ROOM_CAP) {
-				throw new PlaylistCapExceededException(
-					PlaylistCapExceededException::CODE_PER_ROOM,
-					'playlist would exceed per-room cap of ' . self::PER_ROOM_CAP,
-				);
-			}
-
-			$entry = new PlaylistEntry(
-				entryId: PlaylistEntry::generateEntryId(),
-				position: $this->highestPosition($entries) + 1,
-				providerId: $entryShape['providerId'],
-				videoId: $entryShape['videoId'],
-				pageUrl: $entryShape['pageUrl'],
-				label: $entryShape['label'] ?? null,
-				episodeNumber: $entryShape['episodeNumber'] ?? null,
-				seasonNumber: $entryShape['seasonNumber'] ?? null,
-				source: PlaylistEntry::SOURCE_AUTO_APPENDED,
-				addedBy: $clientId,
-				addedAt: $now,
-				lastSeenAt: $now,
-			);
-			$entries[] = $entry;
-			$room->setPlaylistEntries($entries);
-			$room->setCursorEntryId($entry->entryId);
+			$entry = $this->performAutoAppend($room, $entryShape, $clientId);
 			$this->mapper->update($room);
 			return $entry;
 		});
+	}
+
+	/**
+	 * Auto-append variant for `CursorService`'s freeform path. The caller
+	 * already holds the room lock and persists the room itself (alongside
+	 * the cursor move in one write). This method only performs the
+	 * in-memory append + freeform prune.
+	 *
+	 * @param array{providerId: string, videoId: string, pageUrl: string, label?: string|null, episodeNumber?: int|null, seasonNumber?: int|null} $entryShape
+	 */
+	public function appendForFreeformCursor(Room $room, array $entryShape, string $clientId): PlaylistEntry {
+		return $this->performAutoAppend($room, $entryShape, $clientId);
+	}
+
+	/**
+	 * Shared body for `autoAppend()` (own transaction) and
+	 * `appendForFreeformCursor()` (caller's transaction). Mutates `$room`
+	 * in place — does not call `mapper->update()`.
+	 *
+	 * @param array{providerId: string, videoId: string, pageUrl: string, label?: string|null, episodeNumber?: int|null, seasonNumber?: int|null} $entryShape
+	 */
+	private function performAutoAppend(Room $room, array $entryShape, string $clientId): PlaylistEntry {
+		if ($room->getSingleMode()) {
+			throw new PlaylistLockedException('playlist is locked while single mode is enabled');
+		}
+
+		$now = $this->timeFactory->getTime();
+		$entries = $room->getPlaylistEntries();
+		$key = $this->mergeKey($entryShape['providerId'], $entryShape['videoId']);
+
+		foreach ($entries as $existing) {
+			if ($this->mergeKey($existing->providerId, $existing->videoId) === $key) {
+				$room->setCursorEntryId($existing->entryId);
+				return $existing;
+			}
+		}
+
+		if (count($entries) + 1 > self::PER_ROOM_CAP) {
+			throw new PlaylistCapExceededException(
+				PlaylistCapExceededException::CODE_PER_ROOM,
+				'playlist would exceed per-room cap of ' . self::PER_ROOM_CAP,
+			);
+		}
+
+		$entry = new PlaylistEntry(
+			entryId: PlaylistEntry::generateEntryId(),
+			position: $this->highestPosition($entries) + 1,
+			providerId: $entryShape['providerId'],
+			videoId: $entryShape['videoId'],
+			pageUrl: $entryShape['pageUrl'],
+			label: $entryShape['label'] ?? null,
+			episodeNumber: $entryShape['episodeNumber'] ?? null,
+			seasonNumber: $entryShape['seasonNumber'] ?? null,
+			source: PlaylistEntry::SOURCE_AUTO_APPENDED,
+			addedBy: $clientId,
+			addedAt: $now,
+			lastSeenAt: $now,
+		);
+		$entries[] = $entry;
+		$room->setPlaylistEntries($entries);
+		$room->setCursorEntryId($entry->entryId);
+
+		// The just-appended entry is now the cursor, so prune will never
+		// drop it. Eligible entries are older `auto_appended` ones.
+		$this->pruneAutoAppendedIfOverCap($room, $this->freeformConfig->autoAppendCap);
+
+		return $entry;
+	}
+
+	/**
+	 * Drop the oldest `auto_appended` entries until the playlist fits
+	 * within the freeform cap. Curated and scraped entries are never
+	 * auto-dropped; the cursored entry is preserved regardless of source.
+	 * No-op when the room isn't in freeform mode or is already under cap.
+	 *
+	 * Mutates `$room` in place: renumbers `position` contiguously after
+	 * the drop so the dashboard list stays clean. Caller is responsible
+	 * for persisting the room.
+	 *
+	 * Throws `PlaylistCapExceededException(CODE_FREEFORM_CAP)` when the
+	 * cap is still exceeded after exhausting eligible entries — i.e. the
+	 * playlist is full of curated + cursored entries that the policy
+	 * refuses to drop. Per CONTENT_MODEL_FREEFORM.md §Auto-prune: *"the
+	 * room stops accepting auto-appends until the owner clears entries."*
+	 */
+	private function pruneAutoAppendedIfOverCap(Room $room, int $cap): void {
+		if (!$room->getFreeformMode()) {
+			return;
+		}
+		$entries = $room->getPlaylistEntries();
+		if (count($entries) <= $cap) {
+			return;
+		}
+
+		$cursorEntryId = $room->getCursorEntryId();
+		$eligible = [];
+		foreach ($entries as $index => $entry) {
+			if ($entry->source !== PlaylistEntry::SOURCE_AUTO_APPENDED) {
+				continue;
+			}
+			if ($entry->entryId === $cursorEntryId) {
+				continue;
+			}
+			$eligible[] = [
+				'index' => $index,
+				'addedAt' => $entry->addedAt,
+				'position' => $entry->position,
+			];
+		}
+		usort($eligible, static function (array $a, array $b): int {
+			return $a['addedAt'] <=> $b['addedAt'] ?: $a['position'] <=> $b['position'];
+		});
+
+		$dropIndices = [];
+		$remaining = count($entries);
+		foreach ($eligible as $candidate) {
+			if ($remaining <= $cap) {
+				break;
+			}
+			$dropIndices[$candidate['index']] = true;
+			$remaining--;
+		}
+
+		if ($remaining > $cap) {
+			throw new PlaylistCapExceededException(
+				PlaylistCapExceededException::CODE_FREEFORM_CAP,
+				'freeform playlist is full of curated entries; clear some to continue',
+			);
+		}
+
+		if ($dropIndices === []) {
+			return;
+		}
+
+		$kept = [];
+		foreach ($entries as $index => $entry) {
+			if (isset($dropIndices[$index])) {
+				continue;
+			}
+			$kept[] = $entry;
+		}
+		$renumbered = [];
+		$pos = 1;
+		foreach ($kept as $entry) {
+			$renumbered[] = $entry->with(position: $pos++);
+		}
+		$room->setPlaylistEntries($renumbered);
 	}
 
 	/**

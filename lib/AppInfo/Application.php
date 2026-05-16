@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace OCA\PlaybackSync\AppInfo;
 
+use OCA\PlaybackSync\Service\FreeformConfig;
 use OCA\PlaybackSync\WebSocket\Admin\AdminAuthMiddleware;
 use OCA\PlaybackSync\WebSocket\Admin\PresenceController;
 use OCA\PlaybackSync\WebSocket\RoomRegistry;
@@ -32,6 +33,12 @@ class Application extends App implements IBootstrap {
 		// the int constructor params don't trip up auto-wiring.
 		$context->registerService(WsConfig::class, static function (ContainerInterface $c): WsConfig {
 			return WsConfig::fromAppConfig($c->get(IAppConfig::class));
+		});
+
+		// FreeformConfig is read from IAppConfig the same way; the factory keeps
+		// the int constructor param out of auto-wiring's path.
+		$context->registerService(FreeformConfig::class, static function (ContainerInterface $c): FreeformConfig {
+			return FreeformConfig::fromAppConfig($c->get(IAppConfig::class));
 		});
 
 		$context->registerService(RoomRegistry::class, static function (ContainerInterface $c): RoomRegistry {

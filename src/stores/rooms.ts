@@ -211,6 +211,8 @@ export const useRoomsStore = defineStore('rooms', {
 				const code = extractErrorCode(error)
 				if (code === 'single_mode_locked') {
 					showError(t('playbacksync', 'The playlist is locked while single mode is enabled.'))
+				} else if (code === 'freeform_cap_full') {
+					showError(t('playbacksync', 'The freeform playlist is full of curated entries. Clear some before adding more.'))
 				} else if (code === 'playlist_cap_exceeded' || code === 'per_message_cap' || code === 'per_room_cap') {
 					showError(t('playbacksync', 'Playlist size limit reached.'))
 				} else {

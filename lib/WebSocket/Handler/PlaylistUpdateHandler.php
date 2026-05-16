@@ -77,7 +77,7 @@ class PlaylistUpdateHandler {
 		} catch (PlaylistLockedException $e) {
 			throw new MessageException('single_mode_locked', $e->getMessage());
 		} catch (PlaylistCapExceededException $e) {
-			throw new MessageException('playlist_cap_exceeded', $e->getMessage());
+			throw new MessageException($e->capCode, $e->getMessage());
 		} catch (RoomNotFoundException) {
 			throw new MessageException('ROOM_NOT_FOUND', 'Room is no longer active', closeAfter: true);
 		}

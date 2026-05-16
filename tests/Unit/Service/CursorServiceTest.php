@@ -12,6 +12,8 @@ use OCA\PlaybackSync\Service\Dto\CursorTarget;
 use OCA\PlaybackSync\Service\Exceptions\CursorEntryNotFoundException;
 use OCA\PlaybackSync\Service\Exceptions\NotInPlaylistException;
 use OCA\PlaybackSync\Service\Exceptions\PlaylistLockedException;
+use OCA\PlaybackSync\Service\FreeformConfig;
+use OCA\PlaybackSync\Service\PlaylistService;
 use OCP\AppFramework\Utility\ITimeFactory;
 use OCP\IDBConnection;
 use PHPUnit\Framework\MockObject\MockObject;
@@ -39,7 +41,13 @@ class CursorServiceTest extends TestCase {
 		$this->db = $this->createMock(IDBConnection::class);
 		$this->timeFactory = $this->createMock(ITimeFactory::class);
 		$this->timeFactory->method('getTime')->willReturn(self::NOW_S);
-		$this->service = new CursorService($this->mapper, $this->db, $this->timeFactory);
+		$playlistService = new PlaylistService(
+			$this->mapper,
+			$this->db,
+			$this->timeFactory,
+			new FreeformConfig(autoAppendCap: 100),
+		);
+		$this->service = new CursorService($this->mapper, $this->db, $playlistService);
 	}
 
 	public function testDefaultModeMovesCursorByEntryId(): void {
