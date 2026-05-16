@@ -185,7 +185,7 @@ in [`agent-os/specs/2026-05-14-1830-content-model-protocol/`](../agent-os/specs/
 | Default | `target` not in playlist | Reject `not_in_playlist` — sender must `PLAYLIST_UPDATE` first. |
 | Freeform | `targetEntryId` | Accept if entry exists. |
 | Freeform | `target` whose `(providerId, videoId)` already exists | Resolve to existing entry id, accept. |
-| Freeform | `target` not in playlist | Auto-append with `source: "auto_appended"`, then move cursor. Server broadcasts `PLAYLIST_UPDATE` first, then `CURSOR_CHANGE`. |
+| Freeform | `target` not in playlist | Auto-append with `source: "auto_appended"`, then move cursor. Server broadcasts `PLAYLIST_UPDATE` first, then `CURSOR_CHANGE`. The append also runs the freeform prune (see below); a saturated room rejects with `freeform_cap_full`. |
 
 On success the playback state resets (paused at position 0) — the new
 cursor starts fresh. Same rate-limit bucket as `EVENT`.
@@ -220,6 +220,14 @@ list).
 - Rejected with `single_mode_locked` in single-mode rooms.
 - Rejected with `playlist_cap_exceeded` if the merge would push the
   playlist past 1000 entries (per-room cap).
+- In freeform rooms, the merge (and the auto-append path) also runs the
+  freeform auto-prune: oldest `auto_appended` entries are dropped first
+  until the playlist fits within `freeform_auto_append_cap` (default
+  100; see [`configuration.md`](configuration.md#freeform_auto_append_cap)).
+  Curated entries and the cursored entry are never auto-dropped. If
+  pruning can't free enough room because only curated + cursored
+  entries remain, the call is rejected with `freeform_cap_full` and
+  the owner has to clear entries before more growth can land.
 
 Rate-limited via a **separate** per-connection bucket
 (`ws_rate_limit_playlist_per_sec`, default 2) so a scrape on JOIN
@@ -448,6 +456,7 @@ Suppressed entirely while the client is `buffering` and during the
 | `single_mode_locked` | Mutation attempted on a single-mode room | no |
 | `not_in_playlist` | `CURSOR_CHANGE_REQUEST` referenced a video not in the playlist (default mode) | no |
 | `playlist_cap_exceeded` | `PLAYLIST_UPDATE` would push playlist past the 1000-entry per-room cap | no |
+| `freeform_cap_full` | Freeform auto-prune could not bring the playlist back under `freeform_auto_append_cap` because only curated + cursored entries remain. Surfaced on `CURSOR_CHANGE_REQUEST` (auto-append path) and `PLAYLIST_UPDATE` in freeform rooms. | no |
 | `INTERNAL_ERROR` | Unexpected server-side failure | yes |
 
 (`toggle_conflict` and `cursor_locked_entry` only surface via the HTTP

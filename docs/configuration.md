@@ -24,12 +24,13 @@ Disabling does *not* delete the rooms table or any of its rows. The data is stil
 
 ## Admin configuration keys
 
-The app exposes two settings via Nextcloud's `IAppConfig` mechanism. There is no admin settings UI for them yet (that's deliberately deferred from the MVP), so today they are managed exclusively through `occ config:app:*` commands.
+The app exposes three settings via Nextcloud's `IAppConfig` mechanism. There is no admin settings UI for them yet (that's deliberately deferred from the MVP), so today they are managed exclusively through `occ config:app:*` commands.
 
-| Key                    | Type     | Default if unset                          | Effect                                                                                                |
-|------------------------|----------|-------------------------------------------|-------------------------------------------------------------------------------------------------------|
-| `restrict_to_admins`   | boolean  | `false`                                   | If `true`, only users in the `admin` group can call `POST /rooms`. Existing rooms are not affected.   |
-| `default_ttl_seconds`  | integer  | `86400` (24 hours)                        | Default TTL applied when a `POST /rooms` request omits `ttl`. Out-of-range values silently fall back. |
+| Key                        | Type     | Default if unset                          | Effect                                                                                                |
+|----------------------------|----------|-------------------------------------------|-------------------------------------------------------------------------------------------------------|
+| `restrict_to_admins`       | boolean  | `false`                                   | If `true`, only users in the `admin` group can call `POST /rooms`. Existing rooms are not affected.   |
+| `default_ttl_seconds`      | integer  | `86400` (24 hours)                        | Default TTL applied when a `POST /rooms` request omits `ttl`. Out-of-range values silently fall back. |
+| `freeform_auto_append_cap` | integer  | `100`                                     | Per-room maximum for the freeform auto-prune policy. See [`freeform_auto_append_cap`](#freeform_auto_append_cap) below. Clamped to `[1, 1000]`. |
 
 ### `restrict_to_admins`
 
@@ -60,6 +61,24 @@ docker exec -u www-data master-nextcloud-1 php /var/www/html/occ config:app:set 
 The service guards against nonsensical values (zero, negative, longer than `MAX_TTL_SECONDS = 86400`) by silently falling back to the hard-coded default. So if an admin accidentally sets `default_ttl_seconds` to `0` or to `99999999`, the create endpoint still produces sensible 24-hour rooms; the misconfiguration is logged but doesn't break anything.
 
 The maximum TTL — the upper bound on what an end user can request via the `ttl` field on the create endpoint — is *not* admin-configurable in the MVP. It is fixed at 24 hours (86400 seconds) in the service. If we ever want to raise that ceiling, it'll need to be a service-level constant change rather than an `IAppConfig` key.
+
+### `freeform_auto_append_cap`
+
+This integer sets the per-room cap for the **freeform auto-prune** policy. Default mode rooms and single-mode rooms are unaffected — the key is read only when the freeform branch in `PlaylistService` fires.
+
+In a freeform room, any connected client can jump to a new video and the server auto-appends it. Without a cap, movie-night rooms grow unbounded toward the global 1000-entry per-room cap. With the cap, every auto-append (or any other playlist growth via `merge()` while the room is in freeform mode) triggers a pruning pass that drops the oldest `auto_appended` entries first, until the playlist fits within the cap. Curated entries are never auto-dropped; the entry the cursor currently points at is also never auto-dropped, regardless of source.
+
+If pruning can't bring the playlist back under cap because every remaining entry is either curated or the cursored entry, the offending mutation is rejected with `freeform_cap_full` instead of silently growing past the cap. The owner has to clear some entries (or promote auto-appended entries to curated and then back to auto-appended after editing) before more auto-appends can land.
+
+The default is `100`. To raise it for a long-running room series, or lower it for stricter pruning:
+
+```bash
+docker exec -u www-data master-nextcloud-1 php /var/www/html/occ config:app:set playbacksync freeform_auto_append_cap --value 250
+```
+
+The value is clamped to the range `[1, 1000]` — the lower bound prevents a zero cap from making every auto-append fail, and the upper bound matches `PlaylistService::PER_ROOM_CAP` so freeform never exceeds the global ceiling. Values outside that range are silently clamped on read.
+
+The cap is read on every relevant mutation via the `FreeformConfig` value object, so changes take effect on the next request — no daemon restart needed for the HTTP path. The WebSocket daemon does read it once at boot via the same factory, so an in-flight daemon picks up cap changes only after a restart (`occ playbacksync:ws-serve` is the typical entry point).
 
 ## Background jobs
 

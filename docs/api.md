@@ -90,6 +90,7 @@ When a `code` is present it is one of:
 | `toggle_conflict`         | 400    | The request asked for both `singleMode: true` and `freeformMode: true`. The two are mutually exclusive.          |
 | `per_message_cap`         | 400    | `initialEntries` (or a `PLAYLIST_UPDATE` batch elsewhere) exceeds the per-call cap of **200** candidate entries. |
 | `playlist_cap_exceeded`   | 400    | The mutation would push the playlist past the per-room cap of **1000** entries. Whole call rolls back.           |
+| `freeform_cap_full`       | 400    | The mutation would push a freeform room past `freeform_auto_append_cap` (default **100**) and the auto-prune policy can't free room because only curated + cursored entries remain. Surfaces from `POST /rooms/{uuid}/playlist/entries` in freeform rooms (and from the WS `CURSOR_CHANGE_REQUEST` raw-video auto-append path — see [`ws-protocol.md`](../docs/ws-protocol.md)). The `POST /rooms/{uuid}/cursor` HTTP endpoint accepts entry IDs only, so it never triggers auto-append or this code. See [`configuration.md`](../docs/configuration.md#freeform_auto_append_cap). |
 
 ### Status codes used across the API
 
@@ -531,6 +532,7 @@ The daemon broadcasts a `PLAYLIST_UPDATE` frame to every connected client.
 | Status | Trigger                                              | Example body                                                                                |
 |--------|------------------------------------------------------|---------------------------------------------------------------------------------------------|
 | 400    | Adding this entry would exceed the per-room cap.     | `{"error":"playlist would exceed per-room cap of 1000", "code":"playlist_cap_exceeded"}`    |
+| 400    | Freeform room is saturated with curated entries (auto-prune can't free room). | `{"error":"freeform playlist is full of curated entries; clear some to continue", "code":"freeform_cap_full"}` |
 | 409    | Room has `singleMode: true`.                         | `{"error":"playlist is locked while single mode is enabled", "code":"single_mode_locked"}`  |
 | 404    | Room not yours or doesn't exist.                     | `{"error":"Room not found."}`                                                               |
 
@@ -852,7 +854,7 @@ You'll notice every example above passes `-H 'OCS-APIRequest: true'`. This is te
 
 ## Forward-looking: future spec deltas
 
-The endpoints above cover the playlist + cursor data substrate, the v2 wire-protocol surface (settings, playlist CRUD, cursor move, playlist read), and the dashboard surfaces for default mode and single mode (see [`agent-os/specs/2026-05-14-2000-content-model-default-mode/`](../agent-os/specs/2026-05-14-2000-content-model-default-mode/) and [`agent-os/specs/2026-05-16-1500-content-model-single-mode/`](../agent-os/specs/2026-05-16-1500-content-model-single-mode/)). A freeform-mode spec will add the auto-prune knobs; promote-to-curated already ships as a flag on `PATCH /rooms/{uuid}/playlist/entries/{entryId}`. The Room and PlaylistEntry shapes above are stable — future endpoints add behaviour, they don't break field contracts.
+The endpoints above cover the playlist + cursor data substrate, the v2 wire-protocol surface (settings, playlist CRUD, cursor move, playlist read), and the dashboard surfaces for default mode, single mode, and freeform mode (see [`agent-os/specs/2026-05-14-2000-content-model-default-mode/`](../agent-os/specs/2026-05-14-2000-content-model-default-mode/), [`agent-os/specs/2026-05-16-1500-content-model-single-mode/`](../agent-os/specs/2026-05-16-1500-content-model-single-mode/), and [`agent-os/specs/2026-05-16-1830-content-model-freeform-mode/`](../agent-os/specs/2026-05-16-1830-content-model-freeform-mode/)). Freeform's auto-prune cap (`freeform_auto_append_cap`, default 100) and the `freeform_cap_full` error code surface from the existing endpoints — no new routes. Promote-to-curated ships as a flag on `PATCH /rooms/{uuid}/playlist/entries/{entryId}`. The Room and PlaylistEntry shapes above are stable — future endpoints add behaviour, they don't break field contracts.
 
 The share endpoint is intentionally separate from the management API. It lives at a different path (`/r/{uuid}` rather than `/api/v1/rooms/{uuid}`), it doesn't require a Nextcloud login, and it's the only place where unauthenticated traffic interacts with PlaybackSync (alongside the public `/health` probe). Keeping it cordoned off makes it easy to reason about the public attack surface in isolation.
 
