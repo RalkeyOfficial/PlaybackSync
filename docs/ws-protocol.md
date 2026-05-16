@@ -4,9 +4,10 @@ This document is the wire-format contract for clients connecting to the
 PlaybackSync sync daemon. The audience is anyone implementing a client
 (browser extension, Vue frontend, scripted test harness): everything they
 need to talk to the server should be here. For deployment details see
-[`ws-sync-server.md`](ws-sync-server.md). For the conceptual model
-behind playlist + cursor + toggles, read
-[`CONTENT_MODEL.md`](../CONTENT_MODEL.md) at the repo root.
+[`ws-sync-server.md`](ws-sync-server.md). For the conceptual model behind
+playlist + cursor + toggles, read the content-model specs under
+[`agent-os/specs/`](../agent-os/specs/) — the `content-model-data-substrate`,
+`content-model-protocol`, and per-mode entries are the canonical record.
 
 > **v2 (current).** The wire frames now reflect the playlist + cursor
 > data substrate. `EPISODE_CHANGE_REQUEST` / `EPISODE_CHANGE` /
@@ -99,7 +100,8 @@ including replaying any events the client missed.
 - `catalogFragment` (array, optional, ≤ 200 entries) — additional video
   entries the client scraped from the page (e.g. an episode sidebar). The
   server merges them into the playlist with `source: "scraped"` using the
-  rules in [`CONTENT_MODEL_DATA.md`](../CONTENT_MODEL_DATA.md#merge-rules).
+  rules established in
+  [`agent-os/specs/2026-05-14-1700-content-model-data-substrate/`](../agent-os/specs/2026-05-14-1700-content-model-data-substrate/).
   Silently ignored in single-mode rooms (the playlist is locked).
 
 #### JOIN steering reaction matrix
@@ -171,8 +173,8 @@ Ask the room to move the cursor to a different entry. Two forms:
 
 Exactly one of `targetEntryId` or `target` must be present.
 
-Server behaviour by mode (matches
-[CONTENT_MODEL_PROTOCOL.md §reaction matrix](../CONTENT_MODEL_PROTOCOL.md#cursor_change_request-client--server)):
+Server behaviour by mode (the canonical per-mode reaction matrix lives
+in [`agent-os/specs/2026-05-14-1830-content-model-protocol/`](../agent-os/specs/2026-05-14-1830-content-model-protocol/)):
 
 | Mode | Target form | Reaction |
 |---|---|---|

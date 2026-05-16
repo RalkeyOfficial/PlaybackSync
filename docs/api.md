@@ -19,6 +19,7 @@ All endpoints live under the prefix `/apps/playbacksync/api/v1/rooms`. The `v1` 
 | `DELETE` | `/rooms/{uuid}/playlist/entries/{entryId}` | Remove a playlist entry           | `204 No Content`   | Logged in    |
 | `POST`   | `/rooms/{uuid}/cursor`  | Move the cursor to an existing entry          | `204 No Content`   | Logged in    |
 | `GET`    | `/rooms/{uuid}/playlist` | Fetch the room's full playlist + version     | `200 OK`           | Logged in    |
+| `POST`   | `/metadata/lookup`      | Resolve a pasted page URL to `(providerId, videoId, label)` for the create-room seed flow | `200 OK` | Logged in |
 | `GET`    | `/ws/status`            | Whether the WebSocket sync service is usable (installed, configured, and the daemon is reachable) | `200 OK` | Logged in |
 | `GET`    | `/health`               | WebSocket sync daemon liveness + light stats | `200 OK` | Public |
 | `GET`    | `/r/{uuid}`[²]          | Public share link — Basic Auth gate, then 302 to target with sync params | `302 Found` | Public (Basic Auth password) |
@@ -607,6 +608,58 @@ Fetch the room's full playlist plus its `playlistVersion`. Useful when a client'
 |--------|----------------------------------|-------------------------------|
 | 404    | Room not yours or doesn't exist. | `{"error":"Room not found."}` |
 
+### Resolve a video URL (metadata lookup)
+
+A side-channel helper the create-room dialog calls when the owner pastes a URL into a single-mode form. Resolves the URL into the `(providerId, videoId, pageUrl)` triple the playlist substrate uses and — best effort — fetches a friendly title via the provider's oEmbed endpoint so the dialog can pre-fill the entry label. The endpoint doesn't touch any room; it only translates a URL.
+
+```
+POST /apps/playbacksync/api/v1/metadata/lookup
+```
+
+```json
+{
+  "pageUrl": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+}
+```
+
+#### Success response
+
+`200 OK`
+
+```json
+{
+  "providerId": "youtube",
+  "videoId": "dQw4w9WgXcQ",
+  "pageUrl": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+  "label": "Rick Astley — Never Gonna Give You Up",
+  "providerName": "YouTube",
+  "thumbnailUrl": "https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg"
+}
+```
+
+`pageUrl` is the parser's normalised form — short-link (`youtu.be/<id>`) and embed (`youtube.com/embed/<id>`) inputs converge on the canonical `watch?v=<id>` page so every callsite that submits `initialEntries` records the same wire shape regardless of how the URL was typed. URL parsing covers YouTube (long / short / embed / shorts / live / music / mobile), Vimeo (numeric IDs, including `player.vimeo.com/video/<id>`), and a deterministic `generic` fallback (`videoId` is the first 16 hex chars of `sha1(pageUrl)`) for sites we don't recognise — so the dialog still has a stable natural key even when there's no first-class provider integration.
+
+`label` is `null` whenever the oEmbed call failed (transport error, non-200, malformed body) or the URL belongs to the `generic` fallback. The endpoint never propagates an oEmbed failure as a 5xx — the dialog is expected to handle `label: null` by surfacing "Title not found, will use URL" and letting the owner type one by hand. `providerName` and `thumbnailUrl` come from the oEmbed payload as well and are `null` under the same conditions.
+
+Responses are cached per URL for one hour in the configured distributed cache; subsequent calls for the same URL inside the window short-circuit the outbound oEmbed request.
+
+#### Failure modes
+
+| Status | Trigger                                                        | Example body                                                       |
+|--------|----------------------------------------------------------------|--------------------------------------------------------------------|
+| 400    | `pageUrl` is empty, not a valid http(s) URL, or has no host.   | `{"error":"pageUrl must be a valid http(s) URL", "code":"unsupported_url"}` |
+| 401    | Caller is not logged in.                                       | `{"error":"Authentication required."}`                             |
+
+#### Example
+
+```bash
+curl -u alice:alice \
+  -H 'OCS-APIRequest: true' \
+  -H 'Content-Type: application/json' \
+  --data-binary '{"pageUrl":"https://www.youtube.com/watch?v=dQw4w9WgXcQ"}' \
+  'https://nextcloud.example/index.php/apps/playbacksync/api/v1/metadata/lookup'
+```
+
 ### WebSocket service status
 
 Tells the caller whether the WebSocket sync service is *usable* on this Nextcloud instance — meaning installed, configured, and the daemon is currently reachable from PHP. Use it to decide whether to expose sync UI in the client and which help affordance to show when sync is not usable.
@@ -799,7 +852,7 @@ You'll notice every example above passes `-H 'OCS-APIRequest: true'`. This is te
 
 ## Forward-looking: future spec deltas
 
-The endpoints above cover the playlist + cursor data substrate **and** the v2 wire-protocol surface (settings, playlist CRUD, cursor move, playlist read). Per-mode UX specs (`CONTENT_MODEL_DEFAULT.md`, `_SINGLE.md`, `_FREEFORM.md`) will add: reorder (`POST /rooms/{uuid}/playlist/reorder`), promote-to-curated (`POST /rooms/{uuid}/playlist/entries/{entryId}/promote`), and the freeform auto-prune knobs. The Room and PlaylistEntry shapes above are stable — future endpoints add behaviour, they don't break field contracts.
+The endpoints above cover the playlist + cursor data substrate, the v2 wire-protocol surface (settings, playlist CRUD, cursor move, playlist read), and the dashboard surfaces for default mode and single mode (see [`agent-os/specs/2026-05-14-2000-content-model-default-mode/`](../agent-os/specs/2026-05-14-2000-content-model-default-mode/) and [`agent-os/specs/2026-05-16-1500-content-model-single-mode/`](../agent-os/specs/2026-05-16-1500-content-model-single-mode/)). A freeform-mode spec will add the auto-prune knobs; promote-to-curated already ships as a flag on `PATCH /rooms/{uuid}/playlist/entries/{entryId}`. The Room and PlaylistEntry shapes above are stable — future endpoints add behaviour, they don't break field contracts.
 
 The share endpoint is intentionally separate from the management API. It lives at a different path (`/r/{uuid}` rather than `/api/v1/rooms/{uuid}`), it doesn't require a Nextcloud login, and it's the only place where unauthenticated traffic interacts with PlaybackSync (alongside the public `/health` probe). Keeping it cordoned off makes it easy to reason about the public attack surface in isolation.
 
