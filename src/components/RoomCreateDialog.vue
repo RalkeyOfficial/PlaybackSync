@@ -13,11 +13,41 @@
 			<NcTextField
 				v-model="bootstrapUrl"
 				type="url"
-				:label="t('playbacksync', 'Bootstrap URL')"
+				:label="bootstrapUrlLabel"
 				placeholder="https://example.com/watch/..."
 				:error="!!bootstrapUrlError"
-				:helperText="bootstrapUrlError ?? t('playbacksync', 'The page participants will be redirected to.')"
+				:helperText="bootstrapUrlError ?? bootstrapUrlHelper"
 				required />
+
+			<div v-if="singleMode" class="room-create-form__seed">
+				<div v-if="lookupPending" class="room-create-form__seed-status">
+					<NcLoadingIcon :size="16" />
+					<span>{{ t('playbacksync', 'Looking up the video…') }}</span>
+				</div>
+				<div
+					v-else-if="lookupResult && lookupResult.label"
+					class="room-create-form__seed-preview">
+					<span class="room-create-form__seed-chip">{{ lookupResult.providerName || lookupResult.providerId }}</span>
+					<span class="room-create-form__seed-title">{{ lookupResult.label }}</span>
+				</div>
+				<div
+					v-else-if="lookupResult && !lookupResult.label"
+					class="room-create-form__seed-preview room-create-form__seed-preview--missing">
+					{{ t('playbacksync', 'Title not found, will use URL.') }}
+				</div>
+				<div
+					v-else-if="seedLookupFailed"
+					class="room-create-form__seed-preview room-create-form__seed-preview--error">
+					{{ t('playbacksync', 'Could not detect a video on this page.') }}
+				</div>
+
+				<NcTextField
+					v-model="label"
+					:label="t('playbacksync', 'Video title')"
+					:maxlength="200"
+					:helperText="t('playbacksync', 'We’ll auto-fill this from the page when we can. You can override it here.')"
+					@update:modelValue="onLabelInput" />
+			</div>
 
 			<NcSelect
 				v-model="ttlPreset"
@@ -92,6 +122,8 @@
 </template>
 
 <script setup lang="ts">
+import type { MetadataLookupResult } from '../services/metadataApi.ts'
+
 import { loadState } from '@nextcloud/initial-state'
 import { translate as t } from '@nextcloud/l10n'
 import { computed, ref, watch } from 'vue'
@@ -102,6 +134,7 @@ import NcLoadingIcon from '@nextcloud/vue/components/NcLoadingIcon'
 import NcSelect from '@nextcloud/vue/components/NcSelect'
 import NcTextField from '@nextcloud/vue/components/NcTextField'
 import IconPlus from 'vue-material-design-icons/Plus.vue'
+import { lookupMetadata } from '../services/metadataApi.ts'
 import { useRoomsStore } from '../stores/rooms.ts'
 
 const props = defineProps<{
@@ -127,6 +160,18 @@ const customHours = ref(1)
 const customMinutes = ref(0)
 const singleMode = ref(false)
 const freeformMode = ref(false)
+const label = ref('')
+// Tracks whether the owner has typed in the label field. While false, the
+// debounced lookup is free to overwrite the label with the fetched title.
+const labelTouched = ref(false)
+const lookupPending = ref(false)
+const lookupResult = ref<MetadataLookupResult | null>(null)
+// True after a debounced lookup ran but the server returned `unsupported_url`
+// (or any failure). The preview line surfaces a "couldn't detect a video"
+// note and submit stays blocked.
+const seedLookupFailed = ref(false)
+let lookupDebounceHandle: ReturnType<typeof setTimeout> | null = null
+let lookupRunId = 0
 
 interface TtlOption {
 	value: number
@@ -188,6 +233,20 @@ const bootstrapUrlError = computed<string | null>(() => {
 	return null
 })
 
+const bootstrapUrlLabel = computed(() => {
+	if (singleMode.value) {
+		return t('playbacksync', 'Video URL')
+	}
+	return t('playbacksync', 'Bootstrap URL')
+})
+
+const bootstrapUrlHelper = computed(() => {
+	if (singleMode.value) {
+		return t('playbacksync', 'The video everyone will watch. The playlist will be locked to just this one.')
+	}
+	return t('playbacksync', 'The page participants will be redirected to.')
+})
+
 const customTtlSeconds = computed(() => {
 	const hours = Number.isFinite(customHours.value) ? Math.trunc(customHours.value) : 0
 	const minutes = Number.isFinite(customMinutes.value) ? Math.trunc(customMinutes.value) : 0
@@ -213,9 +272,17 @@ const effectiveTtl = computed(() => {
 })
 
 const canSubmit = computed(() => {
-	return bootstrapUrl.value.trim() !== ''
+	const baseOk = bootstrapUrl.value.trim() !== ''
 		&& bootstrapUrlError.value === null
 		&& customTtlError.value === null
+	if (!singleMode.value) {
+		return baseOk
+	}
+	// Single mode needs a parsed seed entry before we can submit
+	// `initialEntries`. A failed lookup or in-flight request keeps the
+	// button disabled so we never persist a locked room without its
+	// one entry.
+	return baseOk && lookupResult.value !== null && !lookupPending.value
 })
 
 watch(() => props.open, (isOpen) => {
@@ -227,18 +294,28 @@ watch(() => props.open, (isOpen) => {
 		customMinutes.value = 0
 		singleMode.value = false
 		freeformMode.value = false
+		resetSeedState()
 	}
+})
+
+watch([bootstrapUrl, singleMode], () => {
+	scheduleLookup()
 })
 
 /**
  * Apply a single-mode change. Mutual exclusion with freeform mode is
  * enforced at the toggle level (`:disabled` on the inactive switch), so
- * this handler only fires when the toggle is reachable.
+ * this handler only fires when the toggle is reachable. Toggling single
+ * mode off clears the seed-entry state so a later flip back doesn't
+ * surface a stale lookup result.
  *
  * @param value new switch state from NcCheckboxRadioSwitch
  */
 function onSingleModeChange(value: boolean) {
 	singleMode.value = value
+	if (!value) {
+		resetSeedState()
+	}
 }
 
 /**
@@ -272,16 +349,110 @@ async function submit() {
 	if (!canSubmit.value || creating.value) {
 		return
 	}
-	const ok = await roomsStore.create({
-		bootstrapUrl: bootstrapUrl.value.trim(),
+	const trimmedUrl = bootstrapUrl.value.trim()
+	const payload: Parameters<typeof roomsStore.create>[0] = {
+		bootstrapUrl: trimmedUrl,
 		name: name.value.trim() || null,
 		ttl: effectiveTtl.value,
 		singleMode: singleMode.value,
 		freeformMode: freeformMode.value,
-	})
+	}
+	if (singleMode.value && lookupResult.value !== null) {
+		payload.initialEntries = [{
+			providerId: lookupResult.value.providerId,
+			videoId: lookupResult.value.videoId,
+			pageUrl: lookupResult.value.pageUrl,
+			label: label.value.trim() || null,
+		}]
+	}
+	const ok = await roomsStore.create(payload)
 	if (ok) {
 		emit('update:open', false)
 	}
+}
+
+/**
+ * Mark the label field as touched so the next async lookup doesn't
+ * stomp on what the owner typed. Fires on every NcTextField update.
+ */
+function onLabelInput() {
+	labelTouched.value = true
+}
+
+/**
+ * Debounce the URL → metadata lookup so we don't fire on every keystroke.
+ * Cleared and re-armed on each input. Single mode is the only path that
+ * actually needs the result; the watcher still fires for default-mode
+ * URLs but `runLookup` no-ops in that branch.
+ */
+function scheduleLookup() {
+	if (lookupDebounceHandle !== null) {
+		clearTimeout(lookupDebounceHandle)
+		lookupDebounceHandle = null
+	}
+	if (!singleMode.value) {
+		// Drop any in-flight state when single mode is off so an old
+		// preview from a prior single-mode session doesn't linger.
+		lookupResult.value = null
+		lookupPending.value = false
+		seedLookupFailed.value = false
+		return
+	}
+	const value = bootstrapUrl.value.trim()
+	if (value === '' || bootstrapUrlError.value !== null) {
+		lookupResult.value = null
+		lookupPending.value = false
+		seedLookupFailed.value = false
+		return
+	}
+	lookupDebounceHandle = setTimeout(() => {
+		lookupDebounceHandle = null
+		void runLookup(value)
+	}, 400)
+}
+
+/**
+ * Call the metadata endpoint and project its result onto the dialog's
+ * state. The `lookupRunId` token discards stale completions when the
+ * owner keeps typing while a previous request is in flight.
+ *
+ * @param value the URL to look up (already trimmed and validated as http(s))
+ */
+async function runLookup(value: string) {
+	const runId = ++lookupRunId
+	lookupPending.value = true
+	seedLookupFailed.value = false
+	const result = await lookupMetadata(value)
+	if (runId !== lookupRunId) {
+		return
+	}
+	lookupPending.value = false
+	if (result === null) {
+		lookupResult.value = null
+		seedLookupFailed.value = true
+		return
+	}
+	lookupResult.value = result
+	if (!labelTouched.value && result.label !== null) {
+		label.value = result.label
+	}
+}
+
+/**
+ * Clear every piece of seed-entry state. Called on dialog open, when
+ * single mode is toggled off, and when the bootstrap URL goes empty.
+ */
+function resetSeedState() {
+	if (lookupDebounceHandle !== null) {
+		clearTimeout(lookupDebounceHandle)
+		lookupDebounceHandle = null
+	}
+	lookupRunId++
+	label.value = ''
+	labelTouched.value = false
+	lookupPending.value = false
+	lookupResult.value = null
+	seedLookupFailed.value = false
 }
 
 /**
@@ -362,7 +533,57 @@ function formatTtlLimit(seconds: number): string {
 }
 
 .room-create-form__mode-hint--exclusive {
-	margin-left: 0;
+	margin-inline-start: 0;
 	font-style: italic;
+}
+
+.room-create-form__seed {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	padding: 8px 0 0;
+}
+
+.room-create-form__seed-status {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	color: var(--color-text-maxcontrast);
+	font-size: 0.85rem;
+}
+
+.room-create-form__seed-preview {
+	display: flex;
+	align-items: baseline;
+	gap: 8px;
+	color: var(--color-main-text);
+	font-size: 0.9rem;
+}
+
+.room-create-form__seed-preview--missing {
+	color: var(--color-text-maxcontrast);
+	font-style: italic;
+}
+
+.room-create-form__seed-preview--error {
+	color: var(--color-error);
+}
+
+.room-create-form__seed-chip {
+	padding: 1px 6px;
+	border-radius: 4px;
+	font-size: 0.7rem;
+	font-weight: 600;
+	text-transform: uppercase;
+	letter-spacing: 0.02em;
+	background: var(--color-background-dark);
+	color: var(--color-main-text);
+}
+
+.room-create-form__seed-title {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	min-width: 0;
 }
 </style>

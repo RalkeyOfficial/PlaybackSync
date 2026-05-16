@@ -28,6 +28,8 @@ return [
 
 		['name' => 'health#index', 'url' => '/api/v1/health', 'verb' => 'GET'],
 
+		['name' => 'metadata#lookup', 'url' => '/api/v1/metadata/lookup', 'verb' => 'POST'],
+
 		['name' => 'admin_settings#index', 'url' => '/api/v1/admin/settings', 'verb' => 'GET'],
 		['name' => 'admin_settings#update', 'url' => '/api/v1/admin/settings', 'verb' => 'PUT'],
 		['name' => 'admin_settings#regenerateAdminSecret', 'url' => '/api/v1/admin/settings/secret', 'verb' => 'POST'],

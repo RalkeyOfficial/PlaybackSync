@@ -316,6 +316,6 @@ async function submitMany() {
 
 .playlist-add__invalid-list {
 	margin: 4px 0 0;
-	padding-left: 20px;
+	padding-inline-start: 20px;
 }
 </style>

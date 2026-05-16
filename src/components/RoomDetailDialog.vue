@@ -478,6 +478,25 @@ const status = computed(() => getRoomStatus(
 	now.value,
 ))
 
+/**
+ * Full chip list for the modal — uncapped, sorted by recency. The card
+ * shows just a count; the modal is the place to actually inspect who is
+ * connected.
+ */
+const clientChips = computed(() => {
+	if (!live.value) {
+		return []
+	}
+	return [...live.value.clients]
+		.sort((a, b) => b.lastSeenMs - a.lastSeenMs)
+		.map((c) => ({
+			clientId: c.clientId,
+			nickname: c.nickname,
+			color: clientChipColor(c.clientId),
+			isBuffering: c.isBuffering,
+		}))
+})
+
 const confirmingClientLabel = computed(() => {
 	if (!confirmingClientId.value) {
 		return ''
@@ -624,25 +643,6 @@ const seekHelperText = computed(() => {
 		})
 	}
 	return t('playbacksync', 'e.g. 2:47 or 1:05:30')
-})
-
-/**
- * Full chip list for the modal — uncapped, sorted by recency. The card
- * shows just a count; the modal is the place to actually inspect who is
- * connected.
- */
-const clientChips = computed(() => {
-	if (!live.value) {
-		return []
-	}
-	return [...live.value.clients]
-		.sort((a, b) => b.lastSeenMs - a.lastSeenMs)
-		.map((c) => ({
-			clientId: c.clientId,
-			nickname: c.nickname,
-			color: clientChipColor(c.clientId),
-			isBuffering: c.isBuffering,
-		}))
 })
 
 /**
@@ -961,7 +961,7 @@ function onSeek() {
 }
 
 .room-detail__status-ttl {
-	margin-left: auto;
+	margin-inline-start: auto;
 	font-family: var(--font-monospace, monospace);
 	font-variant-numeric: tabular-nums;
 	color: var(--color-text-maxcontrast);
@@ -1047,7 +1047,7 @@ function onSeek() {
 }
 
 .room-detail__count-badge {
-	margin-left: auto;
+	margin-inline-start: auto;
 	min-width: 24px;
 	padding: 2px 8px;
 	border-radius: 999px;

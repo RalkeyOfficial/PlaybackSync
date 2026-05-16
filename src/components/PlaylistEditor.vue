@@ -5,9 +5,16 @@
 				<h4 class="playlist-editor__title">
 					{{ t('playbacksync', 'Playlist') }}
 				</h4>
-				<span class="playlist-editor__mode-badge" :class="modeBadgeClass">
-					{{ modeBadgeLabel }}
-				</span>
+				<span class="playlist-editor__mode-chip" :class="modeBadgeClass" :title="t('playbacksync', 'Current playlist mode')" />
+				<NcSelect
+					class="playlist-editor__mode-picker"
+					:modelValue="modeChoiceOption"
+					:options="modeOptions"
+					:inputLabel="t('playbacksync', 'Mode')"
+					:clearable="false"
+					:disabled="modeSwitching"
+					label="label"
+					@update:modelValue="onModePicked" />
 				<span class="playlist-editor__count">
 					{{ t('playbacksync', '{n} entries', { n: entries.length }) }}
 				</span>
@@ -161,6 +168,31 @@
 		</NcDialog>
 
 		<NcDialog
+			:name="t('playbacksync', 'Lock the playlist?')"
+			size="small"
+			:open="confirmingLock"
+			:canClose="!modeSwitching"
+			@update:open="(v) => { if (!v) cancelLockConfirm() }">
+			<p class="playlist-editor__confirm-prompt">
+				{{ t('playbacksync', 'Existing entries stay, but no new ones can be added until you switch single mode off again.') }}
+			</p>
+			<template #actions>
+				<NcButton :disabled="modeSwitching" @click="cancelLockConfirm">
+					{{ t('playbacksync', 'Cancel') }}
+				</NcButton>
+				<NcButton
+					variant="primary"
+					:disabled="modeSwitching"
+					@click="confirmLock">
+					<template #icon>
+						<NcLoadingIcon v-if="modeSwitching" :size="20" />
+					</template>
+					{{ t('playbacksync', 'Lock playlist') }}
+				</NcButton>
+			</template>
+		</NcDialog>
+
+		<NcDialog
 			:name="t('playbacksync', 'Clear playlist?')"
 			size="small"
 			:open="confirmingClear"
@@ -200,6 +232,7 @@ import NcDialog from '@nextcloud/vue/components/NcDialog'
 import NcEmptyContent from '@nextcloud/vue/components/NcEmptyContent'
 import NcLoadingIcon from '@nextcloud/vue/components/NcLoadingIcon'
 import NcNoteCard from '@nextcloud/vue/components/NcNoteCard'
+import NcSelect from '@nextcloud/vue/components/NcSelect'
 import NcTextField from '@nextcloud/vue/components/NcTextField'
 import IconArrowDown from 'vue-material-design-icons/ArrowDown.vue'
 import IconArrowUp from 'vue-material-design-icons/ArrowUp.vue'
@@ -230,6 +263,19 @@ const clearing = ref(false)
 // cursor entry. Cleared when they pick another row.
 const cursorBlockedEntryId = ref<string | null>(null)
 
+type ModeChoice = 'default' | 'single' | 'freeform'
+
+interface ModeOption {
+	key: ModeChoice
+	label: string
+}
+
+const confirmingLock = ref(false)
+const modeSwitching = ref(false)
+// The mode the lock-confirm dialog is gating. Held aside so the picker
+// can roll back to the room's actual mode on cancel without a flicker.
+const pendingMode = ref<ModeChoice | null>(null)
+
 interface EditLabelState {
 	entryId: string | null
 	value: string
@@ -251,24 +297,35 @@ const canReorder = computed(() => !isSingleMode.value)
 
 const lockedHint = computed(() => t('playbacksync', 'Locked by single mode.'))
 
-const modeBadgeLabel = computed(() => {
+const modeOptions = computed<ModeOption[]>(() => [
+	{ key: 'default', label: t('playbacksync', 'Default mode') },
+	{ key: 'single', label: t('playbacksync', 'Single mode') },
+	{ key: 'freeform', label: t('playbacksync', 'Freeform mode') },
+])
+
+const currentMode = computed<ModeChoice>(() => {
 	if (isSingleMode.value) {
-		return t('playbacksync', 'Single mode')
+		return 'single'
 	}
 	if (isFreeformMode.value) {
-		return t('playbacksync', 'Freeform mode')
+		return 'freeform'
 	}
-	return t('playbacksync', 'Default mode')
+	return 'default'
+})
+
+const modeChoiceOption = computed<ModeOption>(() => {
+	const target = pendingMode.value ?? currentMode.value
+	return modeOptions.value.find((opt) => opt.key === target) ?? modeOptions.value[0]
 })
 
 const modeBadgeClass = computed(() => {
 	if (isSingleMode.value) {
-		return 'playlist-editor__mode-badge--single'
+		return 'playlist-editor__mode-chip--single'
 	}
 	if (isFreeformMode.value) {
-		return 'playlist-editor__mode-badge--freeform'
+		return 'playlist-editor__mode-chip--freeform'
 	}
-	return 'playlist-editor__mode-badge--default'
+	return 'playlist-editor__mode-chip--default'
 })
 
 const emptyTitle = computed(() => {
@@ -361,6 +418,83 @@ function sourceChipClass(source: PlaylistEntrySource): string {
 		return 'playlist-editor__chip--auto'
 	}
 	return 'playlist-editor__chip--scraped'
+}
+
+/**
+ * Map a mode choice key to the `(singleMode, freeformMode)` pair the
+ * server expects. The dropdown only emits one of three keys, so the
+ * impossible `(true, true)` state is unrepresentable here.
+ *
+ * @param choice the mode the owner picked
+ */
+function toggleFlagsFor(choice: ModeChoice): { singleMode: boolean, freeformMode: boolean } {
+	if (choice === 'single') {
+		return { singleMode: true, freeformMode: false }
+	}
+	if (choice === 'freeform') {
+		return { singleMode: false, freeformMode: true }
+	}
+	return { singleMode: false, freeformMode: false }
+}
+
+/**
+ * Handle a selection from the mode dropdown. Switching *to* single mode
+ * while the playlist has more than one entry routes through the
+ * confirmation dialog; everything else fires `updateSettings` directly.
+ *
+ * @param option the NcSelect option object the user picked
+ */
+async function onModePicked(option: ModeOption | null) {
+	if (option === null || modeSwitching.value) {
+		return
+	}
+	if (option.key === currentMode.value) {
+		return
+	}
+	if (option.key === 'single' && entries.value.length > 1) {
+		pendingMode.value = 'single'
+		confirmingLock.value = true
+		return
+	}
+	await applyModeChange(option.key)
+}
+
+/**
+ * Resolve the lock-confirmation dialog by actually flipping the room
+ * into single mode. Called after the owner confirms in the dialog.
+ */
+async function confirmLock() {
+	confirmingLock.value = false
+	await applyModeChange('single')
+}
+
+/**
+ * Drop the pending mode change and snap the dropdown back to the
+ * room's current mode. Fires from the dialog Cancel button and from
+ * the dialog backdrop close.
+ */
+function cancelLockConfirm() {
+	confirmingLock.value = false
+	pendingMode.value = null
+}
+
+/**
+ * Push a mode change to the server via the existing rooms store action.
+ * `pendingMode` is held until the request settles so the dropdown shows
+ * the intent rather than flickering mid-request.
+ *
+ * @param choice the target mode
+ */
+async function applyModeChange(choice: ModeChoice) {
+	const flags = toggleFlagsFor(choice)
+	modeSwitching.value = true
+	pendingMode.value = choice
+	try {
+		await roomsStore.updateSettings(props.room.uuid, flags.singleMode, flags.freeformMode)
+	} finally {
+		modeSwitching.value = false
+		pendingMode.value = null
+	}
 }
 
 /**
@@ -498,28 +632,28 @@ async function onConfirmClear() {
 	font-size: 1rem;
 }
 
-.playlist-editor__mode-badge {
-	padding: 2px 8px;
-	border-radius: 999px;
-	font-size: 0.75rem;
-	font-weight: 600;
-	color: var(--color-primary-text);
+.playlist-editor__mode-chip {
+	width: 12px;
+	height: 12px;
+	border-radius: 50%;
 	background: var(--color-background-darker);
+	flex-shrink: 0;
 }
 
-.playlist-editor__mode-badge--default {
-	background: var(--color-primary-element-light);
-	color: var(--color-primary-element-text);
+.playlist-editor__mode-chip--default {
+	background: var(--color-primary-element);
 }
 
-.playlist-editor__mode-badge--single {
+.playlist-editor__mode-chip--single {
 	background: var(--color-warning);
-	color: var(--color-primary-text);
 }
 
-.playlist-editor__mode-badge--freeform {
+.playlist-editor__mode-chip--freeform {
 	background: var(--color-success);
-	color: var(--color-primary-text);
+}
+
+.playlist-editor__mode-picker {
+	min-width: 160px;
 }
 
 .playlist-editor__count {

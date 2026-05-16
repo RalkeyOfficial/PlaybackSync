@@ -456,7 +456,7 @@ function formatVideoPos(seconds: number): string {
 }
 
 .event-log__reset {
-	margin-left: auto;
+	margin-inline-start: auto;
 	color: var(--color-warning-text, #d29922);
 	font-style: italic;
 }
@@ -493,20 +493,31 @@ function formatVideoPos(seconds: number): string {
 	 * row's left border both read this so a single declaration drives both. */
 	--event-color: #6e7681;
 	--event-tint: rgba(110, 118, 129, 0.16);
-	border-left: 3px solid var(--event-color);
+	border-inline-start: 3px solid var(--event-color);
 }
 
 .event-log__row--type-play         { --event-color: #2ea043; --event-tint: rgba(46, 160, 67, 0.18); }
+
 .event-log__row--type-pause        { --event-color: #d29922; --event-tint: rgba(210, 153, 34, 0.18); }
+
 .event-log__row--type-seek         { --event-color: #58a6ff; --event-tint: rgba(88, 166, 255, 0.18); }
+
 .event-log__row--type-reset        { --event-color: #db6d28; --event-tint: rgba(219, 109, 40, 0.18); }
+
 .event-log__row--type-client_joined { --event-color: #3fb950; --event-tint: rgba(63, 185, 80, 0.18); }
+
 .event-log__row--type-client_left   { --event-color: #8b949e; --event-tint: rgba(139, 148, 158, 0.18); }
+
 .event-log__row--type-client_kicked { --event-color: #f85149; --event-tint: rgba(248, 81, 73, 0.18); }
+
 .event-log__row--type-room_created  { --event-color: #58a6ff; --event-tint: rgba(88, 166, 255, 0.18); }
+
 .event-log__row--type-room_renamed  { --event-color: #bc8cff; --event-tint: rgba(188, 140, 255, 0.18); }
+
 .event-log__row--type-room_deleted  { --event-color: #f85149; --event-tint: rgba(248, 81, 73, 0.18); }
+
 .event-log__row--type-settings_updated { --event-color: #d29922; --event-tint: rgba(210, 153, 34, 0.18); }
+
 .event-log__row--type-admin_secret_rotated { --event-color: #f85149; --event-tint: rgba(248, 81, 73, 0.18); }
 
 .event-log__icon {
@@ -614,13 +625,13 @@ function formatVideoPos(seconds: number): string {
 
 .event-log__actor--admin::before {
 	top: -3px;
-	left: 30%;
+	inset-inline-start: 30%;
 	animation: admin-sparkle-a 2.6s ease-in-out infinite;
 }
 
 .event-log__actor--admin::after {
 	bottom: -3px;
-	right: 25%;
+	inset-inline-end: 25%;
 	animation: admin-sparkle-b 2.6s ease-in-out infinite;
 	animation-delay: 1.3s;
 }
@@ -658,7 +669,7 @@ function formatVideoPos(seconds: number): string {
 }
 
 .event-log__time {
-	margin-left: auto;
+	margin-inline-start: auto;
 	font-size: 11px;
 	font-variant-numeric: tabular-nums;
 	color: var(--color-text-maxcontrast);
