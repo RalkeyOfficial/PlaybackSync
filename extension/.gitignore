@@ -3,3 +3,6 @@ node_modules
 .wxt
 stats.html
 *.zip
+
+# Per-machine browser binary overrides for `wxt dev`
+web-ext.config.ts

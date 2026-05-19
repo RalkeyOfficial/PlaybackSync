@@ -24,6 +24,20 @@ npm run dev           # Chromium (launches a fresh browser profile with HMR)
 npm run dev:firefox   # Firefox
 ```
 
+WXT's runner only auto-discovers browsers installed in standard locations. For
+anything else (Thorium, Brave Beta, Chromium snap, Firefox flatpak, …) create a
+local `web-ext.config.ts` — gitignored, per-machine — for example:
+
+```ts
+import { defineRunnerConfig } from 'wxt';
+
+export default defineRunnerConfig({
+	binaries: {
+		chrome: '/usr/bin/thorium-browser-avx2',
+	},
+});
+```
+
 ## Production build
 
 ```sh
