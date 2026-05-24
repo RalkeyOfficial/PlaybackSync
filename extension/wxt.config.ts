@@ -15,12 +15,11 @@ export default defineConfig({
 			'alarms',
 			'tabs',
 		],
-		// Placeholder match list — replace with the streaming sites you actually
-		// want to sync. The content script only runs on URLs that match these.
-		host_permissions: [
-			'https://www.miruro.tv/*',
-			'https://www.miruro.to/*',
-		],
+		// Plugin-based content script: every page must give the runtime a chance
+		// to evaluate the adapter registry. Real adapters narrow themselves in
+		// canHandlePage(); unsupported pages stay silent (workshop §2 rule 3).
+		// Revisit pre-store-submission — an explicit allowlist may be preferred.
+		host_permissions: ['<all_urls>'],
 		action: {
 			default_title: 'PlaybackSync',
 		},

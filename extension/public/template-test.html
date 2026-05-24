@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<title>PlaybackSync — template adapter smoke test</title>
+		<style>
+			body {
+				font-family: system-ui, sans-serif;
+				max-width: 720px;
+				margin: 2rem auto;
+				padding: 0 1rem;
+				color-scheme: light dark;
+			}
+			video {
+				width: 100%;
+				background: #000;
+			}
+			code {
+				background: rgba(127, 127, 127, 0.2);
+				padding: 0.1em 0.4em;
+				border-radius: 3px;
+			}
+		</style>
+	</head>
+	<body>
+		<h1>PlaybackSync — template adapter smoke test</h1>
+		<p>
+			This page exists to exercise the <code>_template</code> adapter. Open it
+			with the <code>?pbsync-template</code> query parameter — without that the
+			adapter stays inert (as it would on any real site).
+		</p>
+		<p>
+			Expected with the extension loaded and <code>?pbsync-template</code> set:
+		</p>
+		<ul>
+			<li>
+				The <strong>page</strong> console logs
+				<code>[playbacksync:template] adapter activated</code>.
+			</li>
+			<li>
+				Clicking play / pause and scrubbing the seek bar logs
+				<code>[playbacksync:bg] &lt;tabId&gt; { kind: "intent", ... }</code>
+				in the <strong>background service-worker</strong> console.
+			</li>
+		</ul>
+		<video controls preload="metadata">
+			<source
+				src="https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"
+				type="video/mp4"
+			/>
+		</video>
+	</body>
+</html>
