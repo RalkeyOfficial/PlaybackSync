@@ -47,9 +47,10 @@ npm run zip           # zip the build for distribution
 
 ```
 entrypoints/
-  background.ts        # service worker / background page; boots the WS client
-  content.ts           # injected on every page; selects an adapter
-  popup/               # toolbar popup (placeholder)
+  background.ts             # service worker / background page; boots the WS client
+  content.ts                # injected on every page; selects an adapter
+  credentials.content.ts    # one-shot sniff of ?sync_url=&sync_password= on share-link landings
+  popup/                    # toolbar popup (placeholder)
 src/
   adapters/            # plugin contract + per-site adapters (_template is the baseline)
   background/          # WS client: protocol, session, ws, storage, tabs
@@ -69,16 +70,18 @@ The WS client connects on background-worker boot if credentials are present in `
    occ playbacksync:ws-serve
    ```
 2. **Create a room.** From the PlaybackSync dashboard (`/apps/playbacksync/`), create a room. Copy the WebSocket URL and the one-time password from the create-room dialog.
-3. **Seed the creds.** With `npm run dev` running, open the extension's background-worker DevTools (chrome://extensions → PlaybackSync → "service worker") and run:
-   ```js
-   chrome.storage.local.set({
-     pbsync: {
-       syncUrl: 'wss://<host>/index.php/apps/playbacksync/ws/<uuid>',
-       syncPassword: '<password>',
-     },
-   })
-   ```
-   Reload the extension (chrome://extensions → reload). The background console should log `connecting → open → JOIN sent → ROOM_STATE`.
+3. **Get the creds in.** Two paths:
+   - **Easy path (preferred).** From the create-room dialog, copy the share link (`…/apps/playbacksync/r/{uuid}`) and open it in a fresh tab. Enter the password at the Basic Auth prompt. The 302 lands on `bootstrapUrl?sync_url=…&sync_password=…`; `entrypoints/credentials.content.ts` sniffs the params and hands them off. The background console should log `share-URL creds accepted; connecting` followed by `connecting → open → JOIN sent → ROOM_STATE`.
+   - **Manual fallback.** With `npm run dev` running, open the extension's background-worker DevTools (chrome://extensions → PlaybackSync → "service worker") and run:
+     ```js
+     chrome.storage.local.set({
+       pbsync: {
+         syncUrl: 'wss://<host>/index.php/apps/playbacksync/ws/<uuid>',
+         syncPassword: '<password>',
+       },
+     })
+     ```
+     Reload the extension (chrome://extensions → reload). Useful when testing against `occ playbacksync:ws-serve` without a real dashboard round-trip.
 4. **Drive the test.** Open two tabs of `chrome-extension://<id>/template-test.html?pbsync-template`. Play / pause / seek in tab A — tab B should mirror within a few hundred milliseconds. The background console shows `EVENT` frames going out and `STATE` frames coming back; the suppressed-echo path keeps the round-trip from looping.
 5. **Reconnect check.** Stop the daemon, wait a few seconds, restart it. The background console should log reconnect attempts with exponential backoff and, once it succeeds, a `ROOM_STATE` carrying `recentEvents` (the events the tombstone replayed).
 

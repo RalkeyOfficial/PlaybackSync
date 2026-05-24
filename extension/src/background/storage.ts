@@ -56,6 +56,26 @@ export async function loadCreds(): Promise<PbSyncCreds | null> {
 }
 
 /**
+ * Persist a fresh `{ syncUrl, syncPassword }` pair under `pbsync`. Used
+ * by the share-URL pickup flow (`credentials.content.ts` →
+ * background → here). Any previously stored `clientId` is deliberately
+ * dropped: a stored clientId belongs to whatever room was previously
+ * joined, and carrying it into a fresh JOIN against a different room
+ * would trigger a stale-tombstone replay (or be rejected outright).
+ *
+ * This slice's first-write-wins policy means we only ever call this on
+ * an empty store, so the drop is moot today — but it keeps the function
+ * safe to reuse in a future replace-and-reconnect spec.
+ *
+ * @param creds The credentials to persist.
+ */
+export async function saveCreds(creds: { syncUrl: string; syncPassword: string }): Promise<void> {
+	await chrome.storage.local.set({
+		[STORAGE_KEY]: { syncUrl: creds.syncUrl, syncPassword: creds.syncPassword },
+	})
+}
+
+/**
  * Persist a server-assigned `clientId` alongside the existing creds, so
  * the next reconnect can pass it back on `JOIN` and get a tombstone
  * replay. No-op when no creds are stored.

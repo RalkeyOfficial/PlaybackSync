@@ -1,6 +1,15 @@
 # Architecture
 
-The PlaybackSync extension is a two-process WXT application: a **background service worker** (Chromium MV3) / **long-lived background page** (Firefox MV2), and a **content script** that runs in every page's isolated world. They communicate only through `chrome.runtime` message passing — the background never touches the DOM, the content side never opens a WebSocket. That separation is what makes new-site support a single-file change rather than a refactor.
+The PlaybackSync extension is a two-process WXT application: a **background service worker** (Chromium MV3) / **long-lived background page** (Firefox MV2), and **content scripts** that run in every page's isolated world. They communicate only through `chrome.runtime` message passing — the background never touches the DOM, the content side never opens a WebSocket. That separation is what makes new-site support a single-file change rather than a refactor.
+
+## Entrypoints
+
+| File | Role | `runAt` |
+|------|------|---------|
+| `entrypoints/background.ts` | Service worker / background page. WS lifecycle, message routing, command dispatch. | n/a |
+| `entrypoints/content.ts` | Adapter runtime bootstrap — picks an adapter for the page, runs status polling, delivers inbound commands. | `document_idle` |
+| `entrypoints/credentials.content.ts` | One-shot share-URL credential sniffer. Sends a `credentials` message when the URL carries `?sync_url=&sync_password=` and exits. See [`storage.md`](storage.md). | `document_start` |
+| `entrypoints/popup/` | Toolbar popup (stub today; covered by a future spec). | n/a |
 
 ## The three layers
 
@@ -60,6 +69,7 @@ The background is the *protocol client*; the content runtime is the *adapter man
 | `status` | `adapterId`, `state: VideoState` (`currentPos`, `playerState`) | Every 1 s while an adapter is active |
 | `identity` | `adapterId`, `identity: ContentIdentity` (`providerId`, `videoId`, `normalizedUrl`) | Once per adapter init |
 | `fail` | `adapterId`, `reason: string` | Adapter can't run on this page |
+| `credentials` | `syncUrl`, `syncPassword` | Share-URL pickup fires once at `document_start`; first-write-wins on the background side |
 
 **Background → Content** (`BackgroundToContent`):
 
@@ -90,7 +100,6 @@ On Firefox MV2 the background page is long-lived by default; no special handling
 
 ## Out-of-scope (deferred to follow-up specs)
 
-- **Credential pickup from `?sync_url=&sync_password=`** on the share-redirect landing. Today creds come from `chrome.storage.local` set manually via DevTools (see [`storage.md`](storage.md)).
 - **Real site adapters.** Only `_template` exists; it activates on `?pbsync-template` so it's inert on real sites.
 - **Popup UI** for connection status, current room, manual disconnect.
 - **Multi-room / multi-tab arbitration.** Currently the connection is browser-wide and the "active tab" is just "whoever reported status most recently".

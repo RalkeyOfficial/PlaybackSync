@@ -18,15 +18,28 @@ One JSON object lives at `chrome.storage.local.pbsync`:
 
 | Field | Set by | Read by | Why it lives here |
 |-------|--------|---------|-------------------|
-| `syncUrl` | Dev (DevTools) for now; the share-URL spec later | `ws.ts` on every connect | Tells the client which room to join |
+| `syncUrl` | Share-URL pickup (preferred) or DevTools (fallback) | `ws.ts` on every connect | Tells the client which room to join |
 | `syncPassword` | Same | `ws.ts` (sent inside `JOIN`) | Authenticates against `room.password_hash` |
 | `clientId` | `ws.ts` on the first `ROOM_STATE` after JOIN | `ws.ts` on subsequent reconnects (becomes `JOIN.clientId`) | Lets the daemon resume the session via tombstone replay |
 
 The whole object is read at background-worker boot. Missing creds = the WS client stays idle and logs a single hint line.
 
+## Share-URL pickup (preferred)
+
+The standard way to get credentials into `pbsync` is to follow a room share link — the dashboard surfaces these per room.
+
+1. Visit `/apps/playbacksync/r/{uuid}`; the browser surfaces a Basic Auth prompt.
+2. Enter the one-time password; `ShareController` 302s to `room.bootstrapUrl?sync_url=…&sync_password=…`.
+3. The dedicated content script [`entrypoints/credentials.content.ts`](../entrypoints/credentials.content.ts) sniffs those params at `document_start`, sends a `credentials` message to the background.
+4. The background calls `loadCreds()`. If `pbsync` is empty it writes the new pair via `saveCreds()` and calls `ws.connect()`. If `pbsync` is already populated it logs `share-URL creds ignored; pbsync already populated` and does nothing.
+
+This is **first-write-wins**: once you're in a room, share-link revisits are a no-op. To switch rooms, clear creds (see below) and follow the new link.
+
+The URL is left untouched after handoff — `sync_password` stays visible in the address bar. Hardening that path is a server-side concern (fragment handoff, server-set cookie) and out of scope for this slice.
+
 ## Dev workflow — seeding creds by hand
 
-This slice is "dev shim only" for credentials. To exercise the WS client:
+Available as a manual fallback / debug tool when there's no convenient share link (e.g. testing against `occ playbacksync:ws-serve` without a real dashboard round-trip):
 
 1. Create a room via the PlaybackSync dashboard. Copy `bootstrapUrl` (actually you want the WS URL — `wss://<host>/index.php/apps/playbacksync/ws/<uuid>`) and the one-time password.
 2. With `npm run dev` running and the extension loaded, open the **background service worker's DevTools** — `chrome://extensions` → PlaybackSync → "Inspect views: service worker".
@@ -84,12 +97,6 @@ Background boot
 
 ## Future tightening
 
-When the share-URL pickup spec lands, **credential writes will move out of DevTools** and into a content-script handoff:
-
-1. Content script sees `?sync_url=…&sync_password=…` on the bootstrap landing page.
-2. Sends a typed message to the background.
-3. Background writes to `chrome.storage.local.pbsync` and (re-)connects.
-
-The schema doesn't change. The DevTools seeding path stays available as a manual fallback / debug tool.
-
-When per-room state matters (multi-room arbitration), the key will likely grow into a map keyed by room UUID. That's a schema change worth flagging at the time, not pre-empting now.
+- **Replace-and-reconnect on a fresh share link.** Today's policy is first-write-wins — once `pbsync` is populated, subsequent share-link visits are ignored. The popup will eventually expose a "leave room" action that calls `clearCreds`, after which the next share link is picked up normally. Adding mid-flight replace semantics is a follow-up once that UI exists.
+- **Auto-`clearCreds` on terminal `AUTH_FAILED`.** Today the WS module's `onTerminal` callback only logs. When the daemon hard-rejects credentials (e.g. password rotated server-side) we should wipe them so the next share-link visit isn't blocked by stale-and-broken creds.
+- **Multi-room keying.** When per-room state matters (multi-room arbitration), `pbsync` will likely grow into a map keyed by room UUID. That's a schema change worth flagging at the time, not pre-empting now.
