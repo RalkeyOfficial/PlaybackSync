@@ -16,8 +16,10 @@ import type {
 } from '@/src/messages'
 import { createSession, recordCommand, shouldSuppress } from '@/src/background/session'
 import { clearCreds, loadCreds, saveCreds } from '@/src/background/storage'
-import { forgetTab, getTab, recordIdentity, recordStatus } from '@/src/background/tabs'
+import { forgetTab, getTab, pickActiveTab, recordIdentity, recordStatus } from '@/src/background/tabs'
+import { forgetIconForTab, initGreyscaleDefaults, setActiveTab } from '@/src/background/icon'
 import {
+	getDerivedStatus,
 	initPopupBroadcast,
 	registerPopupPort,
 	setPopupCreds,
@@ -39,12 +41,29 @@ const wsCallbacks: WsCallbacks = {
 	onTerminal: (reason, code) => {
 		console.error('[playbacksync:bg] terminal close', { reason, code })
 	},
+	onLifecycleChange: () => recomputeActiveIcon(),
+}
+
+/**
+ * Reconcile the toolbar icon with current session + tab-cache state.
+ * Greyscale-everywhere unless the WS room is `joined`, in which case
+ * the freshest-reporting tab gets the color variant. Cheap to call —
+ * idempotent and a no-op when the chosen tab hasn't changed.
+ */
+function recomputeActiveIcon(): void {
+	if (getDerivedStatus() !== 'joined') {
+		setActiveTab(null)
+		return
+	}
+	const active = pickActiveTab()
+	setActiveTab(active ? active[0] : null)
 }
 
 export default defineBackground(() => {
 	console.log('[playbacksync:bg] worker booted')
 
 	initPopupBroadcast(session)
+	void initGreyscaleDefaults()
 	void bootstrap()
 
 	chrome.runtime.onMessage.addListener(
@@ -70,6 +89,8 @@ export default defineBackground(() => {
 	chrome.tabs.onRemoved.addListener((tabId: number) => {
 		forgetTab(tabId)
 		lastPlayerStateByTab.delete(tabId)
+		forgetIconForTab(tabId)
+		recomputeActiveIcon()
 	})
 })
 
@@ -117,6 +138,7 @@ async function routeMessage(tabId: number | undefined, msg: ContentToBackground)
 		}
 		case 'status': {
 			recordStatus(tabId, msg.adapterId, msg.state)
+			recomputeActiveIcon()
 			const prev = lastPlayerStateByTab.get(tabId)
 			if (prev !== msg.state.playerState) {
 				if (msg.state.playerState === 'buffering') {
@@ -137,6 +159,8 @@ async function routeMessage(tabId: number | undefined, msg: ContentToBackground)
 			})
 			forgetTab(tabId)
 			lastPlayerStateByTab.delete(tabId)
+			forgetIconForTab(tabId)
+			recomputeActiveIcon()
 			return
 	}
 }

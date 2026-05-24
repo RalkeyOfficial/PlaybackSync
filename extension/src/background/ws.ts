@@ -69,6 +69,13 @@ export interface WsCallbacks {
 	dispatchCommand(tabId: number, cmd: AuthoritativeCommand): void
 	/** Surface a fatal protocol/connection error for logging. */
 	onTerminal(reason: string, code: string | null): void
+	/**
+	 * Fired whenever the derived popup status may have changed —
+	 * socket open/close and ROOM_STATE applied. Lets the entrypoint
+	 * re-paint per-tab toolbar icons without `ws.ts` knowing about
+	 * `chrome.action`.
+	 */
+	onLifecycleChange?(): void
 }
 
 interface WsRuntime {
@@ -118,11 +125,13 @@ export function connect(creds: PbSyncCreds, session: SessionState, cb: WsCallbac
  */
 export function disconnect(): void {
 	if (!runtime) return
+	const cb = runtime.cb
 	runtime.terminated = true
 	stopTimers(runtime)
 	runtime.socket?.close(1000, 'client disconnect')
 	runtime = null
 	notifyDisconnected()
+	cb.onLifecycleChange?.()
 }
 
 /**
@@ -172,6 +181,7 @@ function onOpen(r: WsRuntime): void {
 	startTimers(r)
 	scheduleInitialClockPings(r)
 	notifyOpen()
+	r.cb.onLifecycleChange?.()
 }
 
 function onMessage(r: WsRuntime, ev: MessageEvent): void {
@@ -192,6 +202,7 @@ function onClose(r: WsRuntime, ev: CloseEvent): void {
 	r.socket = null
 	log('info', 'close', { code: ev.code, reason: ev.reason })
 	notifyDisconnected()
+	r.cb.onLifecycleChange?.()
 	if (r.terminated) return
 
 	// reason carries the daemon's protocol-level code on terminal closes.
@@ -233,6 +244,7 @@ function handleFrame(r: WsRuntime, frame: InboundFrame): void {
 			}
 			dispatchAll(r, applyRoomState(r.session, frame))
 			notifyRoomStateChanged()
+			r.cb.onLifecycleChange?.()
 			return
 		}
 		case 'STATE':
