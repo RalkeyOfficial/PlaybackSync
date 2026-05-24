@@ -82,7 +82,11 @@ The WS client connects on background-worker boot if credentials are present in `
      })
      ```
      Reload the extension (chrome://extensions → reload). Useful when testing against `occ playbacksync:ws-serve` without a real dashboard round-trip.
-4. **Drive the test.** Open two tabs of `chrome-extension://<id>/template-test.html?pbsync-template`. Play / pause / seek in tab A — tab B should mirror within a few hundred milliseconds. The background console shows `EVENT` frames going out and `STATE` frames coming back; the suppressed-echo path keeps the round-trip from looping.
+4. **Drive the test.** Two options:
+   - **Template page** (no network needed): open two tabs of `chrome-extension://<id>/template-test.html?pbsync-template`.
+   - **Real site (miruro)**: open two tabs of `https://www.miruro.to/watch/166617/fatestrange-fake?ep=4`. The page-tab DevTools console should log `[playbacksync:miruro] adapter activated`; the worker DevTools should log a `setIdentity` with `{ providerId: 'miruro', videoId: '166617-ep4', normalizedUrl: '/watch/166617?ep=4' }`. See [`docs/adapter-miruro.md`](docs/adapter-miruro.md) for the manual-load-button quirk on cold pages.
+
+   Play / pause / seek in tab A — tab B should mirror within a few hundred milliseconds. The background console shows `EVENT` frames going out and `STATE` frames coming back; the suppressed-echo path keeps the round-trip from looping.
 5. **Reconnect check.** Stop the daemon, wait a few seconds, restart it. The background console should log reconnect attempts with exponential backoff and, once it succeeds, a `ROOM_STATE` carrying `recentEvents` (the events the tombstone replayed).
 
 If you don't have a daemon handy, the extension still compiles, lints, and loads — it just sits idle without creds and prints a one-line hint into the background console.

@@ -7,6 +7,7 @@ import type {
 	LocalIntent,
 	VideoState,
 } from './types'
+import { miruroAdapterFactory } from './miruro'
 import { templateAdapterFactory } from './_template'
 
 /**
@@ -24,6 +25,7 @@ const STATUS_POLL_MS = 1000
  * canHandlePage returns true is activated").
  */
 const ADAPTERS: AdapterFactory[] = [
+	miruroAdapterFactory,
 	templateAdapterFactory,
 ]
 

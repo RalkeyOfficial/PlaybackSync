@@ -100,7 +100,7 @@ On Firefox MV2 the background page is long-lived by default; no special handling
 
 ## Out-of-scope (deferred to follow-up specs)
 
-- **Real site adapters.** Only `_template` exists; it activates on `?pbsync-template` so it's inert on real sites.
+- **More site adapters.** [`miruro`](adapter-miruro.md) is the first concrete adapter alongside the `_template` test scaffold (which still activates only on `?pbsync-template`). Adding crunchyroll, youtube, etc. is one new file per site plus a registry entry in [`src/adapters/runtime.ts`](../src/adapters/runtime.ts).
 - **Popup UI** for connection status, current room, manual disconnect.
 - **Multi-room / multi-tab arbitration.** Currently the connection is browser-wide and the "active tab" is just "whoever reported status most recently".
 - **`currentlyShowing` + `catalogFragment`** on JOIN. The protocol module has the schema; real values arrive when the first site adapter implements scraping.
