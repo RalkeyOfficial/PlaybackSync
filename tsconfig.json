@@ -12,5 +12,11 @@
 		],
 		"noImplicitAny": true,
 		"allowSyntheticDefaultImports": true
-	}
+	},
+	"exclude": [
+		"extension/**",
+		"OLD_CODE/**",
+		"node_modules/**",
+		"js/**"
+	]
 }

@@ -5,8 +5,18 @@ import type {
 	AuthoritativeCommand,
 	ContentIdentity,
 	LocalIntent,
+	VideoState,
 } from './types'
 import { templateAdapterFactory } from './_template'
+
+/**
+ * How often the runtime samples `adapter.getState()` and pushes a `status`
+ * message to the background. The wire-format `HEARTBEAT` cadence is 5 s
+ * (`docs/ws-protocol.md` §HEARTBEAT); polling at 1 s keeps the background's
+ * cache fresh enough for that, and for `BUFFER_*` transition detection,
+ * without flooding the channel.
+ */
+const STATUS_POLL_MS = 1000
 
 /**
  * Static registry of bundled adapters. Adding a new site = appending its
@@ -23,8 +33,17 @@ const ADAPTERS: AdapterFactory[] = [
  * forwards these to `chrome.runtime.sendMessage`.
  */
 export interface RuntimeBridge {
+	/** Forward an observed user action (play/pause/seek) to the background. */
 	sendIntent(adapterId: string, intent: LocalIntent): void
+	/** Forward the page's content identity (once per adapter lifetime). */
 	sendIdentity(adapterId: string, identity: ContentIdentity): void
+	/**
+	 * Forward a periodic state snapshot. The runtime drives the cadence
+	 * via {@link STATUS_POLL_MS}; the background caches the latest value
+	 * for its `HEARTBEAT` and `BUFFER_*` wire-frame emission.
+	 */
+	sendStatus(adapterId: string, state: VideoState): void
+	/** Forward an adapter's fatal failure so the background can clear tab state. */
 	sendFail(adapterId: string, reason: string): void
 }
 
@@ -36,6 +55,7 @@ type RuntimeState =
 let state: RuntimeState = { kind: 'idle' }
 let bridge: RuntimeBridge | null = null
 let started = false
+let statusInterval: ReturnType<typeof setInterval> | null = null
 
 /**
  * Boot the runtime. Idempotent within a content-script lifetime; the
@@ -86,6 +106,7 @@ async function evaluate(): Promise<void> {
 		}
 		state = { kind: 'active', adapter, commandHandler: pendingHandler }
 		pendingHandler = null
+		startStatusPolling(adapter)
 		log('info', adapter.id, 'adapter activated')
 	} catch (err) {
 		const reason = err instanceof Error ? err.message : String(err)
@@ -124,6 +145,7 @@ function buildContext(adapterId: string): AdapterContext {
 }
 
 function teardown(): void {
+	stopStatusPolling()
 	if (state.kind === 'active') {
 		try {
 			state.adapter.destroy()
@@ -136,6 +158,22 @@ function teardown(): void {
 	}
 	state = { kind: 'idle' }
 	pendingHandler = null
+}
+
+function startStatusPolling(adapter: Adapter): void {
+	stopStatusPolling()
+	statusInterval = setInterval(() => {
+		const snapshot = adapter.getState()
+		if (!snapshot) return
+		bridge?.sendStatus(adapter.id, snapshot)
+	}, STATUS_POLL_MS)
+}
+
+function stopStatusPolling(): void {
+	if (statusInterval !== null) {
+		clearInterval(statusInterval)
+		statusInterval = null
+	}
 }
 
 /**

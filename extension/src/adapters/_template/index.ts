@@ -1,4 +1,10 @@
-import type { Adapter, AdapterContext, AdapterFactory, LocalIntent } from '../types'
+import type {
+	Adapter,
+	AdapterContext,
+	AdapterFactory,
+	LocalIntent,
+	VideoState,
+} from '../types'
 
 /**
  * Baseline adapter. Activates only when the URL contains the query
@@ -64,6 +70,18 @@ class TemplateAdapter implements Adapter {
 			videoId: location.pathname,
 			normalizedUrl: location.pathname,
 		})
+	}
+
+	getState(): VideoState | null {
+		const video = this.video
+		if (!video) return null
+		// HAVE_FUTURE_DATA = 3 — anything below means the next frame isn't
+		// available yet, which is "actually buffering" rather than paused.
+		const buffering = !video.paused && video.readyState < 3
+		return {
+			currentPos: video.currentTime,
+			playerState: buffering ? 'buffering' : video.paused ? 'paused' : 'playing',
+		}
 	}
 
 	destroy(): void {

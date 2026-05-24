@@ -7,7 +7,11 @@
 	"type": "module",
 	"scripts": {
 		"build": "vite --mode production build",
+		"build:extension": "npm --prefix extension run build",
+		"build:extension:firefox": "npm --prefix extension run build:firefox",
 		"dev": "vite --mode development build",
+		"dev:extension": "npm --prefix extension run dev",
+		"dev:extension:firefox": "npm --prefix extension run dev:firefox",
 		"lint": "eslint src",
 		"lint:fix": "eslint src --fix",
 		"stylelint": "stylelint src",

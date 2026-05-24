@@ -25,6 +25,17 @@ export interface Adapter {
 	 */
 	init(ctx: AdapterContext): Promise<void>
 
+	/**
+	 * Read the current video state on demand. The runtime polls this on a
+	 * ~1 s tick and forwards the result to the background, which uses it to
+	 * build `HEARTBEAT` frames and detect `BUFFER_START`/`BUFFER_END`
+	 * transitions. Returning `null` means "not ready yet" (e.g. video
+	 * element gone mid-tick) — the runtime skips that tick.
+	 *
+	 * @returns The current player state, or `null` if it can't be read.
+	 */
+	getState(): VideoState | null
+
 	/** Detach every listener and clear refs. Runtime calls this on URL change. */
 	destroy(): void
 }
@@ -101,4 +112,19 @@ export interface ContentIdentity {
 	providerId: string
 	videoId: string
 	normalizedUrl: string
+}
+
+/**
+ * Snapshot of the page's video state, as the adapter sees it. Sampled
+ * once per ~1 s tick. `currentPos` is the playhead in seconds; the three
+ * `playerState` values map directly to the wire-format `playerState`
+ * field on `HEARTBEAT` frames (`docs/ws-protocol.md` §HEARTBEAT).
+ *
+ * `'buffering'` is reserved for "actively waiting on data" (e.g.
+ * `readyState < 3`). A paused video that's fully loaded is `'paused'`,
+ * not `'buffering'`.
+ */
+export interface VideoState {
+	currentPos: number
+	playerState: 'playing' | 'paused' | 'buffering'
 }

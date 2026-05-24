@@ -1,3 +1,15 @@
+/**
+ * Content-script entrypoint. Runs on every page (workshop §2 rule 3:
+ * unsupported pages stay silent) and bootstraps the adapter runtime
+ * with a {@link RuntimeBridge} that forwards every outbound call to
+ * the background via `chrome.runtime.sendMessage`. Inbound `command`
+ * messages from the background are routed straight into the runtime,
+ * which dispatches them to the active adapter.
+ *
+ * This file deliberately knows nothing about the protocol — the
+ * runtime owns adapter lifecycle, the background owns the WebSocket.
+ */
+
 import { deliverCommand, start, type RuntimeBridge } from '@/src/adapters/runtime'
 import type { BackgroundToContent, ContentToBackground } from '@/src/messages'
 
@@ -18,6 +30,9 @@ export default defineContentScript({
 			},
 			sendIdentity(adapterId, identity) {
 				send({ kind: 'identity', adapterId, identity })
+			},
+			sendStatus(adapterId, state) {
+				send({ kind: 'status', adapterId, state })
 			},
 			sendFail(adapterId, reason) {
 				send({ kind: 'fail', adapterId, reason })
