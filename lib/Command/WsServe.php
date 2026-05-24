@@ -54,9 +54,9 @@ class WsServe extends Command {
 
 	protected function execute(InputInterface $input, OutputInterface $output): int {
 		$host = (string)($input->getOption('host')
-			?? $this->appConfig->getValueString(Application::APP_ID, 'ws_host', '127.0.0.1'));
+			?? $this->appConfig->getValueString(Application::APP_ID, 'ws_host'));
 		$port = (int)($input->getOption('port')
-			?? $this->appConfig->getValueString(Application::APP_ID, 'ws_port', '8765'));
+			?? $this->appConfig->getValueInt(Application::APP_ID, 'ws_port'));
 
 		$startedAtMs = (int)(microtime(true) * 1000);
 
@@ -107,8 +107,8 @@ class WsServe extends Command {
 			return;
 		}
 
-		$adminHost = $this->appConfig->getValueString($app, 'ws_admin_host', '127.0.0.1');
-		$adminPort = $this->appConfig->getValueInt($app, 'ws_admin_port', 8766);
+		$adminHost = $this->appConfig->getValueString($app, 'ws_admin_host');
+		$adminPort = $this->appConfig->getValueInt($app, 'ws_admin_port');
 		$adminSocket = new SocketServer($adminHost . ':' . $adminPort, [], $loop);
 
 		new IoServer(

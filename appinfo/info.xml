@@ -26,6 +26,9 @@
 	</commands>
 
 	<repair-steps>
+		<install>
+			<step>OCA\PlaybackSync\Migration\EnsureDefaultSettings</step>
+		</install>
 		<post-migration>
 			<step>OCA\PlaybackSync\Migration\EnsureAdminSecret</step>
 		</post-migration>

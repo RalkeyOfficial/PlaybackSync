@@ -103,18 +103,38 @@ export const useAdminSettingsStore = defineStore('adminSettings', {
 
 		collectSection(section: AdminSettingsSection): AdminSettingsPatch | null {
 			if (section === 'wsTuning' && this.wsTuning) {
-				return { ...this.wsTuning }
+				return stripNulls(this.wsTuning)
 			}
 			if (section === 'daemon' && this.daemon) {
-				return { ...this.daemon }
+				return stripNulls(this.daemon)
 			}
 			if (section === 'rooms' && this.rooms) {
-				return { ...this.rooms }
+				return stripNulls(this.rooms)
 			}
 			return null
 		},
 	},
 })
+
+/**
+ * Drop keys whose value is `null` from a settings section before it becomes a
+ * patch. The server validator rejects null values outright, and a `null` here
+ * only means "admin hasn't filled in this field yet" — there is nothing to
+ * persist. Returning a fresh object avoids leaking the store's reactive proxy
+ * into the network layer.
+ *
+ * @param section the loaded section from the store, which may contain nulls
+ * @return a patch with all null-valued keys removed
+ */
+function stripNulls<T extends Record<string, unknown>>(section: T): AdminSettingsPatch {
+	const patch: Record<string, unknown> = {}
+	for (const [key, value] of Object.entries(section)) {
+		if (value !== null) {
+			patch[key] = value
+		}
+	}
+	return patch as AdminSettingsPatch
+}
 
 /**
  * Pull the server-supplied error message out of an axios failure when one is

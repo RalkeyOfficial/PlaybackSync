@@ -8,6 +8,7 @@ use OCA\PlaybackSync\AppInfo\Application;
 use OCA\PlaybackSync\Http\SseStreamResponse;
 use OCA\PlaybackSync\Service\AdminEventClient;
 use OCA\PlaybackSync\Service\AdminSecretService;
+use OCA\PlaybackSync\Settings\SettingsDefaults;
 use OCP\AppFramework\Controller;
 use OCP\AppFramework\Http;
 use OCP\AppFramework\Http\Attribute\NoCSRFRequired;
@@ -46,34 +47,6 @@ class AdminSettingsController extends Controller {
 		'max_clients_per_room' => ['min' => 1, 'max' => 1_000],
 	];
 
-	/**
-	 * @var array<string, int>
-	 */
-	private const INT_DEFAULTS = [
-		'ws_join_timeout_ms' => 5_000,
-		'ws_idle_close_ms' => 30_000,
-		'ws_tombstone_ms' => 30_000,
-		'ws_kick_block_ms' => 30_000,
-		'ws_event_log_size' => 200,
-		'ws_rate_limit_events_per_sec' => 10,
-		'ws_drift_nudge_threshold_ms' => 200,
-		'ws_drift_seek_threshold_ms' => 500,
-		'ws_drift_cooldown_ms' => 3_000,
-		'ws_port' => 8765,
-		'ws_admin_port' => 8766,
-		'default_ttl_seconds' => 86_400,
-		'max_ttl_seconds' => 86_400,
-		'max_clients_per_room' => 50,
-	];
-
-	/**
-	 * @var array<string, string>
-	 */
-	private const STRING_DEFAULTS = [
-		'ws_host' => '127.0.0.1',
-		'ws_admin_host' => '127.0.0.1',
-	];
-
 	private const HOST_REGEX = '/^[A-Za-z0-9._:\-]+$/';
 
 	public function __construct(
@@ -108,9 +81,9 @@ class AdminSettingsController extends Controller {
 		// Cross-field check: default TTL can't exceed max TTL once both
 		// are settled (whether from the patch or from the existing config).
 		$effectiveMax = $normalized['max_ttl_seconds']
-			?? $this->appConfig->getValueInt(Application::APP_ID, 'max_ttl_seconds', self::INT_DEFAULTS['max_ttl_seconds']);
+			?? $this->appConfig->getValueInt(Application::APP_ID, 'max_ttl_seconds', SettingsDefaults::INT_DEFAULTS['max_ttl_seconds']);
 		$effectiveDefault = $normalized['default_ttl_seconds']
-			?? $this->appConfig->getValueInt(Application::APP_ID, 'default_ttl_seconds', self::INT_DEFAULTS['default_ttl_seconds']);
+			?? $this->appConfig->getValueInt(Application::APP_ID, 'default_ttl_seconds', SettingsDefaults::INT_DEFAULTS['default_ttl_seconds']);
 		if ($effectiveDefault > $effectiveMax) {
 			return new DataResponse(
 				['error' => 'default_ttl_seconds must not exceed max_ttl_seconds.'],
@@ -145,20 +118,23 @@ class AdminSettingsController extends Controller {
 
 	/**
 	 * Read the currently-persisted value for a configurable key, using the
-	 * same type discipline as `persist()`. Returns null for unknown keys —
-	 * the caller has already validated against the same rule maps, so this
-	 * branch is unreachable in practice.
+	 * same type discipline as `persist()`. Returns null when the key has
+	 * never been written — `EnsureDefaultSettings` seeds every known key on
+	 * install, so this only surfaces if an admin manually nuked one.
 	 */
 	private function readCurrentValue(string $key): int|string|bool|null {
 		$app = Application::APP_ID;
+		if (!$this->appConfig->hasKey($app, $key)) {
+			return null;
+		}
 		if (isset(self::INT_RULES[$key])) {
-			return $this->appConfig->getValueInt($app, $key, self::INT_DEFAULTS[$key]);
+			return $this->appConfig->getValueInt($app, $key);
 		}
 		if ($key === 'ws_host' || $key === 'ws_admin_host') {
-			return $this->appConfig->getValueString($app, $key, self::STRING_DEFAULTS[$key]);
+			return $this->appConfig->getValueString($app, $key);
 		}
 		if ($key === 'restrict_to_admins') {
-			return $this->appConfig->getValueBool($app, $key, false);
+			return $this->appConfig->getValueBool($app, $key);
 		}
 		return null;
 	}
@@ -229,17 +205,23 @@ class AdminSettingsController extends Controller {
 	}
 
 	/**
+	 * Build the snapshot returned to the admin UI. Each configurable value is
+	 * the *persisted* value or `null` when the key has never been written —
+	 * never an in-code fallback. The frontend renders `null` as an empty input
+	 * with a placeholder suggesting the install-time default. In practice
+	 * every key is seeded by `EnsureDefaultSettings`, so nulls only appear if
+	 * an admin manually deleted a key via `occ config:app:delete`.
+	 *
 	 * @return array{
-	 *     wsTuning: array<string, int>,
-	 *     daemon: array{ws_host: string, ws_port: int, ws_admin_host: string, ws_admin_port: int},
-	 *     rooms: array{restrict_to_admins: bool, default_ttl_seconds: int, max_ttl_seconds: int, max_clients_per_room: int},
+	 *     wsTuning: array<string, int|null>,
+	 *     daemon: array{ws_host: string|null, ws_port: int|null, ws_admin_host: string|null, ws_admin_port: int|null},
+	 *     rooms: array{restrict_to_admins: bool|null, default_ttl_seconds: int|null, max_ttl_seconds: int|null, max_clients_per_room: int|null},
 	 *     secret: array{configured: bool, masked: string, length: int}
 	 * }
 	 */
 	private function snapshot(): array {
-		$app = Application::APP_ID;
-		$readInt = fn (string $k) => $this->appConfig->getValueInt($app, $k, self::INT_DEFAULTS[$k]);
-		$readStr = fn (string $k) => $this->appConfig->getValueString($app, $k, self::STRING_DEFAULTS[$k]);
+		$readInt = fn (string $k) => $this->readPersistedInt($k);
+		$readStr = fn (string $k) => $this->readPersistedString($k);
 
 		return [
 			'wsTuning' => [
@@ -260,13 +242,37 @@ class AdminSettingsController extends Controller {
 				'ws_admin_port' => $readInt('ws_admin_port'),
 			],
 			'rooms' => [
-				'restrict_to_admins' => $this->appConfig->getValueBool($app, 'restrict_to_admins', false),
+				'restrict_to_admins' => $this->readPersistedBool('restrict_to_admins'),
 				'default_ttl_seconds' => $readInt('default_ttl_seconds'),
 				'max_ttl_seconds' => $readInt('max_ttl_seconds'),
 				'max_clients_per_room' => $readInt('max_clients_per_room'),
 			],
 			'secret' => $this->secrets->peekMasked(),
 		];
+	}
+
+	private function readPersistedInt(string $key): ?int {
+		$app = Application::APP_ID;
+		if (!$this->appConfig->hasKey($app, $key)) {
+			return null;
+		}
+		return $this->appConfig->getValueInt($app, $key);
+	}
+
+	private function readPersistedString(string $key): ?string {
+		$app = Application::APP_ID;
+		if (!$this->appConfig->hasKey($app, $key)) {
+			return null;
+		}
+		return $this->appConfig->getValueString($app, $key);
+	}
+
+	private function readPersistedBool(string $key): ?bool {
+		$app = Application::APP_ID;
+		if (!$this->appConfig->hasKey($app, $key)) {
+			return null;
+		}
+		return $this->appConfig->getValueBool($app, $key);
 	}
 
 	/**

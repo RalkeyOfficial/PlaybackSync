@@ -56,8 +56,8 @@ class AdminKickClient {
 			throw new KickFailedException('Admin secret is not configured.');
 		}
 
-		$host = $this->appConfig->getValueString(Application::APP_ID, 'ws_admin_host', '127.0.0.1');
-		$port = $this->appConfig->getValueInt(Application::APP_ID, 'ws_admin_port', 8766);
+		$host = $this->appConfig->getValueString(Application::APP_ID, 'ws_admin_host');
+		$port = $this->appConfig->getValueInt(Application::APP_ID, 'ws_admin_port');
 
 		$path = '/admin/rooms/' . rawurlencode($roomUuid) . '/clients/' . rawurlencode($clientId) . '/disconnect';
 		$nowMs = (int)(microtime(true) * 1000);

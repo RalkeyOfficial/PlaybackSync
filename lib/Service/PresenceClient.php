@@ -53,8 +53,8 @@ class PresenceClient {
 			return [];
 		}
 
-		$host = $this->appConfig->getValueString(Application::APP_ID, 'ws_admin_host', '127.0.0.1');
-		$port = $this->appConfig->getValueInt(Application::APP_ID, 'ws_admin_port', 8766);
+		$host = $this->appConfig->getValueString(Application::APP_ID, 'ws_admin_host');
+		$port = $this->appConfig->getValueInt(Application::APP_ID, 'ws_admin_port');
 
 		$query = 'uuids=' . implode(',', $uuids);
 		$path = '/admin/rooms/presence';

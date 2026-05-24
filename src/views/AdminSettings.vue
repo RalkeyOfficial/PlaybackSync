@@ -12,14 +12,16 @@
 					<NcTextField
 						v-for="field in wsTuningFields"
 						:key="field.key"
-						v-model.number="wsTuning[field.key]"
+						:modelValue="numberInput(wsTuning[field.key])"
 						type="number"
 						:label="field.label"
 						:helperText="field.suffix"
+						:placeholder="String(field.placeholder)"
 						:min="field.min"
 						:max="field.max"
 						step="1"
-						inputmode="numeric" />
+						inputmode="numeric"
+						@update:modelValue="(v) => wsTuning[field.key] = parseNumberInput(v)" />
 				</div>
 				<div class="playbacksync-admin__actions">
 					<NcButton
@@ -43,29 +45,37 @@
 				</NcNoteCard>
 				<div class="playbacksync-admin__grid">
 					<NcTextField
-						v-model="daemon.ws_host"
+						:modelValue="stringInput(daemon.ws_host)"
 						:label="t('playbacksync', 'WebSocket host')"
-						:maxlength="255" />
+						:placeholder="PLACEHOLDERS.daemon.ws_host"
+						:maxlength="255"
+						@update:modelValue="(v) => daemon.ws_host = parseStringInput(v)" />
 					<NcTextField
-						v-model.number="daemon.ws_port"
+						:modelValue="numberInput(daemon.ws_port)"
 						type="number"
 						:label="t('playbacksync', 'WebSocket port')"
+						:placeholder="String(PLACEHOLDERS.daemon.ws_port)"
 						min="1"
 						max="65535"
 						step="1"
-						inputmode="numeric" />
+						inputmode="numeric"
+						@update:modelValue="(v) => daemon.ws_port = parseNumberInput(v)" />
 					<NcTextField
-						v-model="daemon.ws_admin_host"
+						:modelValue="stringInput(daemon.ws_admin_host)"
 						:label="t('playbacksync', 'Admin host')"
-						:maxlength="255" />
+						:placeholder="PLACEHOLDERS.daemon.ws_admin_host"
+						:maxlength="255"
+						@update:modelValue="(v) => daemon.ws_admin_host = parseStringInput(v)" />
 					<NcTextField
-						v-model.number="daemon.ws_admin_port"
+						:modelValue="numberInput(daemon.ws_admin_port)"
 						type="number"
 						:label="t('playbacksync', 'Admin port')"
+						:placeholder="String(PLACEHOLDERS.daemon.ws_admin_port)"
 						min="1"
 						max="65535"
 						step="1"
-						inputmode="numeric" />
+						inputmode="numeric"
+						@update:modelValue="(v) => daemon.ws_admin_port = parseNumberInput(v)" />
 				</div>
 				<div class="playbacksync-admin__actions">
 					<NcButton
@@ -85,35 +95,42 @@
 				:name="t('playbacksync', 'Room defaults')"
 				:description="t('playbacksync', 'Defaults applied when rooms are created, plus the upper bounds the API enforces.')">
 				<NcCheckboxRadioSwitch
-					v-model="rooms.restrict_to_admins"
-					type="switch">
+					:modelValue="rooms.restrict_to_admins ?? false"
+					type="switch"
+					@update:modelValue="(v) => rooms.restrict_to_admins = v">
 					{{ t('playbacksync', 'Restrict room creation to administrators') }}
 				</NcCheckboxRadioSwitch>
 				<div class="playbacksync-admin__grid">
 					<NcTextField
-						v-model.number="rooms.default_ttl_seconds"
+						:modelValue="numberInput(rooms.default_ttl_seconds)"
 						type="number"
 						:label="t('playbacksync', 'Default room TTL (seconds)')"
+						:placeholder="String(PLACEHOLDERS.rooms.default_ttl_seconds)"
 						min="1"
-						:max="rooms.max_ttl_seconds"
+						:max="rooms.max_ttl_seconds ?? undefined"
 						step="1"
-						inputmode="numeric" />
+						inputmode="numeric"
+						@update:modelValue="(v) => rooms.default_ttl_seconds = parseNumberInput(v)" />
 					<NcTextField
-						v-model.number="rooms.max_ttl_seconds"
+						:modelValue="numberInput(rooms.max_ttl_seconds)"
 						type="number"
 						:label="t('playbacksync', 'Maximum room TTL (seconds)')"
+						:placeholder="String(PLACEHOLDERS.rooms.max_ttl_seconds)"
 						min="60"
 						max="2592000"
 						step="1"
-						inputmode="numeric" />
+						inputmode="numeric"
+						@update:modelValue="(v) => rooms.max_ttl_seconds = parseNumberInput(v)" />
 					<NcTextField
-						v-model.number="rooms.max_clients_per_room"
+						:modelValue="numberInput(rooms.max_clients_per_room)"
 						type="number"
 						:label="t('playbacksync', 'Maximum clients per room')"
+						:placeholder="String(PLACEHOLDERS.rooms.max_clients_per_room)"
 						min="1"
 						max="1000"
 						step="1"
-						inputmode="numeric" />
+						inputmode="numeric"
+						@update:modelValue="(v) => rooms.max_clients_per_room = parseNumberInput(v)" />
 				</div>
 				<div class="playbacksync-admin__actions">
 					<NcButton
@@ -240,21 +257,51 @@ interface WsTuningField {
 	suffix: string
 	min: number
 	max: number
+	placeholder: number
 }
 
 const store = useAdminSettingsStore()
 const confirmOpen = ref(false)
 
+// Placeholder values displayed in empty inputs. These mirror
+// `SettingsDefaults` in PHP and only surface when the admin has manually
+// deleted a key (because EnsureDefaultSettings seeds every key on install).
+// They are *suggestions*, never substituted into the form's actual value.
+const PLACEHOLDERS = {
+	wsTuning: {
+		ws_join_timeout_ms: 5_000,
+		ws_idle_close_ms: 30_000,
+		ws_tombstone_ms: 30_000,
+		ws_kick_block_ms: 30_000,
+		ws_event_log_size: 200,
+		ws_rate_limit_events_per_sec: 10,
+		ws_drift_nudge_threshold_ms: 200,
+		ws_drift_seek_threshold_ms: 500,
+		ws_drift_cooldown_ms: 3_000,
+	},
+	daemon: {
+		ws_host: '127.0.0.1',
+		ws_port: 8765,
+		ws_admin_host: '127.0.0.1',
+		ws_admin_port: 8766,
+	},
+	rooms: {
+		default_ttl_seconds: 86_400,
+		max_ttl_seconds: 86_400,
+		max_clients_per_room: 50,
+	},
+} as const
+
 const wsTuningFields = computed<WsTuningField[]>(() => [
-	{ key: 'ws_join_timeout_ms', label: t('playbacksync', 'Join timeout (ms)'), suffix: t('playbacksync', 'milliseconds'), min: 0, max: 600_000 },
-	{ key: 'ws_idle_close_ms', label: t('playbacksync', 'Idle close (ms)'), suffix: t('playbacksync', 'milliseconds'), min: 0, max: 600_000 },
-	{ key: 'ws_tombstone_ms', label: t('playbacksync', 'Tombstone (ms)'), suffix: t('playbacksync', 'milliseconds'), min: 0, max: 600_000 },
-	{ key: 'ws_kick_block_ms', label: t('playbacksync', 'Kick block (ms)'), suffix: t('playbacksync', 'milliseconds'), min: 0, max: 600_000 },
-	{ key: 'ws_event_log_size', label: t('playbacksync', 'Event log size'), suffix: t('playbacksync', 'events'), min: 1, max: 10_000 },
-	{ key: 'ws_rate_limit_events_per_sec', label: t('playbacksync', 'Rate limit (events/s)'), suffix: t('playbacksync', 'events per second'), min: 1, max: 1_000 },
-	{ key: 'ws_drift_nudge_threshold_ms', label: t('playbacksync', 'Drift nudge threshold (ms)'), suffix: t('playbacksync', 'milliseconds'), min: 0, max: 60_000 },
-	{ key: 'ws_drift_seek_threshold_ms', label: t('playbacksync', 'Drift seek threshold (ms)'), suffix: t('playbacksync', 'milliseconds'), min: 0, max: 60_000 },
-	{ key: 'ws_drift_cooldown_ms', label: t('playbacksync', 'Drift cooldown (ms)'), suffix: t('playbacksync', 'milliseconds'), min: 0, max: 60_000 },
+	{ key: 'ws_join_timeout_ms', label: t('playbacksync', 'Join timeout (ms)'), suffix: t('playbacksync', 'milliseconds'), min: 0, max: 600_000, placeholder: PLACEHOLDERS.wsTuning.ws_join_timeout_ms },
+	{ key: 'ws_idle_close_ms', label: t('playbacksync', 'Idle close (ms)'), suffix: t('playbacksync', 'milliseconds'), min: 0, max: 600_000, placeholder: PLACEHOLDERS.wsTuning.ws_idle_close_ms },
+	{ key: 'ws_tombstone_ms', label: t('playbacksync', 'Tombstone (ms)'), suffix: t('playbacksync', 'milliseconds'), min: 0, max: 600_000, placeholder: PLACEHOLDERS.wsTuning.ws_tombstone_ms },
+	{ key: 'ws_kick_block_ms', label: t('playbacksync', 'Kick block (ms)'), suffix: t('playbacksync', 'milliseconds'), min: 0, max: 600_000, placeholder: PLACEHOLDERS.wsTuning.ws_kick_block_ms },
+	{ key: 'ws_event_log_size', label: t('playbacksync', 'Event log size'), suffix: t('playbacksync', 'events'), min: 1, max: 10_000, placeholder: PLACEHOLDERS.wsTuning.ws_event_log_size },
+	{ key: 'ws_rate_limit_events_per_sec', label: t('playbacksync', 'Rate limit (events/s)'), suffix: t('playbacksync', 'events per second'), min: 1, max: 1_000, placeholder: PLACEHOLDERS.wsTuning.ws_rate_limit_events_per_sec },
+	{ key: 'ws_drift_nudge_threshold_ms', label: t('playbacksync', 'Drift nudge threshold (ms)'), suffix: t('playbacksync', 'milliseconds'), min: 0, max: 60_000, placeholder: PLACEHOLDERS.wsTuning.ws_drift_nudge_threshold_ms },
+	{ key: 'ws_drift_seek_threshold_ms', label: t('playbacksync', 'Drift seek threshold (ms)'), suffix: t('playbacksync', 'milliseconds'), min: 0, max: 60_000, placeholder: PLACEHOLDERS.wsTuning.ws_drift_seek_threshold_ms },
+	{ key: 'ws_drift_cooldown_ms', label: t('playbacksync', 'Drift cooldown (ms)'), suffix: t('playbacksync', 'milliseconds'), min: 0, max: 60_000, placeholder: PLACEHOLDERS.wsTuning.ws_drift_cooldown_ms },
 ])
 
 // Non-null shims so the template doesn't have to chain `?.` everywhere; the
@@ -402,43 +449,97 @@ function onConfirmOpenChange(value: boolean) {
 }
 
 /**
- * Build a zeroed `WsTuningSettings` so the template's two-way bindings have a
- * stable shape during the brief window before the initial fetch resolves.
+ * Build an all-null `WsTuningSettings` so the template bindings have a stable
+ * shape during the brief window before `store.load()` resolves. The form is
+ * hidden behind `v-if="store.loaded"` so this is never actually rendered, but
+ * Vue still needs the reactive shape to exist.
  *
- * @return a `WsTuningSettings` with every field set to 0
+ * @return a `WsTuningSettings` with every field set to `null`
  */
 function createEmptyWsTuning(): WsTuningSettings {
 	return {
-		ws_join_timeout_ms: 0,
-		ws_idle_close_ms: 0,
-		ws_tombstone_ms: 0,
-		ws_kick_block_ms: 0,
-		ws_event_log_size: 0,
-		ws_rate_limit_events_per_sec: 0,
-		ws_drift_nudge_threshold_ms: 0,
-		ws_drift_seek_threshold_ms: 0,
-		ws_drift_cooldown_ms: 0,
+		ws_join_timeout_ms: null,
+		ws_idle_close_ms: null,
+		ws_tombstone_ms: null,
+		ws_kick_block_ms: null,
+		ws_event_log_size: null,
+		ws_rate_limit_events_per_sec: null,
+		ws_drift_nudge_threshold_ms: null,
+		ws_drift_seek_threshold_ms: null,
+		ws_drift_cooldown_ms: null,
 	}
 }
 
 /**
- * Build a zeroed `DaemonSettings` shim used as a fallback while the snapshot
- * loads, so the binding never reads from `null`.
+ * Build an all-null `DaemonSettings` shim used while the snapshot loads.
  *
- * @return a `DaemonSettings` with empty/zero defaults
+ * @return a `DaemonSettings` with every field set to `null`
  */
 function createEmptyDaemon(): DaemonSettings {
-	return { ws_host: '', ws_port: 0, ws_admin_host: '', ws_admin_port: 0 }
+	return { ws_host: null, ws_port: null, ws_admin_host: null, ws_admin_port: null }
 }
 
 /**
- * Build a zeroed `RoomSettings` shim used as a fallback while the snapshot
- * loads, so the binding never reads from `null`.
+ * Build an all-null `RoomSettings` shim used while the snapshot loads.
  *
- * @return a `RoomSettings` with off/zero defaults
+ * @return a `RoomSettings` with every field set to `null`
  */
 function createEmptyRooms(): RoomSettings {
-	return { restrict_to_admins: false, default_ttl_seconds: 0, max_ttl_seconds: 0, max_clients_per_room: 0 }
+	return { restrict_to_admins: null, default_ttl_seconds: null, max_ttl_seconds: null, max_clients_per_room: null }
+}
+
+/**
+ * Translate a possibly-null numeric field into the value bound to the
+ * NcTextField — empty string when the field has never been persisted, the
+ * number as-is otherwise. NcInputField calls `.toString()` on its modelValue,
+ * so we must never hand it a raw `null`.
+ *
+ * @param value the field value from the store
+ * @return the value to pass to `:modelValue`
+ */
+function numberInput(value: number | null): number | string {
+	return value ?? ''
+}
+
+/**
+ * Parse the `update:modelValue` emit from a number-type NcTextField back into
+ * the nullable shape the store holds. An empty input becomes `null` so the
+ * save-side patch builder strips the key.
+ *
+ * @param value the value emitted by NcTextField
+ * @return the parsed number, or `null` for empty / unparseable input
+ */
+function parseNumberInput(value: string | number): number | null {
+	if (typeof value === 'number') {
+		return Number.isFinite(value) ? value : null
+	}
+	if (value === '') {
+		return null
+	}
+	const n = Number(value)
+	return Number.isFinite(n) ? n : null
+}
+
+/**
+ * Translate a possibly-null string field into the value bound to NcTextField.
+ *
+ * @param value the field value from the store
+ * @return empty string when null, the original string otherwise
+ */
+function stringInput(value: string | null): string {
+	return value ?? ''
+}
+
+/**
+ * Parse the `update:modelValue` emit from a string-type NcTextField back into
+ * the nullable shape the store holds. Empty input becomes `null`.
+ *
+ * @param value the value emitted by NcTextField
+ * @return the trimmed string, or `null` when empty
+ */
+function parseStringInput(value: string | number): string | null {
+	const str = typeof value === 'string' ? value : String(value)
+	return str === '' ? null : str
 }
 </script>
 
