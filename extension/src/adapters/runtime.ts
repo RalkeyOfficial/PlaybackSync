@@ -20,6 +20,29 @@ import { templateAdapterFactory } from './_template'
 const STATUS_POLL_MS = 1000
 
 /**
+ * Magnitude of the rate clamp for a `nudge_rate` command. The daemon's
+ * nudge-rate band is 200–500 ms of drift (`docs/ws-protocol.md`
+ * §SYNC_ADJUST); 5 % closes most of that within a few seconds while
+ * staying inaudible. Anything larger starts to sound like fast-forward.
+ */
+const NUDGE_RATE_OFFSET = 0.05
+
+/**
+ * Hard cap on how long the rate stays clamped. Bounds the worst case so a
+ * stale `currentPos` reading can't leave playback nudged indefinitely; if
+ * drift persists, the daemon resends `SYNC_ADJUST` and a fresh nudge
+ * re-arms.
+ */
+const NUDGE_MAX_DURATION_MS = 3000
+
+/**
+ * Dead band around `targetPos`. Drift smaller than this is treated as
+ * already converged — clamping at ±5 % for ≤50 ms would be measurable
+ * jitter for no real correction.
+ */
+const NUDGE_DEAD_BAND_S = 0.05
+
+/**
  * Static registry of bundled adapters. Adding a new site = appending its
  * factory here. First match wins (workshop §9 "first adapter whose
  * canHandlePage returns true is activated").
@@ -60,6 +83,18 @@ let started = false
 let statusInterval: ReturnType<typeof setInterval> | null = null
 
 /**
+ * In-flight nudge restore timer. Set whenever the runtime applies a
+ * `nudge_rate` command; cleared and reset to `1.0` when the timer fires,
+ * a subsequent `nudge_rate` arrives, a competing command (play / pause /
+ * seek) lands mid-window, or the adapter tears down.
+ *
+ * Kept at module scope alongside `statusInterval` because both share the
+ * same lifecycle: per-content-script (i.e. per-tab) singletons that the
+ * runtime owns from `start()` to `teardown()`.
+ */
+let nudgeTimer: ReturnType<typeof setTimeout> | null = null
+
+/**
  * Boot the runtime. Idempotent within a content-script lifetime; the
  * entrypoint should call this exactly once.
  */
@@ -78,10 +113,90 @@ export async function start(b: RuntimeBridge): Promise<void> {
  * Forward a server command (received by the entrypoint via
  * `chrome.runtime.onMessage`) to the active adapter. No-op if no adapter is
  * active or the adapter hasn't registered a handler yet.
+ *
+ * `nudge_rate` is handled here rather than forwarded — the runtime owns
+ * the rate math and the restore timer so the algorithm lives in one
+ * place. Competing authoritative commands (`play` / `pause` / `seek`)
+ * cancel any in-flight nudge before they land; otherwise a hard seek
+ * would commit at a clamped rate.
  */
 export function deliverCommand(cmd: AuthoritativeCommand): void {
 	if (state.kind !== 'active') return
+	if (cmd.type === 'nudge_rate') {
+		applyNudgeRate(state.adapter, cmd.targetPos)
+		return
+	}
+	if (cmd.type === 'play' || cmd.type === 'pause' || cmd.type === 'seek') {
+		cancelNudge(state.adapter)
+	}
 	state.commandHandler?.(cmd)
+}
+
+/**
+ * Apply a `nudge_rate` command: cancel any in-flight nudge, read the
+ * adapter's current position, derive the rate clamp and restore duration,
+ * write through `adapter.setPlaybackRate`, and schedule the restore.
+ *
+ * Bails (after cancelling the prior nudge) when `getState()` returns
+ * `null` or when the drift is already inside the dead band — either case
+ * means there's nothing useful to nudge.
+ */
+function applyNudgeRate(adapter: Adapter, targetPos: number): void {
+	cancelNudge(adapter)
+
+	const snapshot = adapter.getState()
+	if (!snapshot) {
+		log('warn', adapter.id, 'nudge_rate dropped: getState() returned null')
+		return
+	}
+
+	const delta = targetPos - snapshot.currentPos
+	if (Math.abs(delta) < NUDGE_DEAD_BAND_S) return
+
+	const rate = 1 + (delta > 0 ? NUDGE_RATE_OFFSET : -NUDGE_RATE_OFFSET)
+	const durationMs = Math.min(
+		(Math.abs(delta) / NUDGE_RATE_OFFSET) * 1000,
+		NUDGE_MAX_DURATION_MS,
+	)
+
+	try {
+		adapter.setPlaybackRate(rate)
+	} catch (err) {
+		log('error', adapter.id, 'setPlaybackRate(nudge) threw', {
+			reason: err instanceof Error ? err.message : String(err),
+		})
+		return
+	}
+
+	nudgeTimer = setTimeout(() => {
+		nudgeTimer = null
+		try {
+			adapter.setPlaybackRate(1)
+		} catch (err) {
+			log('error', adapter.id, 'setPlaybackRate(restore) threw', {
+				reason: err instanceof Error ? err.message : String(err),
+			})
+		}
+	}, durationMs)
+}
+
+/**
+ * Tear down an in-flight nudge: clear the timer and restore the adapter's
+ * playback rate to baseline. Safe to call when no nudge is active.
+ * Swallows `setPlaybackRate` exceptions because we never want a teardown
+ * path to throw.
+ */
+function cancelNudge(adapter: Adapter): void {
+	if (nudgeTimer === null) return
+	clearTimeout(nudgeTimer)
+	nudgeTimer = null
+	try {
+		adapter.setPlaybackRate(1)
+	} catch (err) {
+		log('error', adapter.id, 'setPlaybackRate(cancel) threw', {
+			reason: err instanceof Error ? err.message : String(err),
+		})
+	}
 }
 
 async function evaluate(): Promise<void> {
@@ -149,6 +264,7 @@ function buildContext(adapterId: string): AdapterContext {
 function teardown(): void {
 	stopStatusPolling()
 	if (state.kind === 'active') {
+		cancelNudge(state.adapter)
 		try {
 			state.adapter.destroy()
 			log('info', state.adapter.id, 'adapter torn down')

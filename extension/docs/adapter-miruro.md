@@ -63,4 +63,4 @@ The miruro UI navigates between episodes via `history.pushState` (URL changes fr
 
 - `scrapeCatalog()` — miruro's episode list will be readable, but the contract method doesn't exist yet. Tracked in [`EXTENSION_TODO.md`](../../EXTENSION_TODO.md) §"Deferred".
 - Cross-origin iframe support — miruro's player is top-level, so this isn't needed.
-- Provider-specific `sync_adjust` — currently the same hard-seek fallback as `_template`. A real `nudge-rate` via `playbackRate` clamping is a follow-up.
+- Provider-specific `nudge_rate` handling — the runtime-driven `setPlaybackRate` clamp is identical across adapters today, and the Vidstack `<video>` element responds to `playbackRate` natively. If Vidstack's own UI ever fights the assignment, miruro can override `setPlaybackRate` to route through the player API instead.

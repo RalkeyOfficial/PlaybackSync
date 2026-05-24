@@ -79,7 +79,7 @@ The popup talks to the background over a `chrome.runtime.Port` named `'pbsync-po
 
 | kind | payload | when |
 |------|---------|------|
-| `command` | `command: AuthoritativeCommand` | Server told us to play / pause / seek / sync_adjust / cursor_change |
+| `command` | `command: AuthoritativeCommand` | Server told us to play / pause / seek / nudge_rate / cursor_change |
 
 `tabId` is read from `sender.tab?.id` on the background side; the content side never sets it.
 

@@ -31,7 +31,7 @@ export const SUPPRESSION_WINDOW_MS = 600
 
 /** Recorded outbound command timing; used by {@link shouldSuppress}. */
 interface RecentCommand {
-	kind: LocalIntent['type'] | 'sync_adjust' | 'cursor_change'
+	kind: LocalIntent['type'] | 'cursor_change'
 	at: number
 }
 
@@ -138,15 +138,19 @@ export function applyPlaylistUpdate(s: SessionState, frame: PlaylistUpdateInFram
 	return []
 }
 
-/** Fold a `SYNC_ADJUST` frame into the matching `sync_adjust` command. */
+/**
+ * Fold a `SYNC_ADJUST` frame into the converging command. `mode: 'seek'`
+ * jumps directly to `targetPos`; `mode: 'nudge-rate'` hands the runtime a
+ * `nudge_rate` command that clamps `<video>.playbackRate` for a short
+ * window so playback converges without an audible jump. The rate math
+ * and restore timer live in [`runtime.ts`](../adapters/runtime.ts); this
+ * fold just selects the strategy.
+ */
 export function applySyncAdjust(_s: SessionState, frame: SyncAdjustFrame): AuthoritativeCommand[] {
 	if (frame.mode === 'seek') {
 		return [{ type: 'seek', time: frame.targetPos }]
 	}
-	// nudge-rate corrections are sub-second drift trims; we don't have a
-	// rate-nudge command yet, so for now we just do a small seek. Real
-	// rate-nudging is a follow-up.
-	return [{ type: 'sync_adjust', delta: 0 }, { type: 'seek', time: frame.targetPos }]
+	return [{ type: 'nudge_rate', targetPos: frame.targetPos }]
 }
 
 // ─── Suppression windows ──────────────────────────────────────────────
@@ -190,10 +194,11 @@ function mapCommandKind(t: AuthoritativeCommand['type']): RecentCommand['kind'] 
 		case 'pause':
 		case 'seek':
 			return t
-		case 'sync_adjust':
-			// A sync-seek lands as a `seeking` event in the adapter; suppress
-			// seek-intents in its wake.
-			return 'seek'
+		case 'nudge_rate':
+			// Setting `<video>.playbackRate` fires `ratechange`, which no
+			// adapter listens to — there's no intent to echo back, so no
+			// suppression slot to arm.
+			return null
 		case 'cursor_change':
 			// Navigation triggers an unload; nothing to suppress on the
 			// outgoing side.

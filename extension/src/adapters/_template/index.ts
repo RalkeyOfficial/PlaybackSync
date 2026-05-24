@@ -56,8 +56,10 @@ class TemplateAdapter implements Adapter {
 				case 'seek':
 					video.currentTime = cmd.time
 					return
-				case 'sync_adjust':
-					video.currentTime += cmd.delta
+				case 'nudge_rate':
+					// The runtime intercepts `nudge_rate` before it reaches the
+					// adapter and drives `setPlaybackRate` itself; this arm
+					// exists only for switch exhaustiveness.
 					return
 				case 'cursor_change':
 					// v2 navigation lands in the WS-client follow-up spec.
@@ -82,6 +84,10 @@ class TemplateAdapter implements Adapter {
 			currentPos: video.currentTime,
 			playerState: buffering ? 'buffering' : video.paused ? 'paused' : 'playing',
 		}
+	}
+
+	setPlaybackRate(rate: number): void {
+		if (this.video) this.video.playbackRate = rate
 	}
 
 	destroy(): void {

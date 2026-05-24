@@ -36,6 +36,20 @@ export interface Adapter {
 	 */
 	getState(): VideoState | null
 
+	/**
+	 * Declarative write-through to the underlying player's playback speed.
+	 * The runtime calls this when applying a `nudge_rate` command and again
+	 * with `1` to restore baseline once the nudge window elapses; the
+	 * adapter never schedules its own timer or decides the magnitude. A
+	 * call with `rate === 1` is the restore call and must always succeed
+	 * even if the player is in a transient state. No-op if the underlying
+	 * player isn't bound yet — the runtime tolerates that.
+	 *
+	 * @param rate Target playback rate. `1` restores baseline; values near
+	 *   `1` (e.g. `0.95` / `1.05`) are the nudge clamps.
+	 */
+	setPlaybackRate(rate: number): void
+
 	/** Detach every listener and clear refs. Runtime calls this on URL change. */
 	destroy(): void
 }
@@ -82,22 +96,26 @@ export type LocalIntent =
 	| { type: 'seek'; time: number }
 
 /**
- * What the background sends to drive the page. Adapters apply these
- * verbatim — no interpretation, no transformation. `cursor_change` is the
- * v2 protocol addition (replaces the legacy `EPISODE_CHANGE`); adapters
- * may treat it as a no-op until the navigation-on-cursor-change spec
- * lands.
+ * What the background sends to drive the page. Adapters apply `play` /
+ * `pause` / `seek` / `cursor_change` verbatim — no interpretation, no
+ * transformation. `nudge_rate` is intercepted by the runtime before it
+ * reaches the adapter: the runtime reads the adapter's current position,
+ * computes the rate clamp, calls {@link Adapter.setPlaybackRate}, and
+ * schedules the restore. Adapters still exhaustively handle it in their
+ * `onCommand` switch (no-op arm) so type-checking stays honest.
  *
  * Fields:
  * - `time` (seconds, float): absolute video position for `seek`.
- * - `delta` (seconds, float): drift correction for `sync_adjust`.
+ * - `targetPos` (seconds, float): authoritative target position the
+ *   runtime should nudge `<video>.currentTime` toward via
+ *   `setPlaybackRate`.
  * - `pageUrl`: target page for `cursor_change`.
  */
 export type AuthoritativeCommand =
 	| { type: 'play' }
 	| { type: 'pause' }
 	| { type: 'seek'; time: number }
-	| { type: 'sync_adjust'; delta: number }
+	| { type: 'nudge_rate'; targetPos: number }
 	| { type: 'cursor_change'; pageUrl: string }
 
 /**

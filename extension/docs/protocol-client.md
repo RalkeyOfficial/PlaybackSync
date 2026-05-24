@@ -102,10 +102,12 @@ The client doesn't decide when to drift-correct — the daemon does. When the se
 
 | `mode` | When | What we do |
 |--------|------|------------|
-| `nudge-rate` | 200–500 ms drift | (Currently) seek + tiny no-op delta. Real rate-nudging is a follow-up. |
+| `nudge-rate` | 200–500 ms drift | Clamp `<video>.playbackRate` to ±5 % toward the drift direction for up to 3 s; the runtime drives the timer and restores `1.0`. |
 | `seek` | ≥ 500 ms drift | Hard seek to `targetPos`. |
 
-Either way the resulting native `seeking` event in the adapter would normally loop back as a fresh intent — suppression stops that.
+Rate math + restore timer live in [`src/adapters/runtime.ts`](../src/adapters/runtime.ts); adapters expose a thin `setPlaybackRate(rate)` primitive ([`src/adapters/types.ts`](../src/adapters/types.ts)) and never schedule their own timer. A competing `play` / `pause` / `seek` mid-nudge cancels the timer and restores baseline before the new command lands.
+
+For the `seek` case the resulting native `seeking` event in the adapter would normally loop back as a fresh intent — suppression stops that. The `nudge-rate` case fires `ratechange`, which no adapter listens to, so no suppression slot is needed there.
 
 ## Feedback-loop suppression
 
@@ -118,7 +120,7 @@ To stop the echo:
 
 600 ms covers the round-trip + browser event-fire delay. The window is short enough that real user actions don't get eaten — a person can't physically click play, then click pause, in under 600 ms with intent.
 
-`sync_adjust` commands arm the `seek` suppression slot, because under the hood they too produce a `seeking` native event.
+`nudge_rate` commands arm no suppression slot — they don't produce a `seeking` event, only a `ratechange` event, and no adapter listens to that.
 
 ## Buffer transitions
 
@@ -130,7 +132,6 @@ The content runtime polls `adapter.getState()` every 1 s and pushes a `status` m
 
 ## What's deliberately not implemented yet
 
-- **Rate nudging** — `SYNC_ADJUST { mode: 'nudge-rate' }` currently falls back to a hard seek. Real rate-nudging requires keeping the video's `playbackRate` clamped while drift converges; the adapter contract doesn't expose `playbackRate` yet.
 - **`CURSOR_CHANGE_REQUEST` from the extension** — the encoder type is in `protocol.ts` but no caller fires it. Needs UI to trigger.
 - **`PLAYLIST_UPDATE` from the extension** — same; encoder ready, no scraping path.
 - **`currentlyShowing` + `catalogFragment` on JOIN** — schema is there, real values arrive when adapters expose scrape methods.

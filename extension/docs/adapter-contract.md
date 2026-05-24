@@ -12,6 +12,7 @@ interface Adapter {
   canHandlePage(url: URL): boolean
   init(ctx: AdapterContext): Promise<void>
   getState(): VideoState | null
+  setPlaybackRate(rate: number): void
   destroy(): void
 }
 ```
@@ -24,6 +25,7 @@ That's it. Every other type in [`src/adapters/types.ts`](../src/adapters/types.t
 | `canHandlePage(url)` | called on every page load + SPA navigation | Pure URL predicate — return true if the adapter owns this page. | Touch the DOM. Reach for `chrome.*`. Have side effects. |
 | `init(ctx)` | once, after `canHandlePage` returns true | Find the video, attach listeners, register the command handler, call `ctx.setIdentity` once. | Throw silently. Fall back to a degraded mode. Open a WebSocket. |
 | `getState()` | every ~1 s while active | Read the current `currentPos` + `playerState` from the video. | Block. Cache aggressively (the runtime polls fresh). |
+| `setPlaybackRate(rate)` | whenever the runtime applies a `nudge_rate` command, and again to restore | Write the value through to the underlying player (`<video>.playbackRate = rate` for most adapters). | Schedule a timer. Decide the magnitude. Throw — `rate === 1` is the restore call and must always succeed. |
 | `destroy()` | on SPA navigation or fatal error | Detach every listener, clear refs. | Throw — if you do, the runtime logs and moves on, but the next adapter activation may inherit a partial state. |
 
 ## The `AdapterContext` bridge
@@ -66,11 +68,13 @@ type AuthoritativeCommand =
   | { type: 'play' }
   | { type: 'pause' }
   | { type: 'seek'; time: number }
-  | { type: 'sync_adjust'; delta: number }
+  | { type: 'nudge_rate'; targetPos: number }
   | { type: 'cursor_change'; pageUrl: string }
 ```
 
-Intents are observations; commands are imperatives. The asymmetry is real — `sync_adjust` and `cursor_change` have no intent counterpart because the user can't perform them locally.
+Intents are observations; commands are imperatives. The asymmetry is real — `nudge_rate` and `cursor_change` have no intent counterpart because the user can't perform them locally.
+
+`nudge_rate` is special: the runtime intercepts it before it reaches your `onCommand` handler, reads `getState().currentPos`, derives the rate clamp, and calls `setPlaybackRate(rate)`. Your switch still needs a `nudge_rate` arm for exhaustiveness, but the arm is a no-op.
 
 ## Strict content identity
 
@@ -114,12 +118,13 @@ The three `playerState` values map directly to the wire field:
 3. **Write `canHandlePage`.** Just URL inspection. Return true on the URLs you fully support; everything else returns false.
 4. **In `init`**: find the video element. If it's absent on the URLs `canHandlePage` matched, call `ctx.fail(...)` rather than waiting for it — the page is shaped differently than you expected.
 5. **Attach listeners.** `play`, `pause`, `seeking` on the video element. Each handler builds a `LocalIntent` with the current `video.currentTime` and calls `ctx.emitIntent`.
-6. **Register the command handler.** Inside `ctx.onCommand`, switch on `cmd.type` and apply verbatim. `sync_adjust` is `currentTime += delta` for now; `cursor_change` is a no-op until the navigation-on-cursor-change spec lands.
-7. **Set identity.** Parse `location.pathname` (and maybe query params) into `{ providerId, videoId, normalizedUrl }`. Be strict — if you can't, `ctx.fail`.
-8. **Implement `getState`.** Mirror the template's shape: `paused → 'paused'`, `!paused && readyState < 3 → 'buffering'`, otherwise `'playing'`.
-9. **In `destroy`**: remove the listeners you added, null out the refs.
-10. **Add the factory to the registry** in `src/adapters/runtime.ts` — append it to `ADAPTERS`. Order matters; first match wins. Real-site adapters before `_template` (which only activates on the dev query param anyway).
-11. **Document it.** Add a short note under `extension/docs/adapter-<site>.md` (or a section on this page) describing how the site behaves, what URLs are supported, anything surprising about the DOM. Per the [documentation policy](README.md#documentation-policy), this is non-optional.
+6. **Register the command handler.** Inside `ctx.onCommand`, switch on `cmd.type` and apply verbatim. `nudge_rate` is a no-op (the runtime handled it before it got here); `cursor_change` is a no-op until the navigation-on-cursor-change spec lands.
+7. **Implement `setPlaybackRate`.** One line: `if (this.video) this.video.playbackRate = rate`. The runtime calls it with the nudge clamp and again with `1` to restore.
+8. **Set identity.** Parse `location.pathname` (and maybe query params) into `{ providerId, videoId, normalizedUrl }`. Be strict — if you can't, `ctx.fail`.
+9. **Implement `getState`.** Mirror the template's shape: `paused → 'paused'`, `!paused && readyState < 3 → 'buffering'`, otherwise `'playing'`.
+10. **In `destroy`**: remove the listeners you added, null out the refs.
+11. **Add the factory to the registry** in `src/adapters/runtime.ts` — append it to `ADAPTERS`. Order matters; first match wins. Real-site adapters before `_template` (which only activates on the dev query param anyway).
+12. **Document it.** Add a short note under `extension/docs/adapter-<site>.md` (or a section on this page) describing how the site behaves, what URLs are supported, anything surprising about the DOM. Per the [documentation policy](README.md#documentation-policy), this is non-optional.
 
 ## Things that look like they should be in the contract but aren't
 
