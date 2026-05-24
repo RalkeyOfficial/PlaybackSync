@@ -5,26 +5,178 @@
 		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
 		<title>PlaybackSync</title>
 		<style>
+			:root {
+				color-scheme: light dark;
+				--bg: #ffffff;
+				--fg: #1d1d1d;
+				--fg-muted: #5a5a5a;
+				--border: #e3e3e3;
+				--surface: #f7f7f7;
+				--accent: #2c6bf5;
+				--accent-fg: #ffffff;
+				--danger: #c92a2a;
+				--danger-fg: #ffffff;
+				--pill-grey: #b8b8b8;
+				--pill-amber: #d4a017;
+				--pill-green: #2f9e44;
+				--pill-red: #c92a2a;
+			}
+			@media (prefers-color-scheme: dark) {
+				:root {
+					--bg: #1f1f1f;
+					--fg: #ededed;
+					--fg-muted: #a0a0a0;
+					--border: #3a3a3a;
+					--surface: #2a2a2a;
+					--accent: #4d8bff;
+					--accent-fg: #ffffff;
+				}
+			}
+			html,
 			body {
-				font-family: system-ui, sans-serif;
 				margin: 0;
-				padding: 16px;
-				min-width: 240px;
+				padding: 0;
+				background: var(--bg);
+				color: var(--fg);
+				font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+				font-size: 13px;
+				line-height: 1.4;
 			}
-			h1 {
+			.popup {
+				width: 320px;
+				padding: 14px 16px 16px;
+				box-sizing: border-box;
+			}
+			.popup__header {
+				display: flex;
+				align-items: center;
+				justify-content: space-between;
+				margin-bottom: 12px;
+			}
+			.popup__title {
 				font-size: 14px;
-				margin: 0 0 8px;
-			}
-			p {
-				font-size: 12px;
+				font-weight: 600;
 				margin: 0;
-				color: #555;
+			}
+			.pill {
+				display: inline-flex;
+				align-items: center;
+				gap: 6px;
+				padding: 3px 8px;
+				border-radius: 999px;
+				font-size: 11px;
+				font-weight: 500;
+				background: var(--surface);
+				color: var(--fg-muted);
+				border: 1px solid var(--border);
+				text-transform: uppercase;
+				letter-spacing: 0.04em;
+			}
+			.pill__dot {
+				width: 7px;
+				height: 7px;
+				border-radius: 50%;
+				background: var(--pill-grey);
+			}
+			.pill--no-creds .pill__dot { background: var(--pill-grey); }
+			.pill--connecting .pill__dot { background: var(--pill-amber); }
+			.pill--joined .pill__dot { background: var(--pill-green); }
+			.pill--disconnected .pill__dot { background: var(--pill-red); }
+			.body {
+				display: flex;
+				flex-direction: column;
+				gap: 10px;
+			}
+			.body__copy {
+				margin: 0;
+				color: var(--fg-muted);
+			}
+			.body__copy code {
+				font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+				font-size: 11px;
+				background: var(--surface);
+				padding: 1px 4px;
+				border-radius: 3px;
+			}
+			.cursor {
+				background: var(--surface);
+				border: 1px solid var(--border);
+				border-radius: 6px;
+				padding: 10px 12px;
+				display: flex;
+				flex-direction: column;
+				gap: 4px;
+			}
+			.cursor__primary {
+				font-weight: 500;
+				word-break: break-word;
+			}
+			.cursor__primary--empty {
+				font-style: italic;
+				color: var(--fg-muted);
+				font-weight: 400;
+			}
+			.cursor__url {
+				font-size: 11px;
+				color: var(--accent);
+				text-decoration: none;
+				word-break: break-all;
+			}
+			.cursor__url:hover { text-decoration: underline; }
+			.cursor__provider {
+				color: var(--fg-muted);
+				font-weight: 400;
+			}
+			.chips {
+				display: flex;
+				flex-wrap: wrap;
+				gap: 6px;
+			}
+			.chip {
+				display: inline-block;
+				padding: 2px 7px;
+				border-radius: 4px;
+				font-size: 11px;
+				background: var(--surface);
+				color: var(--fg-muted);
+				border: 1px solid var(--border);
+			}
+			.btn {
+				appearance: none;
+				font: inherit;
+				cursor: pointer;
+				border-radius: 6px;
+				border: 1px solid transparent;
+				padding: 8px 12px;
+				font-weight: 500;
+				transition: background-color 0.12s ease;
+			}
+			.btn--danger {
+				background: transparent;
+				color: var(--danger);
+				border-color: var(--danger);
+			}
+			.btn--danger:hover:not(:disabled) {
+				background: var(--danger);
+				color: var(--danger-fg);
+			}
+			.btn:disabled {
+				opacity: 0.5;
+				cursor: progress;
 			}
 		</style>
 	</head>
 	<body>
-		<h1>PlaybackSync</h1>
-		<p>Extension scaffold — not wired up yet.</p>
+		<main class="popup" id="popup-root">
+			<header class="popup__header">
+				<h1 class="popup__title">PlaybackSync</h1>
+				<span class="pill pill--no-creds" id="status-pill">
+					<span class="pill__dot"></span>
+					<span id="status-label">Loading…</span>
+				</span>
+			</header>
+			<div class="body" id="body"></div>
+		</main>
 		<script type="module" src="./main.ts"></script>
 	</body>
 </html>

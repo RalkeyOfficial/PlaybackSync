@@ -9,11 +9,20 @@
  */
 
 import type { AuthoritativeCommand } from '@/src/adapters/types'
-import type { BackgroundToContent, ContentToBackground } from '@/src/messages'
+import type {
+	BackgroundToContent,
+	ContentToBackground,
+	PopupToBackground,
+} from '@/src/messages'
 import { createSession, recordCommand, shouldSuppress } from '@/src/background/session'
-import { loadCreds, saveCreds } from '@/src/background/storage'
+import { clearCreds, loadCreds, saveCreds } from '@/src/background/storage'
 import { forgetTab, getTab, recordIdentity, recordStatus } from '@/src/background/tabs'
-import { connect, sendBuffer, sendEvent, type WsCallbacks } from '@/src/background/ws'
+import {
+	initPopupBroadcast,
+	registerPopupPort,
+	setPopupCreds,
+} from '@/src/background/popupBroadcast'
+import { connect, disconnect, sendBuffer, sendEvent, type WsCallbacks } from '@/src/background/ws'
 
 const session = createSession()
 /** Tracks the latest `playerState` per tab so we can detect buffer transitions. */
@@ -35,6 +44,7 @@ const wsCallbacks: WsCallbacks = {
 export default defineBackground(() => {
 	console.log('[playbacksync:bg] worker booted')
 
+	initPopupBroadcast(session)
 	void bootstrap()
 
 	chrome.runtime.onMessage.addListener(
@@ -49,11 +59,25 @@ export default defineBackground(() => {
 		},
 	)
 
+	chrome.runtime.onConnect.addListener((port: chrome.runtime.Port) => {
+		if (port.name !== POPUP_PORT_NAME) return
+		registerPopupPort(port)
+		port.onMessage.addListener((msg: PopupToBackground) => {
+			void handlePopupMessage(msg)
+		})
+	})
+
 	chrome.tabs.onRemoved.addListener((tabId: number) => {
 		forgetTab(tabId)
 		lastPlayerStateByTab.delete(tabId)
 	})
 })
+
+/**
+ * Port name the toolbar popup uses for {@link chrome.runtime.connect}.
+ * Must match the popup's call site verbatim.
+ */
+const POPUP_PORT_NAME = 'pbsync-popup'
 
 async function bootstrap(): Promise<void> {
 	const creds = await loadCreds()
@@ -62,8 +86,10 @@ async function bootstrap(): Promise<void> {
 			'[playbacksync:bg] no creds in chrome.storage.local.pbsync; '
 			+ 'follow a room share link or seed manually via DevTools to connect',
 		)
+		setPopupCreds(null)
 		return
 	}
+	setPopupCreds({ syncUrl: creds.syncUrl })
 	connect(creds, session, wsCallbacks)
 }
 
@@ -132,8 +158,40 @@ async function handleCredentials(syncUrl: string, syncPassword: string): Promise
 		return
 	}
 	await saveCreds({ syncUrl, syncPassword })
+	setPopupCreds({ syncUrl })
 	console.log('[playbacksync:bg] share-URL creds accepted; connecting')
 	connect({ syncUrl, syncPassword }, session, wsCallbacks)
+}
+
+/**
+ * Handle a popup → background message. Currently a single arm
+ * (`leave_room`); future owner-driven affordances (cursor change
+ * requests, playlist edits) will add more.
+ *
+ * On `leave_room`: tear down the WS socket, wipe stored creds, and
+ * clear the popup-broadcast mirror. The mirror clear broadcasts a
+ * `no_credentials` snapshot, which is what the popup re-renders to.
+ *
+ * @param msg The decoded envelope from the popup port.
+ */
+async function handlePopupMessage(msg: PopupToBackground): Promise<void> {
+	switch (msg.kind) {
+		case 'leave_room': {
+			console.log('[playbacksync:bg] popup requested leave_room')
+			disconnect()
+			await clearCreds()
+			// Also reset session-level identity so a subsequent
+			// share-URL pickup against a different room can't accidentally
+			// JOIN with a stale clientId.
+			session.clientId = null
+			session.lastEventId = 0
+			session.cursor = null
+			session.playlist = []
+			session.playlistVersion = null
+			setPopupCreds(null)
+			return
+		}
+	}
 }
 
 function dispatchCommand(tabId: number, cmd: AuthoritativeCommand): void {

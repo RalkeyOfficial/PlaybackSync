@@ -10,6 +10,7 @@ This directory is the source of truth for *how the extension is shaped and why*.
 - **Writing a new site adapter?** [`adapter-contract.md`](adapter-contract.md) is the tutorial. Copy `src/adapters/_template/` and follow along.
 - **Working on the protocol client?** [`protocol-client.md`](protocol-client.md) covers JOIN, reconnect, clock-sync, heartbeats, suppression — the WS-side concerns.
 - **Setting up creds for dev?** [`storage.md`](storage.md) shows the `chrome.storage.local` shape and the DevTools snippet to seed it.
+- **Touching the toolbar popup?** [`popup.md`](popup.md) covers the snapshot channel, the `PopupStatus` state machine, and the leave-room flow.
 
 ## Index
 
@@ -19,6 +20,7 @@ This directory is the source of truth for *how the extension is shaped and why*.
 | [`protocol-client.md`](protocol-client.md) | Connection lifecycle, reconnect, heartbeat, clock-sync, drift handling, suppression |
 | [`adapter-contract.md`](adapter-contract.md) | `Adapter` / `AdapterContext` / `LocalIntent` / `AuthoritativeCommand` / `ContentIdentity` / `VideoState` — how to write an adapter |
 | [`storage.md`](storage.md) | `chrome.storage.local.pbsync` schema; dev-time creds workflow |
+| [`popup.md`](popup.md) | Toolbar popup: snapshot channel, `PopupStatus`, leave-room flow |
 
 ## Documentation policy
 

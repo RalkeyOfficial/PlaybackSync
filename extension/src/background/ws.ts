@@ -35,6 +35,13 @@ import {
 } from './session'
 import { saveClientId, type PbSyncCreds } from './storage'
 import { pickActiveTab } from './tabs'
+import {
+	notifyConnecting,
+	notifyCursorChanged,
+	notifyDisconnected,
+	notifyOpen,
+	notifyRoomStateChanged,
+} from './popupBroadcast'
 import type { AuthoritativeCommand } from '@/src/adapters/types'
 
 /** Close codes whose meaning is "give up, don't reconnect". */
@@ -115,6 +122,7 @@ export function disconnect(): void {
 	stopTimers(runtime)
 	runtime.socket?.close(1000, 'client disconnect')
 	runtime = null
+	notifyDisconnected()
 }
 
 /**
@@ -142,6 +150,7 @@ export function sendBuffer(kind: 'BUFFER_START' | 'BUFFER_END', videoPos: number
 
 function openSocket(r: WsRuntime): void {
 	log('info', 'connecting', { url: redactUrl(r.creds.syncUrl) })
+	notifyConnecting(r.creds.syncUrl)
 	const socket = new WebSocket(r.creds.syncUrl)
 	r.socket = socket
 
@@ -162,6 +171,7 @@ function onOpen(r: WsRuntime): void {
 	})
 	startTimers(r)
 	scheduleInitialClockPings(r)
+	notifyOpen()
 }
 
 function onMessage(r: WsRuntime, ev: MessageEvent): void {
@@ -181,6 +191,7 @@ function onClose(r: WsRuntime, ev: CloseEvent): void {
 	stopTimers(r)
 	r.socket = null
 	log('info', 'close', { code: ev.code, reason: ev.reason })
+	notifyDisconnected()
 	if (r.terminated) return
 
 	// reason carries the daemon's protocol-level code on terminal closes.
@@ -221,6 +232,7 @@ function handleFrame(r: WsRuntime, frame: InboundFrame): void {
 				void saveClientId(frame.clientId)
 			}
 			dispatchAll(r, applyRoomState(r.session, frame))
+			notifyRoomStateChanged()
 			return
 		}
 		case 'STATE':
@@ -228,6 +240,7 @@ function handleFrame(r: WsRuntime, frame: InboundFrame): void {
 			return
 		case 'CURSOR_CHANGE':
 			dispatchAll(r, applyCursorChange(r.session, frame))
+			notifyCursorChanged()
 			return
 		case 'PLAYLIST_UPDATE':
 			applyPlaylistUpdate(r.session, frame)

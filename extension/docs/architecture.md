@@ -9,46 +9,46 @@ The PlaybackSync extension is a two-process WXT application: a **background serv
 | `entrypoints/background.ts` | Service worker / background page. WS lifecycle, message routing, command dispatch. | n/a |
 | `entrypoints/content.ts` | Adapter runtime bootstrap — picks an adapter for the page, runs status polling, delivers inbound commands. | `document_idle` |
 | `entrypoints/credentials.content.ts` | One-shot share-URL credential sniffer. Sends a `credentials` message when the URL carries `?sync_url=&sync_password=` and exits. See [`storage.md`](storage.md). | `document_start` |
-| `entrypoints/popup/` | Toolbar popup (stub today; covered by a future spec). | n/a |
+| `entrypoints/popup/` | Toolbar popup — status pill, current cursor, Leave Room. See [`popup.md`](popup.md). | n/a |
 
 ## The three layers
 
 ```
-┌────────────────────────────────────────────────────────────────────┐
-│  Background service worker            (entrypoints/background.ts)  │
-│  ──────────────────────────────────────────────────────────────    │
-│  · WebSocket lifecycle, JOIN handshake, reconnect with replay      │
-│  · Heartbeat & clock-ping timers                                   │
-│  · Server-frame dispatch → AuthoritativeCommand → tab              │
-│  · Feedback-loop suppression (per-tab)                             │
-│  · chrome.storage.local for creds                                  │
-└────────────────────────────────────────────────────────────────────┘
-                              ▲   │
-              ContentToBackground │ BackgroundToContent
-                              │   ▼
-┌────────────────────────────────────────────────────────────────────┐
-│  Content script runtime               (entrypoints/content.ts +    │
-│                                        src/adapters/runtime.ts)    │
-│  ──────────────────────────────────────────────────────────────    │
-│  · Pick first adapter whose canHandlePage() returns true           │
-│  · Wire bridge that forwards intent/status/identity/fail           │
-│  · Poll adapter.getState() every 1 s, push status                  │
-│  · Deliver inbound commands to the active adapter                  │
-│  · Tear down + re-evaluate on SPA navigation                       │
-└────────────────────────────────────────────────────────────────────┘
-                              ▲   │
-                emitIntent /  │   │  onCommand handler
-                getState /    │   │
-                setIdentity   │   ▼
-┌────────────────────────────────────────────────────────────────────┐
-│  Site adapter                        (src/adapters/<site>/)        │
-│  ──────────────────────────────────────────────────────────────    │
-│  · Find the <video> element                                        │
-│  · Observe user play/pause/seek → emit local intents               │
-│  · Apply authoritative commands verbatim                           │
-│  · Derive strict content identity                                  │
-│  · Expose current state on demand for heartbeats                   │
-└────────────────────────────────────────────────────────────────────┘
+┌──────────────────────────┐         ┌────────────────────────────────────────────────────────────────────┐
+│  Toolbar popup           │         │  Background service worker            (entrypoints/background.ts)  │
+│  (entrypoints/popup/)    │  Port   │  ──────────────────────────────────────────────────────────────    │
+│  ────────────────────    │ ◀────▶  │  · WebSocket lifecycle, JOIN handshake, reconnect with replay      │
+│  · Status pill           │ snapshot│  · Heartbeat & clock-ping timers                                   │
+│  · Current cursor        │ /       │  · Server-frame dispatch → AuthoritativeCommand → tab              │
+│  · Leave Room button     │ leave_  │  · Feedback-loop suppression (per-tab)                             │
+│  See popup.md            │ room    │  · chrome.storage.local for creds                                  │
+└──────────────────────────┘         └────────────────────────────────────────────────────────────────────┘
+                                                              ▲   │
+                                              ContentToBackground │ BackgroundToContent
+                                                              │   ▼
+                                     ┌────────────────────────────────────────────────────────────────────┐
+                                     │  Content script runtime               (entrypoints/content.ts +    │
+                                     │                                        src/adapters/runtime.ts)    │
+                                     │  ──────────────────────────────────────────────────────────────    │
+                                     │  · Pick first adapter whose canHandlePage() returns true           │
+                                     │  · Wire bridge that forwards intent/status/identity/fail           │
+                                     │  · Poll adapter.getState() every 1 s, push status                  │
+                                     │  · Deliver inbound commands to the active adapter                  │
+                                     │  · Tear down + re-evaluate on SPA navigation                       │
+                                     └────────────────────────────────────────────────────────────────────┘
+                                                              ▲   │
+                                                emitIntent /  │   │  onCommand handler
+                                                getState /    │   │
+                                                setIdentity   │   ▼
+                                     ┌────────────────────────────────────────────────────────────────────┐
+                                     │  Site adapter                        (src/adapters/<site>/)        │
+                                     │  ──────────────────────────────────────────────────────────────    │
+                                     │  · Find the <video> element                                        │
+                                     │  · Observe user play/pause/seek → emit local intents               │
+                                     │  · Apply authoritative commands verbatim                           │
+                                     │  · Derive strict content identity                                  │
+                                     │  · Expose current state on demand for heartbeats                   │
+                                     └────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Why this split
@@ -56,6 +56,10 @@ The PlaybackSync extension is a two-process WXT application: a **background serv
 The legacy prototype's [workshop v1 design](../../OLD_CODE/extension/docs/playback_sync_extension_architecture_adapter_based_design_workshop_v_1.md) made the case explicitly: **adapters MUST NOT touch the WebSocket, MUST NOT decide suppression, MUST NOT communicate across tabs**. That keeps every site adapter small, statically auditable, and safe to write without understanding the protocol. The price is the dance of message passing, which is worth paying.
 
 The background is the *protocol client*; the content runtime is the *adapter manager*; site adapters are the *execution layer*. Adding a new site means writing one file that implements the `Adapter` contract and adding it to the registry in `src/adapters/runtime.ts`.
+
+### Popup snapshot channel
+
+The popup talks to the background over a `chrome.runtime.Port` named `'pbsync-popup'`. The background broadcasts a typed `PopupSnapshot` on every popup-visible state change (lifecycle transitions, `ROOM_STATE`, `CURSOR_CHANGE`, creds change) — never on per-tick `STATE` frames. The popup never reads raw socket / `clientId` / creds fields; it sees only the derived `status` tag (`no_credentials` / `connecting` / `joined` / `disconnected`) plus the cursor and mode. Details in [`popup.md`](popup.md).
 
 ## The message envelope
 
@@ -101,6 +105,5 @@ On Firefox MV2 the background page is long-lived by default; no special handling
 ## Out-of-scope (deferred to follow-up specs)
 
 - **More site adapters.** [`miruro`](adapter-miruro.md) is the first concrete adapter alongside the `_template` test scaffold (which still activates only on `?pbsync-template`). Adding crunchyroll, youtube, etc. is one new file per site plus a registry entry in [`src/adapters/runtime.ts`](../src/adapters/runtime.ts).
-- **Popup UI** for connection status, current room, manual disconnect.
 - **Multi-room / multi-tab arbitration.** Currently the connection is browser-wide and the "active tab" is just "whoever reported status most recently".
 - **`currentlyShowing` + `catalogFragment`** on JOIN. The protocol module has the schema; real values arrive when the first site adapter implements scraping.

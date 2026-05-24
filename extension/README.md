@@ -88,6 +88,7 @@ The WS client connects on background-worker boot if credentials are present in `
 
    Play / pause / seek in tab A — tab B should mirror within a few hundred milliseconds. The background console shows `EVENT` frames going out and `STATE` frames coming back; the suppressed-echo path keeps the round-trip from looping.
 5. **Reconnect check.** Stop the daemon, wait a few seconds, restart it. The background console should log reconnect attempts with exponential backoff and, once it succeeds, a `ROOM_STATE` carrying `recentEvents` (the events the tombstone replayed).
+6. **Popup check.** With the daemon up and creds in storage, click the PlaybackSync toolbar icon. The pill should flip amber ("Connecting") → green ("Joined"); the cursor block renders provider + label + URL once `ROOM_STATE` lands. Open the same miruro page in a synced tab — the popup re-renders with the new cursor and a clickable `pageUrl`. Click **Leave Room**: the pill flips grey ("No room"), `chrome.storage.local.get('pbsync')` returns `{}`, and the background console logs `popup requested leave_room`. See [`docs/popup.md`](docs/popup.md) for the full state machine.
 
 If you don't have a daemon handy, the extension still compiles, lints, and loads — it just sits idle without creds and prints a one-line hint into the background console.
 
