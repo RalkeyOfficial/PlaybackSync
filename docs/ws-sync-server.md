@@ -16,6 +16,47 @@ ws[s]://<nextcloud-host>/index.php/apps/playbacksync/ws/{roomUuid}
 
 Internally the daemon binds to a local port (default `127.0.0.1:8765`). The Nextcloud-fronting reverse proxy (Apache or nginx — the one already serving Nextcloud) forwards just `/apps/playbacksync/ws/` to the daemon. TLS termination happens at the proxy, exactly as it already does for Nextcloud's HTTP traffic.
 
+## Recommended: scripted install
+
+For both bare-metal and Docker Nextcloud installs, [`scripts/install-ws-daemon.sh`](../scripts/install-ws-daemon.sh) handles the entire setup end-to-end: composer install, `occ app:enable` and config keys, daemon supervision (systemd unit on bare-metal, sidecar compose service in Docker), reverse-proxy snippet for the detected front-end, and an end-to-end WebSocket handshake check. Everything it writes is marker-bracketed and idempotent, and `--uninstall` removes it cleanly.
+
+Preview the plan before changing anything:
+
+```bash
+sudo ./scripts/install-ws-daemon.sh --dry-run
+```
+
+Apply it (non-interactive form shown; drop `--yes` to be prompted):
+
+```bash
+sudo ./scripts/install-ws-daemon.sh --yes
+```
+
+What it auto-detects:
+
+- **Mode** — host vs. Docker. Switches to Docker mode when a Nextcloud-looking container is running and there's no Nextcloud install at standard host paths.
+- **Nextcloud path / container** — host: `/var/www/nextcloud`, `/var/www/html`, `/srv/nextcloud`, snap; Docker: any container with `occ` at `/var/www/html` or `/var/www/nextcloud`.
+- **Init system** — uses systemd when present, otherwise prints sidecar instructions instead of pretending it can install a service.
+- **Web server** — nginx or Apache, by process and by vhost-file inspection (looks for `DocumentRoot` / `root` matching the detected Nextcloud path).
+- **Proxy strategy in Docker** — `jwilder/nginx-proxy` style `vhost.d` drop-in (preferred, no host-side reload needed); bind-mounted `conf.d` / `sites-enabled` / `conf-enabled`; or `docker cp` into the proxy container as a last resort (warns: not durable across container rebuild).
+- **Refuses on Nextcloud AIO** — AIO manages its own services; the installer would conflict with it.
+
+Common overrides (full list under `--help`):
+
+| Flag | Purpose |
+|---|---|
+| `--nc-path PATH` | Force the Nextcloud root in host mode. |
+| `--web-server nginx\|apache` | Override the detected web server. |
+| `--vhost-config PATH` | Pick a specific vhost config when detection is ambiguous. |
+| `--container NAME` | Pin the Nextcloud container in Docker mode. |
+| `--proxy-container NAME` | Pin the proxy container; `--no-proxy` skips proxy edits. |
+| `--host HOST` / `--port PORT` | Daemon bind. Defaults to `127.0.0.1:8765` (host) / `0.0.0.0:8765` (Docker). |
+| `--user USER` | Service account for the daemon (defaults to the Nextcloud-root owner). |
+| `--no-reload` / `--no-start` | Skip the web-server reload / daemon-start steps. |
+| `--uninstall` | Reverse what the installer did (works in both modes). |
+
+If the installer fails for any reason, or your environment doesn't match any of the patterns above (exotic init, multiple competing proxies, snap with locked config, …), follow [install-without-script.md](install-without-script.md) — it's the same steps the script runs, but explicit, with verification commands after each one. The remaining sections of *this* document are the operator reference for what the installer produces.
+
 ## Starting the daemon
 
 There is exactly one daemon: `occ playbacksync:ws-serve`. It runs in the foreground, one process, until killed. Everything below — systemd, `docker exec -d`, supervisord, Kubernetes — is just a different way to *keep that one command running*. The daemon itself doesn't know or care which.
@@ -313,6 +354,39 @@ Check the daemon's stdout, `journalctl -u playbacksync-ws.service` (systemd), or
 ### Browser reports `WebSocket handshake failed: Unexpected response code: 200`
 
 Apache or nginx is treating the URL as a normal Nextcloud path and routing it to PHP-FPM. The proxy rule is missing or placed too low. Make sure the `/apps/playbacksync/ws/` rule is matched **before** any catch-all PHP location/rewrite.
+
+### Browser reports `WebSocket handshake failed: Unexpected response code: 404`
+
+The proxy is rejecting the path entirely instead of forwarding it. Three causes, in order of likelihood:
+
+1. **The proxy snippet was never installed**, or it was installed and got reverted (container rebuild, `docker compose down && up --force-recreate`, manual edit that wiped the marker block, image upgrade replacing `conf-available/`). Re-run `scripts/install-ws-daemon.sh` — it's idempotent and will reinstate everything it manages.
+2. **The proxy snippet is there but the proxy didn't reload** after it was added. `nginx -s reload` / `systemctl reload apache2`. In Docker: `docker exec <proxy-container> nginx -s reload` or `docker exec <proxy-container> apachectl graceful`.
+3. **Apache only: the required modules aren't enabled.** `mod_proxy`, `mod_proxy_http`, and `mod_proxy_wstunnel` must all be loaded — without `mod_proxy_wstunnel` Apache returns 404 for the upgrade request even though the directive is in the config. This is the most common cause when running Apache *inside* a container, because most container Apache images ship with only the bare-minimum module set.
+
+To enable them by hand (recovery path for when the installer can't run, or when you've just rebuilt a container and need the daemon back up before anything else):
+
+```bash
+# Bare-metal
+sudo a2enmod proxy proxy_http proxy_wstunnel
+sudo systemctl reload apache2
+
+# Docker (substitute your container name)
+docker exec -u root <nextcloud-container> a2enmod proxy proxy_http proxy_wstunnel
+docker exec -u root <nextcloud-container> apachectl graceful
+```
+
+If you also need to re-add the `ProxyPass` directives by hand (e.g. the conf file got wiped along with the modules):
+
+```bash
+docker exec -u root <nextcloud-container> sh -c 'cat > /etc/apache2/conf-available/playbacksync-ws.conf <<EOF
+ProxyPass        "/apps/playbacksync/ws/" "ws://127.0.0.1:8765/apps/playbacksync/ws/"
+ProxyPassReverse "/apps/playbacksync/ws/" "ws://127.0.0.1:8765/apps/playbacksync/ws/"
+EOF'
+docker exec -u root <nextcloud-container> a2enconf playbacksync-ws
+docker exec -u root <nextcloud-container> apachectl graceful
+```
+
+This is a **temporary fix inside the container**: a container rebuild will wipe it. The durable answer is to either let the installer mount the conf from the host (its `bind-mount` strategy) or bake the directives into your image. Diagnose which case you're in with `docker exec <nextcloud-container> apache2ctl -M | grep proxy` — you should see `proxy_module`, `proxy_http_module`, and `proxy_wstunnel_module` all listed.
 
 ### Logs are flooded with PHP deprecation warnings
 

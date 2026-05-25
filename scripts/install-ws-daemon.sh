@@ -1224,13 +1224,37 @@ docker_step_proxy() {
 
 	case "$DOCKER_PROXY_STRATEGY" in
 		vhost.d)
+			# The vhost.d file is named after VIRTUAL_HOST and may legitimately
+			# contain unrelated admin-managed directives. Use marker-bracketed
+			# create-or-replace so we only touch our own block.
 			if [[ $DRY_RUN -eq 1 ]]; then
-				printf '%s[ dry ]%s would write %s\n' "$C_DIM" "$C_RESET" "$DOCKER_PROXY_VHOST_HOST"
+				if [[ -f "$DOCKER_PROXY_VHOST_HOST" ]] && grep -q "$MARKER_BEGIN" "$DOCKER_PROXY_VHOST_HOST"; then
+					printf '%s[ dry ]%s would refresh managed block in %s\n' "$C_DIM" "$C_RESET" "$DOCKER_PROXY_VHOST_HOST"
+				elif [[ -f "$DOCKER_PROXY_VHOST_HOST" ]]; then
+					printf '%s[ dry ]%s would append managed block to %s\n' "$C_DIM" "$C_RESET" "$DOCKER_PROXY_VHOST_HOST"
+				else
+					printf '%s[ dry ]%s would create %s\n' "$C_DIM" "$C_RESET" "$DOCKER_PROXY_VHOST_HOST"
+				fi
 			else
 				mkdir -p "$(dirname "$DOCKER_PROXY_VHOST_HOST")"
-				printf '%s\n' "$snippet" > "$DOCKER_PROXY_VHOST_HOST"
-				ok "wrote nginx-proxy vhost include: $DOCKER_PROXY_VHOST_HOST"
-				info "nginx-proxy auto-detects vhost.d/ changes; no reload needed"
+				if [[ -f "$DOCKER_PROXY_VHOST_HOST" ]] && grep -q "$MARKER_BEGIN" "$DOCKER_PROXY_VHOST_HOST"; then
+					cp -a "$DOCKER_PROXY_VHOST_HOST" "${DOCKER_PROXY_VHOST_HOST}.bak.$(date +%s)"
+					awk -v begin="$MARKER_BEGIN" -v end="$MARKER_END" -v repl="$snippet" '
+						index($0, begin) > 0 { print repl; skip=1; next }
+						skip && index($0, end) > 0 { skip=0; next }
+						!skip { print }
+					' "$DOCKER_PROXY_VHOST_HOST" > "${DOCKER_PROXY_VHOST_HOST}.new"
+					mv "${DOCKER_PROXY_VHOST_HOST}.new" "$DOCKER_PROXY_VHOST_HOST"
+					ok "refreshed managed block in $DOCKER_PROXY_VHOST_HOST"
+				elif [[ -f "$DOCKER_PROXY_VHOST_HOST" ]]; then
+					cp -a "$DOCKER_PROXY_VHOST_HOST" "${DOCKER_PROXY_VHOST_HOST}.bak.$(date +%s)"
+					printf '\n%s\n' "$snippet" >> "$DOCKER_PROXY_VHOST_HOST"
+					ok "appended managed block to $DOCKER_PROXY_VHOST_HOST"
+				else
+					printf '%s\n' "$snippet" > "$DOCKER_PROXY_VHOST_HOST"
+					ok "wrote nginx-proxy vhost include: $DOCKER_PROXY_VHOST_HOST"
+				fi
+				info "nginx-proxy picks up vhost.d changes on its next reload (the sidecar coming up below triggers one via docker events)"
 			fi
 			;;
 		bind-mount)
