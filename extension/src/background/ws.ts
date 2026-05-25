@@ -31,6 +31,8 @@ import {
 	applyRoomState,
 	applyState,
 	applySyncAdjust,
+	markConverged,
+	resetConvergence,
 	startClockPing,
 } from './session'
 import { saveClientId, type PbSyncCreds } from './storage'
@@ -159,6 +161,9 @@ export function sendBuffer(kind: 'BUFFER_START' | 'BUFFER_END', videoPos: number
 
 function openSocket(r: WsRuntime): void {
 	log('info', 'connecting', { url: redactUrl(r.creds.syncUrl) })
+	// Each connection re-gates: a cached tab from a prior connection has to
+	// be re-converged by the fresh ROOM_STATE before its intents flow again.
+	resetConvergence(r.session)
 	notifyConnecting(r.creds.syncUrl)
 	const socket = new WebSocket(r.creds.syncUrl)
 	r.socket = socket
@@ -280,11 +285,17 @@ function dispatchAll(r: WsRuntime, cmds: AuthoritativeCommand[]): void {
 	if (cmds.length === 0) return
 	const active = pickActiveTab()
 	if (!active) {
-		log('info', 'no active tab; dropping commands', { count: cmds.length })
+		// No tab has reported status yet — stash the convergence target so the
+		// entrypoint can flush it the moment the first `status` arrives. Newer
+		// frames overwrite older ones; we always want to converge to the
+		// freshest authoritative state.
+		log('info', 'no active tab; deferring convergence', { count: cmds.length })
+		r.session.pendingConvergence = cmds
 		return
 	}
 	const [tabId] = active
 	for (const cmd of cmds) r.cb.dispatchCommand(tabId, cmd)
+	markConverged(r.session, tabId)
 }
 
 // ─── Timers ────────────────────────────────────────────────────────

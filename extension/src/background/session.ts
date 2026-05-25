@@ -29,6 +29,19 @@ import type {
  */
 export const SUPPRESSION_WINDOW_MS = 600
 
+/**
+ * Drop *all* intents from a tab for this long after it first converges on a
+ * connection. The 600 ms echo window is too narrow for the page's own
+ * resume / auto-play logic: e.g. Vidstack on miruro restores the user's
+ * last viewing position via a delayed `seeking` write that lands hundreds
+ * of ms — sometimes a second or two — after the adapter has paused the
+ * player. Without this gate, that delayed write reaches the daemon as a
+ * real EVENT and overwrites the room's authoritative state. The window
+ * arms exactly once per tab per connection (on first convergence), so
+ * mid-session state updates don't keep re-locking the user out.
+ */
+export const JOIN_SETTLE_WINDOW_MS = 5000
+
 /** Recorded outbound command timing; used by {@link shouldSuppress}. */
 interface RecentCommand {
 	kind: LocalIntent['type'] | 'cursor_change'
@@ -59,6 +72,25 @@ export interface SessionState {
 	recentCommandsByTab: Map<number, RecentCommand[]>
 	/** Rolling RTT samples (ms); used for telemetry only at this stage. */
 	rttSamplesMs: number[]
+	/**
+	 * Tabs that have received at least one authoritative command since this
+	 * connection opened. Used by the entrypoint to gate outbound intents:
+	 * native video-element events fired during adapter init (e.g. the site's
+	 * own resume-position logic) must not become wire `EVENT`s before the
+	 * room's authoritative state has converged the local player.
+	 */
+	convergedTabs: Set<number>
+	/**
+	 * Latest convergence commands whose dispatch was deferred because no tab
+	 * had reported status yet. Overwritten by newer frames so the freshest
+	 * target wins; flushed when a tab first reports status.
+	 */
+	pendingConvergence: AuthoritativeCommand[] | null
+	/**
+	 * Wall-clock ms (Date.now()) until which intents from a tab are dropped
+	 * as "join settle". See {@link JOIN_SETTLE_WINDOW_MS}.
+	 */
+	settleUntilByTab: Map<number, number>
 }
 
 /** Build a fresh session with everything cleared. */
@@ -73,7 +105,63 @@ export function createSession(): SessionState {
 		serverClockOffsetMs: 0,
 		recentCommandsByTab: new Map(),
 		rttSamplesMs: [],
+		convergedTabs: new Set(),
+		pendingConvergence: null,
+		settleUntilByTab: new Map(),
 	}
+}
+
+/**
+ * Stamp a tab as having received its first authoritative command on the
+ * current connection. Clears any deferred convergence target — that target
+ * has just been (or is being) dispatched to this tab.
+ *
+ * @param s The session to update.
+ * @param tabId Tab that just received an authoritative command.
+ */
+export function markConverged(s: SessionState, tabId: number): void {
+	const wasConverged = s.convergedTabs.has(tabId)
+	s.convergedTabs.add(tabId)
+	s.pendingConvergence = null
+	// Arm the settle window only on the *first* convergence per connection;
+	// subsequent STATE-driven re-dispatches must not keep re-locking the user
+	// out of their own intents.
+	if (!wasConverged) {
+		s.settleUntilByTab.set(tabId, Date.now() + JOIN_SETTLE_WINDOW_MS)
+	}
+}
+
+/**
+ * Whether intents from a tab should be dropped as "join settle". Cleans up
+ * its own map entry once the window has elapsed.
+ */
+export function inSettleWindow(s: SessionState, tabId: number): boolean {
+	const until = s.settleUntilByTab.get(tabId)
+	if (until === undefined) return false
+	if (Date.now() < until) return true
+	s.settleUntilByTab.delete(tabId)
+	return false
+}
+
+/**
+ * Whether a tab has been converged on the current connection. The
+ * entrypoint uses this to drop pre-convergence intents — native events
+ * the adapter emits before the local player has been told the room's
+ * authoritative state are not real user actions.
+ */
+export function hasConverged(s: SessionState, tabId: number): boolean {
+	return s.convergedTabs.has(tabId)
+}
+
+/**
+ * Reset the convergence gate. Called when the WS (re)connects so that any
+ * tab still cached from the previous connection has to be re-converged by
+ * the fresh `ROOM_STATE` before its intents are allowed to flow again.
+ */
+export function resetConvergence(s: SessionState): void {
+	s.convergedTabs.clear()
+	s.pendingConvergence = null
+	s.settleUntilByTab.clear()
 }
 
 // ─── Server-frame folders ─────────────────────────────────────────────

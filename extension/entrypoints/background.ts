@@ -14,7 +14,15 @@ import type {
 	ContentToBackground,
 	PopupToBackground,
 } from '@/src/messages'
-import { createSession, recordCommand, shouldSuppress } from '@/src/background/session'
+import {
+	createSession,
+	hasConverged,
+	inSettleWindow,
+	markConverged,
+	recordCommand,
+	resetConvergence,
+	shouldSuppress,
+} from '@/src/background/session'
 import { clearCreds, loadCreds, saveCreds } from '@/src/background/storage'
 import { forgetTab, getTab, pickActiveTab, recordIdentity, recordStatus } from '@/src/background/tabs'
 import { forgetIconForTab, initGreyscaleDefaults, setActiveTab } from '@/src/background/icon'
@@ -89,6 +97,8 @@ export default defineBackground(() => {
 	chrome.tabs.onRemoved.addListener((tabId: number) => {
 		forgetTab(tabId)
 		lastPlayerStateByTab.delete(tabId)
+		session.convergedTabs.delete(tabId)
+		session.settleUntilByTab.delete(tabId)
 		forgetIconForTab(tabId)
 		recomputeActiveIcon()
 	})
@@ -127,6 +137,28 @@ async function routeMessage(tabId: number | undefined, msg: ContentToBackground)
 
 	switch (msg.kind) {
 		case 'intent': {
+			if (!hasConverged(session, tabId)) {
+				// Native video events fired before the room's authoritative
+				// state has been applied to this tab are not real user actions
+				// — typically the site's own resume-position logic firing as
+				// the adapter finishes init. Dropping them prevents the joiner
+				// from clobbering the room's playback state.
+				console.log('[playbacksync:bg] dropping pre-convergence intent', {
+					tabId, type: msg.intent.type,
+				})
+				return
+			}
+			if (inSettleWindow(session, tabId)) {
+				// Same family of cause as pre-convergence drops, but late: the
+				// page's auto-resume / auto-play can fire seconds after the
+				// adapter has applied the room's first authoritative command,
+				// outside the 600 ms echo window. Drop until the settle window
+				// elapses so these late writes don't reach the daemon.
+				console.log('[playbacksync:bg] dropping settle-window intent', {
+					tabId, type: msg.intent.type,
+				})
+				return
+			}
 			if (shouldSuppress(session, tabId, msg.intent)) {
 				console.log('[playbacksync:bg] suppressed echo intent', {
 					tabId, type: msg.intent.type,
@@ -138,6 +170,7 @@ async function routeMessage(tabId: number | undefined, msg: ContentToBackground)
 		}
 		case 'status': {
 			recordStatus(tabId, msg.adapterId, msg.state)
+			flushPendingConvergence(tabId)
 			recomputeActiveIcon()
 			const prev = lastPlayerStateByTab.get(tabId)
 			if (prev !== msg.state.playerState) {
@@ -159,6 +192,8 @@ async function routeMessage(tabId: number | undefined, msg: ContentToBackground)
 			})
 			forgetTab(tabId)
 			lastPlayerStateByTab.delete(tabId)
+			session.convergedTabs.delete(tabId)
+			session.settleUntilByTab.delete(tabId)
 			forgetIconForTab(tabId)
 			recomputeActiveIcon()
 			return
@@ -212,10 +247,30 @@ async function handlePopupMessage(msg: PopupToBackground): Promise<void> {
 			session.cursor = null
 			session.playlist = []
 			session.playlistVersion = null
+			resetConvergence(session)
 			setPopupCreds(null)
 			return
 		}
 	}
+}
+
+/**
+ * If a convergence target was stashed because no tab had reported status
+ * when ROOM_STATE / STATE / SYNC_ADJUST arrived, flush it to the freshest-
+ * reporting tab now. Called from the `status` handler right after
+ * `recordStatus` so `pickActiveTab` can see the new entry.
+ *
+ * @param reportingTabId The tab whose status just arrived; only flush when
+ *   it is the one `pickActiveTab` picks, so we don't surprise an unrelated
+ *   tab with commands meant for the synced video.
+ */
+function flushPendingConvergence(reportingTabId: number): void {
+	const pending = session.pendingConvergence
+	if (pending === null) return
+	const active = pickActiveTab()
+	if (!active || active[0] !== reportingTabId) return
+	for (const cmd of pending) dispatchCommand(reportingTabId, cmd)
+	markConverged(session, reportingTabId)
 }
 
 function dispatchCommand(tabId: number, cmd: AuthoritativeCommand): void {
