@@ -90,7 +90,7 @@ The popup talks to the background over a `chrome.runtime.Port` named `'pbsync-po
 | WebSocket connections, timers, reconnect bookkeeping | `pool: Map<tabId, WsRuntime>` in `src/background/ws.ts` | One connection per syncing tab; each tab is its own server-side client |
 | Room-shared state (clientId, lastEventId, cursor, playlist, mode, clock offset) | One `SessionState` per pooled runtime; entrypoint owns `Map<tabId, SessionState>` | Pure, foldable by frame handlers; one session per tab |
 | Per-tab status cache + identity | `src/background/tabs.ts` (`Map<tabId, TabEntry>`) | Heartbeat needs fresh state without round-trips |
-| Suppression windows + join-time convergence gates | `SessionState.recentCommandsByTab`, `convergedTabs`, `pendingConvergence`, `settleUntilByTab` (one session per tab) | Co-located with the rest of session state; pruned on record / on tab close / on (re)connect — see [`protocol-client.md`](protocol-client.md#feedback-loop-suppression) |
+| Suppression windows + join-time convergence gates | `SessionState.recentCommands`, `converged`, `settleUntil` (one session per tab — all scalars now that each WS runtime is keyed by `tabId`) | Co-located with the rest of session state; pruned on record / on tab close / on (re)connect — see [`protocol-client.md`](protocol-client.md#feedback-loop-suppression) |
 | Adapter activation, command handler ref, status interval | Module-level in `src/adapters/runtime.ts` | One adapter per page; module-state matches |
 | Creds (`syncUrl`, `syncPassword`, `clientId`) | `chrome.storage.local['pbsync.tab.<tabId>']`, one slot per syncing tab | Survive worker termination; wiped on `chrome.tabs.onRemoved` and on browser restart; see [`storage.md`](storage.md) |
 

@@ -73,13 +73,13 @@ Everything else (network glitch, idle close, daemon restart) is treated as trans
 
 ## Heartbeat
 
-Every 5 s, the WS module pulls the most recent `VideoState` from `tabs.ts::pickActiveTab()` and sends:
+Every 5 s, each pooled runtime pulls the most recent `VideoState` for its own tab via `tabs.ts::getTab(r.tabId)` and sends:
 
 ```json
 { "type": "HEARTBEAT", "currentPos": 42.7, "playerState": "playing" }
 ```
 
-If no tab has reported status yet (e.g. extension just loaded and no content script has fired a `status` message), the tick is skipped. The daemon uses heartbeats both as a liveness signal and as drift input — see the next section.
+If the runtime's tab hasn't reported status yet (e.g. extension just loaded and no content script has fired a `status` message for it), the tick is skipped. The daemon uses heartbeats both as a liveness signal and as drift input — see the next section.
 
 ## Clock sync
 
@@ -133,17 +133,17 @@ To stop the echo:
 
 A tab joining a room hasn't yet been told the room's authoritative state. During adapter init the page may still fire its own native events — a Vidstack auto-play, a resume-position seek — that look like intents but aren't. Forwarding them as wire `EVENT`s clobbers the room's playback state for everyone.
 
-The session tracks `convergedTabs: Set<number>` — tabs that have received at least one authoritative command on the current connection. Until a tab is in that set, `hasConverged` returns false and the entrypoint drops the intent (logged as `dropping pre-convergence intent`).
+Each `SessionState` carries a `converged: boolean` flag (one session per tab — the WS runtime pool is keyed by `tabId`, so there's no map). While `hasConverged(session)` is `false`, the entrypoint drops the intent (logged as `dropping pre-convergence intent`).
 
-A tab transitions to converged via `markConverged(session, tabId)`, called from `dispatchAll` after `pickActiveTab` succeeds. If no tab has reported status when the first `ROOM_STATE` / `STATE` / `SYNC_ADJUST` arrives, `dispatchAll` stashes the commands in `session.pendingConvergence` instead of dropping them; the `status` handler then calls `flushPendingConvergence`, which dispatches the latest stashed commands to whichever tab `pickActiveTab` now picks and marks it converged. Newer frames overwrite older ones — we always converge to the freshest authoritative state.
+The flag flips via `markConverged(session)`, called from `dispatchToOwner` immediately after the runtime hands the commands to its bound tab. Because each runtime owns exactly one tab, there is no "no active tab yet" branch to defer — `ROOM_STATE` / `STATE` / `SYNC_ADJUST` always dispatch directly to `r.tabId`.
 
-### 3. Post-convergence settle window (5 s)
+### 3. Post-convergence settle window
 
-The page's auto-resume logic can also fire *after* the adapter has applied the room's first command — sometimes a second or two later, well outside the 600 ms echo window. `JOIN_SETTLE_WINDOW_MS` (5000 ms) is armed exactly once per tab per connection by `markConverged`; `inSettleWindow` drops any intent from that tab while `Date.now() < settleUntil` (logged as `dropping settle-window intent`). The "first convergence only" rule is deliberate — re-arming on every STATE-driven re-dispatch would keep re-locking the user out of their own intents mid-session.
+The page's auto-resume logic can also fire *after* the adapter has applied the room's first command — sometimes a second or two later, well outside the 600 ms echo window. `JOIN_SETTLE_WINDOW_MS` (1000 ms) is armed exactly once per connection by `markConverged`, which writes `settleUntil = Date.now() + JOIN_SETTLE_WINDOW_MS`; `inSettleWindow(session)` drops any intent from that tab while `Date.now() < settleUntil` (logged as `dropping settle-window intent`), then clears the field. The "first convergence only" rule is deliberate — re-arming on every STATE-driven re-dispatch would keep re-locking the user out of their own intents mid-session.
 
 ### Reset on (re)connection
 
-`resetConvergence(session)` clears `convergedTabs`, `pendingConvergence`, and `settleUntilByTab` on every WS `openSocket` and on `leave_room`. A cached tab from a previous connection has to be re-converged by the fresh `ROOM_STATE` before its intents are allowed to flow. The convergence and settle entries for a tab are also dropped on `chrome.tabs.onRemoved` and on adapter `fail`.
+`resetConvergence(session)` clears `converged` and `settleUntil` on every WS `openSocket` (so a reconnect onto the same tab has to be re-converged by the fresh `ROOM_STATE` before its intents are allowed to flow). On `leave_room` / `chrome.tabs.onRemoved` / adapter `fail`, the entire session is dropped from the entrypoint's `Map<tabId, SessionState>` together with the runtime — no per-field cleanup needed.
 
 ## Buffer transitions
 

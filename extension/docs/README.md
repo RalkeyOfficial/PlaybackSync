@@ -20,7 +20,7 @@ This directory is the source of truth for *how the extension is shaped and why*.
 | [`architecture.md`](architecture.md) | Three-layer split, message envelope, where state lives |
 | [`protocol-client.md`](protocol-client.md) | Connection lifecycle, reconnect, heartbeat, clock-sync, drift handling, suppression |
 | [`adapter-contract.md`](adapter-contract.md) | `Adapter` / `AdapterContext` / `LocalIntent` / `AuthoritativeCommand` / `ContentIdentity` / `VideoState` — how to write an adapter |
-| [`storage.md`](storage.md) | `chrome.storage.local.pbsync` schema; dev-time creds workflow |
+| [`storage.md`](storage.md) | Per-tab `chrome.storage.local['pbsync.tab.<tabId>']` schema; cold-boot sentinel; dev-time creds workflow |
 | [`popup.md`](popup.md) | Toolbar popup: snapshot channel, `PopupStatus`, leave-room flow |
 | [`store-listing.md`](store-listing.md) | Short / long descriptions, reviewer notes, screenshot brief, pre-submission checklist |
 | [`privacy.md`](privacy.md) | Data-handling statement (the version hosted at the privacy-policy URL) |
