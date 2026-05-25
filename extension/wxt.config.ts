@@ -12,7 +12,7 @@ export default defineConfig({
 		const nameSuffix = isRelease ? '' : ' (DEV)'
 		return {
 			name: `PlaybackSync${nameSuffix}`,
-			description: 'Synchronize video playback across a Nextcloud-hosted room.',
+			description: 'Frame-tight video sync across browsers — every play, pause, and seek mirrored in milliseconds over a self-hosted WebSocket relay.',
 			version: '0.1.0',
 			permissions: [
 				'storage',
