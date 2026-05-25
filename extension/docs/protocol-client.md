@@ -113,16 +113,36 @@ For the `seek` case the resulting native `seeking` event in the adapter would no
 
 ## Feedback-loop suppression
 
+Three gates sit in front of `sendEvent`, each killing a different class of phantom intent. They share a cause — native video-element events that aren't real user actions — but fire at different points in the connection's life.
+
+### 1. Per-command echo window (600 ms)
+
 The daemon **broadcasts STATE to every connection including the sender** (see [`lib/WebSocket/Handler/EventHandler.php`](../../lib/WebSocket/Handler/EventHandler.php)). This is the *correct* thing to do for state convergence, but it means every time we send an `EVENT play`, the daemon hands us back a `STATE { playerState: 'playing' }` that we then apply — which fires `<video>.play()` — which fires the `play` native event — which the adapter sees and emits as a fresh local intent.
 
 To stop the echo:
 
 1. The entrypoint calls `session.recordCommand(tabId, cmd)` immediately before `chrome.tabs.sendMessage` ships the command.
-2. The next intent of the matching type arriving within 600 ms is dropped silently.
+2. The next intent of the matching type arriving within 600 ms is dropped silently (`shouldSuppress`).
 
 600 ms covers the round-trip + browser event-fire delay. The window is short enough that real user actions don't get eaten — a person can't physically click play, then click pause, in under 600 ms with intent.
 
 `nudge_rate` commands arm no suppression slot — they don't produce a `seeking` event, only a `ratechange` event, and no adapter listens to that.
+
+### 2. Pre-convergence drop
+
+A tab joining a room hasn't yet been told the room's authoritative state. During adapter init the page may still fire its own native events — a Vidstack auto-play, a resume-position seek — that look like intents but aren't. Forwarding them as wire `EVENT`s clobbers the room's playback state for everyone.
+
+The session tracks `convergedTabs: Set<number>` — tabs that have received at least one authoritative command on the current connection. Until a tab is in that set, `hasConverged` returns false and the entrypoint drops the intent (logged as `dropping pre-convergence intent`).
+
+A tab transitions to converged via `markConverged(session, tabId)`, called from `dispatchAll` after `pickActiveTab` succeeds. If no tab has reported status when the first `ROOM_STATE` / `STATE` / `SYNC_ADJUST` arrives, `dispatchAll` stashes the commands in `session.pendingConvergence` instead of dropping them; the `status` handler then calls `flushPendingConvergence`, which dispatches the latest stashed commands to whichever tab `pickActiveTab` now picks and marks it converged. Newer frames overwrite older ones — we always converge to the freshest authoritative state.
+
+### 3. Post-convergence settle window (5 s)
+
+The page's auto-resume logic can also fire *after* the adapter has applied the room's first command — sometimes a second or two later, well outside the 600 ms echo window. `JOIN_SETTLE_WINDOW_MS` (5000 ms) is armed exactly once per tab per connection by `markConverged`; `inSettleWindow` drops any intent from that tab while `Date.now() < settleUntil` (logged as `dropping settle-window intent`). The "first convergence only" rule is deliberate — re-arming on every STATE-driven re-dispatch would keep re-locking the user out of their own intents mid-session.
+
+### Reset on (re)connection
+
+`resetConvergence(session)` clears `convergedTabs`, `pendingConvergence`, and `settleUntilByTab` on every WS `openSocket` and on `leave_room`. A cached tab from a previous connection has to be re-converged by the fresh `ROOM_STATE` before its intents are allowed to flow. The convergence and settle entries for a tab are also dropped on `chrome.tabs.onRemoved` and on adapter `fail`.
 
 ## Buffer transitions
 
