@@ -4,7 +4,7 @@ import type {
 	LocalIntent,
 	VideoState,
 } from './adapters/types'
-import type { CursorRef } from './background/protocol'
+import type { CursorRef, VideoRefWithMeta } from './background/protocol'
 
 /**
  * Discriminated union of every message a content script may send the
@@ -29,9 +29,35 @@ import type { CursorRef } from './background/protocol'
  */
 export type ContentToBackground =
 	| { kind: 'intent'; adapterId: string; intent: LocalIntent }
-	| { kind: 'identity'; adapterId: string; identity: ContentIdentity }
+	| {
+		kind: 'identity'
+		adapterId: string
+		identity: ContentIdentity
+		/**
+		 * Full page URL (`location.href`) captured at the moment the
+		 * adapter reported identity. The wire-format `JOIN.currentlyShowing`
+		 * field requires an origin-qualified URL, but
+		 * `ContentIdentity.normalizedUrl` is intentionally hostname-stripped
+		 * for identity comparison and can't be reused as-is. The content
+		 * entrypoint attaches `pageUrl` here so the background can build a
+		 * `VideoRef` without knowing the page's location.
+		 */
+		pageUrl: string
+	}
 	| { kind: 'status'; adapterId: string; state: VideoState }
 	| { kind: 'fail'; adapterId: string; reason: string }
+	| {
+		kind: 'catalog'
+		adapterId: string
+		/**
+		 * Result of {@link Adapter.scrapeCatalog} for the currently active
+		 * adapter, or `null` when the adapter omits the method, throws, or
+		 * the runtime's scrape timeout elapses. The background uses this
+		 * (alongside the most recent `identity`) to populate the JOIN
+		 * frame's `catalogFragment` once per session.
+		 */
+		catalog: VideoRefWithMeta[] | null
+	}
 	| { kind: 'credentials'; syncUrl: string; syncPassword: string }
 
 /**

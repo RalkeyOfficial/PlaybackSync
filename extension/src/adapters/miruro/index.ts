@@ -1,4 +1,5 @@
 import type { Adapter, AdapterContext, AdapterFactory, LocalIntent, VideoState } from '../types';
+import type { VideoRefWithMeta } from '../../background/protocol';
 
 /**
  * Hosts the adapter recognises. miruro rotates TLDs; the enumerated list is
@@ -62,6 +63,35 @@ const LOAD_BUTTON_SETTLE_MS = 300;
 const LOAD_TIMEOUT_MS = 3_000;
 
 /**
+ * Selectors used by {@link MiruroAdapter.scrapeCatalog}. miruro's class
+ * names rotate with build hashes (e.g. `_seasonTitle_1vb3r_84`); the
+ * selectors below stick to stable IDs and `data-*` / `title` attributes
+ * so a build flip can't silently mis-route entries into the room's
+ * playlist. If miruro renames `#episodes-list-container` or drops
+ * `data-episode-id`, `scrapeCatalog` returns `null` cleanly rather than
+ * scraping garbage.
+ */
+const EPISODE_LIST_CONTAINER_SELECTOR = '#episodes-list-container';
+const EPISODE_LIST_ENTRY_SELECTOR = 'button[data-episode-id]';
+
+/**
+ * Parser for the episode number on each entry's `title` attribute. The
+ * format is consistently `EP <number>: <title>` (e.g.
+ * `EP 1: Kanan's Easy`), so the regex pulls the leading number out of
+ * the user-facing string. Stable signal — the rendered `<span>` shows
+ * the same `EP <number>` text but lives behind hashed-class wrappers.
+ */
+const EPISODE_TITLE_RE = /^EP\s+(\d+)\b/i;
+
+/**
+ * How long {@link MiruroAdapter.scrapeCatalog} waits for the episode-list
+ * container to appear in the DOM. Capped well under the runtime's overall
+ * `SCRAPE_CATALOG_TIMEOUT_MS` (2 s) so the runtime never has to interrupt
+ * a still-running scrape on the common path.
+ */
+const EPISODE_LIST_WAIT_TIMEOUT_MS = 1_500;
+
+/**
  * Adapter for the miruro family of streaming sites (`miruro.tv` / `.to` /
  * `.bz` / `.ru`). Handles three quirks of the live site:
  *
@@ -84,6 +114,8 @@ class MiruroAdapter implements Adapter {
   private listeners: Array<[keyof HTMLMediaElementEventMap, () => void]> = [];
   private pendingObserver: MutationObserver | null = null;
   private pendingTimer: ReturnType<typeof setTimeout> | null = null;
+  private catalogObserver: MutationObserver | null = null;
+  private catalogTimer: ReturnType<typeof setTimeout> | null = null;
   private destroyed = false;
 
   canHandlePage(url: URL): boolean {
@@ -182,9 +214,24 @@ class MiruroAdapter implements Adapter {
     if (this.video) this.video.playbackRate = rate;
   }
 
+  async scrapeCatalog(): Promise<VideoRefWithMeta[] | null> {
+    if (this.destroyed) return null;
+
+    const pathMatch = PATH_RE.exec(location.pathname);
+    const showId = pathMatch?.[1];
+    if (!showId) return null;
+
+    const container = await this.waitForEpisodeList();
+    if (this.destroyed || !container) return null;
+
+    const entries = this.collectEpisodeEntries(container, showId);
+    return entries.length > 0 ? entries : null;
+  }
+
   destroy(): void {
     this.destroyed = true;
     this.cancelPendingObserver();
+    this.cancelCatalogObserver();
     if (this.video) {
       for (const [evt, fn] of this.listeners) {
         this.video.removeEventListener(evt, fn);
@@ -273,6 +320,97 @@ class MiruroAdapter implements Adapter {
       clearTimeout(this.pendingTimer);
       this.pendingTimer = null;
     }
+  }
+
+  /**
+   * Resolve to the first matching episode-list container element, or
+   * `null` after {@link EPISODE_LIST_WAIT_TIMEOUT_MS}. Uses its own
+   * observer/timer pair so it can coexist with {@link waitForVideo} /
+   * {@link waitForLoadButton} on cold pages (the manual-load flow may
+   * still be in flight when the runtime fires scrapeCatalog).
+   */
+  private waitForEpisodeList(): Promise<Element | null> {
+    const immediate = this.queryEpisodeList();
+    if (immediate) return Promise.resolve(immediate);
+
+    return new Promise(resolve => {
+      const finish = (el: Element | null) => {
+        this.cancelCatalogObserver();
+        resolve(el);
+      };
+
+      this.catalogObserver = new MutationObserver(() => {
+        const el = this.queryEpisodeList();
+        if (el) finish(el);
+      });
+      this.catalogObserver.observe(document.body, {
+        childList: true,
+        subtree: true,
+      });
+
+      this.catalogTimer = setTimeout(() => finish(null), EPISODE_LIST_WAIT_TIMEOUT_MS);
+    });
+  }
+
+  private queryEpisodeList(): Element | null {
+    return document.querySelector(EPISODE_LIST_CONTAINER_SELECTOR);
+  }
+
+  private cancelCatalogObserver(): void {
+    if (this.catalogObserver) {
+      this.catalogObserver.disconnect();
+      this.catalogObserver = null;
+    }
+    if (this.catalogTimer !== null) {
+      clearTimeout(this.catalogTimer);
+      this.catalogTimer = null;
+    }
+  }
+
+  /**
+   * Walk the episode-list container and turn each button into a
+   * `VideoRefWithMeta`. The episode number comes from the button's
+   * `title` attribute (`EP 1: Kanan's Easy` → `1`); the rendered
+   * `EP <n>` span is in the DOM too but lives behind hashed-class
+   * wrappers that flip on every build, so the title is the durable
+   * signal. Drops buttons whose title doesn't match — better a short
+   * catalog than a fabricated entry that fans out to the rest of the
+   * room via `PlaylistService::merge`.
+   *
+   * @param container The `#episodes-list-container` element returned
+   *   by {@link waitForEpisodeList}.
+   * @param showId The slug extracted from `/watch/<showId>` in {@link init}.
+   */
+  private collectEpisodeEntries(container: Element, showId: string): VideoRefWithMeta[] {
+    const seen = new Set<string>();
+    const entries: VideoRefWithMeta[] = [];
+    for (const node of container.querySelectorAll<HTMLButtonElement>(EPISODE_LIST_ENTRY_SELECTOR)) {
+      const ep = this.extractEpisodeNumber(node);
+      if (ep === null) continue;
+      const key = `${showId}-ep${ep}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      entries.push({
+        providerId: 'miruro',
+        videoId: key,
+        pageUrl: `${location.origin}/watch/${showId}?ep=${ep}`,
+        episodeNumber: ep,
+        label: node.title.trim() || null,
+      });
+    }
+    return entries;
+  }
+
+  /**
+   * Parse the episode number from a button's `title` attribute (e.g.
+   * `EP 1: Kanan's Easy` → `1`). Returns `null` when the title doesn't
+   * match the consistent `EP <number>` prefix miruro renders.
+   */
+  private extractEpisodeNumber(node: HTMLButtonElement): number | null {
+    const match = EPISODE_TITLE_RE.exec(node.title);
+    if (!match) return null;
+    const n = parseInt(match[1], 10);
+    return Number.isFinite(n) ? n : null;
   }
 
   /**

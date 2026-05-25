@@ -1,3 +1,5 @@
+import type { VideoRefWithMeta } from '../background/protocol'
+
 /**
  * Adapter contract: every supported streaming site is one adapter.
  *
@@ -49,6 +51,35 @@ export interface Adapter {
 	 *   `1` (e.g. `0.95` / `1.05`) are the nudge clamps.
 	 */
 	setPlaybackRate(rate: number): void
+
+	/**
+	 * Best-effort scrape of the page's episode list, for the JOIN frame's
+	 * `catalogFragment` field. The runtime invokes this once per adapter
+	 * lifetime, right after {@link Adapter.init} resolves, and forwards the
+	 * result to the background; the background merges it into the room's
+	 * playlist via the JOIN handler.
+	 *
+	 * Optional — adapters that can't (or don't want to) enumerate a catalog
+	 * simply omit this method. The runtime applies its own timeout
+	 * (`SCRAPE_CATALOG_TIMEOUT_MS` in `runtime.ts`) and catches any thrown
+	 * exception, treating both as `null`, so the adapter does not need to
+	 * bound its own latency. That said, well-written implementations should
+	 * still resolve in well under a second on the common path.
+	 *
+	 * Returning `null` (or `[]`, or throwing) means "no catalog available
+	 * right now" — the JOIN frame omits `catalogFragment` entirely. Use this
+	 * for cold pages where the episode list hasn't hydrated, or for layouts
+	 * that don't expose one.
+	 *
+	 * Each returned entry must carry a **full** `pageUrl` (origin included).
+	 * The wire-format `VideoRef.pageUrl` is what the server stores so a
+	 * later cursor change can navigate back to it — the hostname-stripped
+	 * `ContentIdentity.normalizedUrl` form is for identity comparison only
+	 * and is not interchangeable here.
+	 *
+	 * @returns The scraped entries, or `null` if no catalog is available.
+	 */
+	scrapeCatalog?(): Promise<VideoRefWithMeta[] | null>
 
 	/** Detach every listener and clear refs. Runtime calls this on URL change. */
 	destroy(): void

@@ -41,14 +41,16 @@ The whole flow is at most a handful of synchronous steps per frame. Nothing buff
 
 ## JOIN handshake
 
-The client sends `JOIN` immediately after `open`. The daemon has a 5 s window (`JOIN_TIMEOUT` in `docs/ws-protocol.md`); we don't come close to that.
+The **first** JOIN on a runtime is deferred up to `FIRST_JOIN_DEFERRAL_MS` (3 s) so the content script has a chance to report identity and the result of `Adapter.scrapeCatalog()`. JOIN flushes when both signals arrive, or when the deadline elapses — whichever happens first. The daemon's `JOIN_TIMEOUT` is 5 s (`docs/ws-protocol.md`), so the deferral fits comfortably inside it.
+
+**Reconnect JOINs** skip the deferral entirely: the runtime tracks `firstJoinSent` per-tab, so subsequent reconnects emit a bare JOIN immediately on `open`. The server has already merged `catalogFragment` into the room's playlist on the first JOIN and replayed `currentlyShowing` against the cursor; replaying either on reconnect would be best-effort idempotent at best, and noise at worst.
 
 Optional fields, in order of how the daemon treats them:
 
 - **`clientId`** — included whenever we have one from a prior `ROOM_STATE`. If the prior connection's tombstone is still warm (≤ 30 s old, server-configurable), the daemon resumes the session and replays missed events in `ROOM_STATE.recentEvents`.
 - **`lastEventId`** — the highest `eventId` we've folded into the session. Tells the daemon where to start the replay.
-- **`currentlyShowing`** — out of scope this slice. Will arrive when adapters expose what they're playing.
-- **`catalogFragment`** — out of scope this slice. Same shape, fed by adapters that can scrape an episode list.
+- **`currentlyShowing`** — first JOIN only. Built by the background from the active adapter's `ContentIdentity` plus the entrypoint-captured `location.href` (the wire format needs a full URL; `ContentIdentity.normalizedUrl` is hostname-stripped). Empty rooms seed their cursor from it; mismatched joiners get unicast `CURSOR_CHANGE` steering.
+- **`catalogFragment`** — first JOIN only. Sourced from `Adapter.scrapeCatalog()`. Omitted entirely when the adapter has no method, returns `null`, throws, or times out (`SCRAPE_CATALOG_TIMEOUT_MS = 2 s` in `runtime.ts`). See [`adapter-contract.md` §Catalog reporting](adapter-contract.md#catalog-reporting-scrapecatalog).
 
 ## Reconnect strategy
 
@@ -133,5 +135,4 @@ The content runtime polls `adapter.getState()` every 1 s and pushes a `status` m
 ## What's deliberately not implemented yet
 
 - **`CURSOR_CHANGE_REQUEST` from the extension** — the encoder type is in `protocol.ts` but no caller fires it. Needs UI to trigger.
-- **`PLAYLIST_UPDATE` from the extension** — same; encoder ready, no scraping path.
-- **`currentlyShowing` + `catalogFragment` on JOIN** — schema is there, real values arrive when adapters expose scrape methods.
+- **`PLAYLIST_UPDATE` from the extension** — same; encoder ready, no scraping path beyond the first-JOIN `catalogFragment`.

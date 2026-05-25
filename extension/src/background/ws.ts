@@ -24,6 +24,8 @@
 import {
 	type InboundFrame,
 	type OutboundFrame,
+	type VideoRef,
+	type VideoRefWithMeta,
 	decode,
 	encode,
 } from './protocol'
@@ -67,6 +69,15 @@ const CLOCK_PING_PERIODIC_MS = 30_000
 const RECONNECT_BACKOFF_MS = [1_000, 2_000, 4_000, 8_000, 16_000, 30_000]
 
 /**
+ * Hard cap on how long the first JOIN waits for the content script to
+ * report identity + catalog before going out with whatever's cached. The
+ * runtime's own scrape timeout is 2 s; this leaves ~1 s of headroom for
+ * the content→background IPC and the case where the adapter's `init`
+ * itself is slow (cold miruro page waiting on Vidstack hydration).
+ */
+const FIRST_JOIN_DEFERRAL_MS = 3_000
+
+/**
  * Callbacks the entrypoint provides so the WS module can fan out
  * server-driven commands and surface errors without itself knowing
  * about `chrome.*` APIs.
@@ -101,6 +112,40 @@ interface WsRuntime {
 	creds: PbSyncCreds
 	session: SessionState
 	cb: WsCallbacks
+	/**
+	 * Most recent `currentlyShowing` reported by the content script for
+	 * this tab. Used only on the first JOIN; persists across reconnects
+	 * but is never resent (server has merged it once already).
+	 */
+	lastIdentity: VideoRef | null
+	/**
+	 * Most recent `catalogFragment` reported by the content script for
+	 * this tab, or `null` when the adapter has no catalog. Same first-
+	 * JOIN-only lifecycle as {@link lastIdentity}.
+	 */
+	lastCatalog: VideoRefWithMeta[] | null
+	/**
+	 * Whether the content script has reported a catalog result (even
+	 * `null`) since this runtime was created. Distinguishes "adapter
+	 * doesn't have one" (`catalogReported = true`, `lastCatalog = null`)
+	 * from "we haven't heard from the adapter yet" (`catalogReported =
+	 * false`). The pending JOIN can flush as soon as identity is known
+	 * AND the catalog has been reported one way or another.
+	 */
+	catalogReported: boolean
+	/**
+	 * Active first-JOIN deferral timer, or `null` when no JOIN is
+	 * pending (either because the first JOIN has already gone out, or
+	 * because the socket isn't open). Cleared on flush, on socket close,
+	 * and on `disconnect`.
+	 */
+	pendingJoinDeadline: ReturnType<typeof setTimeout> | null
+	/**
+	 * Whether the first JOIN frame has been emitted on this runtime.
+	 * Reconnect JOINs reuse this to skip the content-field path entirely
+	 * — `currentlyShowing` / `catalogFragment` are first-JOIN-only.
+	 */
+	firstJoinSent: boolean
 }
 
 const pool = new Map<number, WsRuntime>()
@@ -138,6 +183,11 @@ export function connect(tabId: number, creds: PbSyncCreds, session: SessionState
 		creds,
 		session,
 		cb,
+		lastIdentity: null,
+		lastCatalog: null,
+		catalogReported: false,
+		pendingJoinDeadline: null,
+		firstJoinSent: false,
 	}
 	pool.set(tabId, r)
 	openSocket(r)
@@ -155,6 +205,10 @@ export function disconnect(tabId: number): void {
 	if (!r) return
 	r.terminated = true
 	stopTimers(r)
+	if (r.pendingJoinDeadline !== null) {
+		clearTimeout(r.pendingJoinDeadline)
+		r.pendingJoinDeadline = null
+	}
 	r.socket?.close(1000, 'client disconnect')
 	pool.delete(tabId)
 	notifyDisconnected(tabId)
@@ -210,18 +264,124 @@ function openSocket(r: WsRuntime): void {
 }
 
 function onOpen(r: WsRuntime): void {
-	log('info', 'open; sending JOIN', { tabId: r.tabId })
 	r.reconnectAttempt = 0
+	startTimers(r)
+	scheduleInitialClockPings(r)
+	notifyOpen(r.tabId)
+	r.cb.onLifecycleChange?.()
+
+	if (r.firstJoinSent) {
+		// Reconnect: server has already merged the content fields from the
+		// first JOIN; replaying would be best-effort idempotent but adds
+		// noise. Just resume the session via the bare JOIN form.
+		log('info', 'open; sending reconnect JOIN', { tabId: r.tabId })
+		sendJoin(r, false)
+		return
+	}
+
+	log('info', 'open; deferring first JOIN for identity/catalog', { tabId: r.tabId })
+	r.pendingJoinDeadline = setTimeout(() => {
+		log('info', 'first-JOIN deadline elapsed; flushing without content fields', {
+			tabId: r.tabId,
+		})
+		flushJoin(r)
+	}, FIRST_JOIN_DEFERRAL_MS)
+	// Identity/catalog may already be cached from a prior socket on this
+	// runtime; if so, flush immediately rather than waiting out the timer.
+	maybeFlushJoin(r)
+}
+
+/**
+ * Send a `JOIN` frame on the runtime's open socket. `includeContentFields`
+ * gates the first-JOIN-only fields (`currentlyShowing` /
+ * `catalogFragment`); reconnects pass `false`.
+ *
+ * @param r The per-tab WS runtime.
+ * @param includeContentFields Whether to attach the cached identity /
+ *   catalog. Always `false` on reconnects.
+ */
+function sendJoin(r: WsRuntime, includeContentFields: boolean): void {
 	send(r, {
 		type: 'JOIN',
 		password: r.creds.syncPassword,
 		...(r.creds.clientId ? { clientId: r.creds.clientId } : {}),
 		...(r.session.lastEventId > 0 ? { lastEventId: r.session.lastEventId } : {}),
+		...(includeContentFields && r.lastIdentity
+			? { currentlyShowing: r.lastIdentity }
+			: {}),
+		...(includeContentFields && r.lastCatalog && r.lastCatalog.length > 0
+			? { catalogFragment: r.lastCatalog }
+			: {}),
 	})
-	startTimers(r)
-	scheduleInitialClockPings(r)
-	notifyOpen(r.tabId)
-	r.cb.onLifecycleChange?.()
+}
+
+/**
+ * Flush a pending first JOIN: clear the deadline timer, emit the frame
+ * with whatever content fields are cached, and latch `firstJoinSent` so
+ * subsequent reconnects bypass this path. No-op if no JOIN is pending —
+ * safe to call defensively.
+ *
+ * @param r The per-tab WS runtime.
+ */
+function flushJoin(r: WsRuntime): void {
+	if (r.pendingJoinDeadline === null && r.firstJoinSent) return
+	if (r.pendingJoinDeadline !== null) {
+		clearTimeout(r.pendingJoinDeadline)
+		r.pendingJoinDeadline = null
+	}
+	sendJoin(r, true)
+	r.firstJoinSent = true
+}
+
+/**
+ * Flush the pending first JOIN if both gates are ready: identity must be
+ * known, and the catalog must have been reported (even as `null`). Called
+ * after every identity/catalog update from the content script — the first
+ * call that satisfies both gates wins, the others fall through.
+ *
+ * @param r The per-tab WS runtime.
+ */
+function maybeFlushJoin(r: WsRuntime): void {
+	if (r.firstJoinSent) return
+	if (r.pendingJoinDeadline === null) return
+	if (r.lastIdentity === null) return
+	if (!r.catalogReported) return
+	log('info', 'first-JOIN gates satisfied; flushing', { tabId: r.tabId })
+	flushJoin(r)
+}
+
+/**
+ * Update the cached `currentlyShowing` for a tab. Invoked by the
+ * background message router when a content-script `identity` message
+ * arrives. Triggers a JOIN flush if the catalog has already been
+ * reported.
+ *
+ * @param tabId Browser tab the content script belongs to.
+ * @param identity The `VideoRef` built by the entrypoint from the
+ *   adapter's `ContentIdentity` + `location.href`.
+ */
+export function reportIdentity(tabId: number, identity: VideoRef): void {
+	const r = pool.get(tabId)
+	if (!r) return
+	r.lastIdentity = identity
+	maybeFlushJoin(r)
+}
+
+/**
+ * Update the cached `catalogFragment` for a tab. Invoked by the
+ * background message router when a content-script `catalog` message
+ * arrives. Flips `catalogReported` even when `catalog` is `null`, so the
+ * pending-JOIN gate can release for adapters without a usable catalog.
+ *
+ * @param tabId Browser tab the content script belongs to.
+ * @param catalog The scraped catalog, or `null` when none is available.
+ */
+export function reportCatalog(tabId: number, catalog: VideoRefWithMeta[] | null): void {
+	const r = pool.get(tabId)
+	if (!r) return
+	r.lastCatalog = catalog
+	r.catalogReported = true
+	maybeFlushJoin(r)
 }
 
 function onMessage(r: WsRuntime, ev: MessageEvent): void {
@@ -239,6 +399,12 @@ function onMessage(r: WsRuntime, ev: MessageEvent): void {
 
 function onClose(r: WsRuntime, ev: CloseEvent): void {
 	stopTimers(r)
+	if (r.pendingJoinDeadline !== null) {
+		// The socket is gone before the deferred JOIN went out; cancel the
+		// timer. The next `onOpen` will set up a fresh deferral if needed.
+		clearTimeout(r.pendingJoinDeadline)
+		r.pendingJoinDeadline = null
+	}
 	r.socket = null
 	log('info', 'close', { tabId: r.tabId, code: ev.code, reason: ev.reason })
 	notifyDisconnected(r.tabId)

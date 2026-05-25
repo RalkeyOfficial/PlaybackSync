@@ -5,6 +5,7 @@ import type {
 	LocalIntent,
 	VideoState,
 } from '../types'
+import type { VideoRefWithMeta } from '../../background/protocol'
 
 /**
  * Baseline adapter. Activates only when the URL contains the query
@@ -88,6 +89,16 @@ class TemplateAdapter implements Adapter {
 
 	setPlaybackRate(rate: number): void {
 		if (this.video) this.video.playbackRate = rate
+	}
+
+	async scrapeCatalog(): Promise<VideoRefWithMeta[] | null> {
+		// Override per site: walk the page's episode list and return one
+		// VideoRefWithMeta per entry, with `pageUrl` set to the full
+		// origin-qualified URL (NOT the hostname-stripped `normalizedUrl`
+		// form used by ContentIdentity). Return null when the page doesn't
+		// expose a catalog or the DOM isn't ready — the runtime will still
+		// send JOIN, just without `catalogFragment`.
+		return null
 	}
 
 	destroy(): void {

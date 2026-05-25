@@ -7,6 +7,7 @@ import type {
 	LocalIntent,
 	VideoState,
 } from './types'
+import type { VideoRefWithMeta } from '../background/protocol'
 import { miruroAdapterFactory } from './miruro'
 import { templateAdapterFactory } from './_template'
 
@@ -43,6 +44,14 @@ const NUDGE_MAX_DURATION_MS = 3000
 const NUDGE_DEAD_BAND_S = 0.05
 
 /**
+ * Hard cap on how long the runtime waits for `adapter.scrapeCatalog()`
+ * before giving up and reporting `null` to the background. The background
+ * has its own 3 s JOIN-deferral cap; this leaves headroom for the IPC
+ * round-trip and an adapter that's just slow rather than broken.
+ */
+const SCRAPE_CATALOG_TIMEOUT_MS = 2000
+
+/**
  * Static registry of bundled adapters. Adding a new site = appending its
  * factory here. First match wins (workshop §9 "first adapter whose
  * canHandlePage returns true is activated").
@@ -70,6 +79,12 @@ export interface RuntimeBridge {
 	sendStatus(adapterId: string, state: VideoState): void
 	/** Forward an adapter's fatal failure so the background can clear tab state. */
 	sendFail(adapterId: string, reason: string): void
+	/**
+	 * Forward the result of {@link Adapter.scrapeCatalog} (or `null` if the
+	 * adapter omits the method, the scrape times out, or it throws). Called
+	 * once per adapter lifetime, after activation.
+	 */
+	sendCatalog(adapterId: string, catalog: VideoRefWithMeta[] | null): void
 }
 
 type RuntimeState =
@@ -224,6 +239,7 @@ async function evaluate(): Promise<void> {
 		state = { kind: 'active', adapter, commandHandler: pendingHandler }
 		pendingHandler = null
 		startStatusPolling(adapter)
+		runCatalogScrape(adapter)
 		log('info', adapter.id, 'adapter activated')
 	} catch (err) {
 		const reason = err instanceof Error ? err.message : String(err)
@@ -292,6 +308,41 @@ function stopStatusPolling(): void {
 		clearInterval(statusInterval)
 		statusInterval = null
 	}
+}
+
+/**
+ * Fire-and-forget a single `scrapeCatalog` call against the active adapter
+ * and forward the result to the background. Bounded by
+ * {@link SCRAPE_CATALOG_TIMEOUT_MS}; never throws. The background needs
+ * exactly one report per adapter activation — either an array or `null` —
+ * to release its pending-JOIN gate, so adapters without a `scrapeCatalog`
+ * method get an immediate `null`.
+ *
+ * @param adapter The adapter that just transitioned to `active`.
+ */
+function runCatalogScrape(adapter: Adapter): void {
+	if (!adapter.scrapeCatalog) {
+		bridge?.sendCatalog(adapter.id, null)
+		return
+	}
+	const scrape = Promise.resolve()
+		.then(() => adapter.scrapeCatalog!())
+		.catch((err) => {
+			log('warn', adapter.id, 'scrapeCatalog threw', {
+				reason: err instanceof Error ? err.message : String(err),
+			})
+			return null
+		})
+	const timeout = new Promise<null>((resolve) =>
+		setTimeout(() => resolve(null), SCRAPE_CATALOG_TIMEOUT_MS),
+	)
+	void Promise.race([scrape, timeout]).then((result) => {
+		// Adapter may have torn down or been replaced while the scrape ran
+		// — discard a stale result rather than reporting it against the
+		// wrong adapter id.
+		if (state.kind !== 'active' || state.adapter !== adapter) return
+		bridge?.sendCatalog(adapter.id, result ?? null)
+	})
 }
 
 /**

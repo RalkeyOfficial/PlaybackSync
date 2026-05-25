@@ -42,6 +42,8 @@ import {
 	connect,
 	disconnect,
 	hasRuntime,
+	reportCatalog,
+	reportIdentity,
 	sendBuffer,
 	sendEvent,
 	type WsCallbacks,
@@ -269,6 +271,17 @@ async function routeMessage(tabId: number | undefined, msg: ContentToBackground)
 		}
 		case 'identity':
 			recordIdentity(tabId, msg.adapterId, msg.identity)
+			// The WS runtime's first-JOIN deferral is gated on identity +
+			// catalog; feed it the wire-shape `VideoRef` built from the
+			// adapter's identity plus the entrypoint-captured `pageUrl`.
+			reportIdentity(tabId, {
+				providerId: msg.identity.providerId,
+				videoId: msg.identity.videoId,
+				pageUrl: msg.pageUrl,
+			})
+			return
+		case 'catalog':
+			reportCatalog(tabId, msg.catalog)
 			return
 		case 'fail':
 			console.warn('[playbacksync:bg] adapter failed', {

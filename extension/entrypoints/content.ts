@@ -58,13 +58,20 @@ export default defineContentScript({
 				send({ kind: 'intent', adapterId, intent })
 			},
 			sendIdentity(adapterId, identity) {
-				send({ kind: 'identity', adapterId, identity })
+				// `pageUrl` is captured here (not by the adapter) so the
+				// adapter contract stays focused on identity comparison.
+				// The background needs the full URL to build the wire-format
+				// `JOIN.currentlyShowing` field; see messages.ts.
+				send({ kind: 'identity', adapterId, identity, pageUrl: location.href })
 			},
 			sendStatus(adapterId, state) {
 				send({ kind: 'status', adapterId, state })
 			},
 			sendFail(adapterId, reason) {
 				send({ kind: 'fail', adapterId, reason })
+			},
+			sendCatalog(adapterId, catalog) {
+				send({ kind: 'catalog', adapterId, catalog })
 			},
 		}
 
