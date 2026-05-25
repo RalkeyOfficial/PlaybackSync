@@ -59,7 +59,7 @@ The background is the *protocol client*; the content runtime is the *adapter man
 
 ### Popup snapshot channel
 
-The popup talks to the background over a `chrome.runtime.Port` named `'pbsync-popup'`. The background broadcasts a typed `PopupSnapshot` on every popup-visible state change (lifecycle transitions, `ROOM_STATE`, `CURSOR_CHANGE`, creds change) — never on per-tick `STATE` frames. The popup never reads raw socket / `clientId` / creds fields; it sees only the derived `status` tag (`no_credentials` / `connecting` / `joined` / `disconnected`) plus the cursor and mode. Details in [`popup.md`](popup.md).
+The popup talks to the background over a `chrome.runtime.Port` named `'pbsync-popup'`. On connect, the popup posts a `subscribe` envelope naming the tab it cares about (the active tab when the popup opened); the background binds the port to that tab and broadcasts a typed `PopupSnapshot` on every popup-visible state change *for that tab* (lifecycle transitions, `ROOM_STATE`, `CURSOR_CHANGE`, creds change) — never on per-tick `STATE` frames. The popup never reads raw socket / `clientId` / creds fields; it sees only the derived `status` tag (`no_credentials` / `connecting` / `joined` / `disconnected`) plus the cursor and mode for the bound tab. Details in [`popup.md`](popup.md).
 
 ## The message envelope
 
@@ -73,7 +73,7 @@ The popup talks to the background over a `chrome.runtime.Port` named `'pbsync-po
 | `status` | `adapterId`, `state: VideoState` (`currentPos`, `playerState`) | Every 1 s while an adapter is active |
 | `identity` | `adapterId`, `identity: ContentIdentity` (`providerId`, `videoId`, `normalizedUrl`) | Once per adapter init |
 | `fail` | `adapterId`, `reason: string` | Adapter can't run on this page |
-| `credentials` | `syncUrl`, `syncPassword` | Share-URL pickup fires once at `document_start`; first-write-wins on the background side |
+| `credentials` | `syncUrl`, `syncPassword` | Share-URL pickup fires once at `document_start`; binds to the capturing tab's `pbsync.tab.<tabId>` slot |
 
 **Background → Content** (`BackgroundToContent`):
 
@@ -87,23 +87,25 @@ The popup talks to the background over a `chrome.runtime.Port` named `'pbsync-po
 
 | State | Where | Why |
 |-------|-------|-----|
-| WebSocket connection, timers, reconnect bookkeeping | Module-level in `src/background/ws.ts` | One connection per browser; module-state matches |
-| Room-shared state (clientId, lastEventId, cursor, playlist, mode, clock offset) | `SessionState` in `src/background/session.ts` | Pure, foldable by frame handlers |
+| WebSocket connections, timers, reconnect bookkeeping | `pool: Map<tabId, WsRuntime>` in `src/background/ws.ts` | One connection per syncing tab; each tab is its own server-side client |
+| Room-shared state (clientId, lastEventId, cursor, playlist, mode, clock offset) | One `SessionState` per pooled runtime; entrypoint owns `Map<tabId, SessionState>` | Pure, foldable by frame handlers; one session per tab |
 | Per-tab status cache + identity | `src/background/tabs.ts` (`Map<tabId, TabEntry>`) | Heartbeat needs fresh state without round-trips |
-| Suppression windows | `SessionState.recentCommandsByTab` | Co-located with the rest of session state; pruned on every record |
+| Suppression windows | `SessionState.recentCommands` (scalar; one session per tab) | Co-located with the rest of session state; pruned on every record |
 | Adapter activation, command handler ref, status interval | Module-level in `src/adapters/runtime.ts` | One adapter per page; module-state matches |
-| Creds (`syncUrl`, `syncPassword`, `clientId`) | `chrome.storage.local.pbsync` | Survive worker termination; see [`storage.md`](storage.md) |
+| Creds (`syncUrl`, `syncPassword`, `clientId`) | `chrome.storage.local['pbsync.tab.<tabId>']`, one slot per syncing tab | Survive worker termination; wiped on `chrome.tabs.onRemoved` and on browser restart; see [`storage.md`](storage.md) |
 
 The content side never persists anything across page loads — it boots fresh in every tab, and the SPA-navigation hook tears the active adapter down + re-evaluates whenever `location.href` changes.
 
 ## Service-worker lifetime (MV3)
 
-On Chromium ≥ 116, an open `WebSocket` resets the service-worker idle timer on every frame, so the worker stays alive for the lifetime of the connection. When the connection closes (intentionally or after exhausted reconnects), the worker idles and eventually unloads. The next inbound message or `chrome.runtime` event wakes it again; `bootstrap()` re-reads `chrome.storage.local` and re-`connect()`s if creds are still present.
+On Chromium ≥ 116, an open `WebSocket` resets the service-worker idle timer on every frame, so the worker stays alive while any pooled runtime has an open socket. When the last one closes (intentionally or after exhausted reconnects), the worker idles and eventually unloads. The next inbound message or `chrome.runtime` event wakes it again; `bootstrap()` enumerates every `pbsync.tab.<tabId>` slot, verifies the tab still exists via `chrome.tabs.get(tabId)`, prunes orphan slots, and re-`connect()`s the survivors.
+
+A separate one-shot guard runs before that: `wipeIfFreshBrowserSession()` checks a sentinel in `chrome.storage.session` (which the browser clears on each restart). When the sentinel is absent, every `pbsync.tab.*` key is removed before bootstrap reads them — so a browser restart never auto-rejoins a room. `chrome.storage.session` is MV3-only; the Firefox MV2 port will substitute a module-scope `let booted = false` flag.
 
 On Firefox MV2 the background page is long-lived by default; no special handling needed.
 
 ## Out-of-scope (deferred to follow-up specs)
 
 - **More site adapters.** [`miruro`](adapter-miruro.md) is the first concrete adapter alongside the `_template` test scaffold (which still activates only on `?pbsync-template`). Adding crunchyroll, youtube, etc. is one new file per site plus a registry entry in [`src/adapters/runtime.ts`](../src/adapters/runtime.ts).
-- **Multi-room / multi-tab arbitration.** Currently the connection is browser-wide and the "active tab" is just "whoever reported status most recently".
+- **Browser-wide shared `clientId`** so admins see one identity per browser across rooms. Parked while shaping the per-tab connection model — see [`EXTENSION_TODO.md`](../../EXTENSION_TODO.md) Deferred. The pivot would mean one WS per `roomId` (not per `tabId`), which revives the within-room arbitration question.
 - **`currentlyShowing` + `catalogFragment`** on JOIN. The protocol module has the schema; real values arrive when the first site adapter implements scraping.

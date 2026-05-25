@@ -2,9 +2,10 @@
  * Per-tab cache for the background WS client. Holds the latest
  * `VideoState` each content script reported, plus the adapter id, so the
  * heartbeat loop can pull a fresh snapshot every 5 s without doing a
- * round-trip to the content side. Also picks which tab is "the active
- * one" when multiple content scripts are reporting — for v1 that's the
- * tab whose status arrived most recently.
+ * round-trip to the content side.
+ *
+ * With one WS runtime per tab the "pick the most recent reporter" logic
+ * is gone — every runtime reads its own tab's entry directly.
  *
  * Tabs are forgotten when Chromium reports `chrome.tabs.onRemoved`, so
  * the cache doesn't grow unboundedly across long-lived sessions.
@@ -63,38 +64,9 @@ export function forgetTab(tabId: number): void {
 }
 
 /**
- * Pick the tab whose status arrived most recently. The heartbeat loop
- * uses this to source `currentPos` / `playerState` for `HEARTBEAT`
- * frames.
- *
- * @returns `[tabId, entry]` for the freshest tab, or `null` if no tab
- *          has reported yet.
- */
-export function pickActiveTab(): [number, TabEntry] | null {
-	let bestId: number | null = null
-	let best: TabEntry | null = null
-	for (const [id, entry] of tabs) {
-		if (entry.latestState === null) continue
-		if (best === null || entry.lastStateAt > best.lastStateAt) {
-			bestId = id
-			best = entry
-		}
-	}
-	return bestId === null || best === null ? null : [bestId, best]
-}
-
-/**
- * Read a tab entry without mutation. Used by the entrypoint when routing
- * commands.
+ * Read a tab entry without mutation. Used by the heartbeat loop in
+ * `ws.ts` and the command-dispatch path in the entrypoint.
  */
 export function getTab(tabId: number): TabEntry | null {
 	return tabs.get(tabId) ?? null
-}
-
-/**
- * Snapshot every tab id we know about. Mostly for command broadcasts
- * (e.g. ROOM_STATE → seek every active tab to the new position).
- */
-export function allTabIds(): number[] {
-	return Array.from(tabs.keys())
 }

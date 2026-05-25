@@ -2,14 +2,16 @@
  * Push-based snapshot channel between the background worker and the
  * toolbar popup. Owns three concerns:
  *
- * 1. A registry of open `chrome.runtime.Port`s from popup instances
- *    (one per popup window — usually 0 or 1).
- * 2. A small mirror of WS-runtime / creds state so a {@link PopupStatus}
- *    can be derived without importing back into `ws.ts` (that would
- *    create a cycle: `ws.ts` calls `notify*` helpers in here).
+ * 1. A registry of open `chrome.runtime.Port`s from popup instances,
+ *    each bound to a single `tabId` via the popup's `subscribe`
+ *    envelope.
+ * 2. A per-tab mirror of WS-runtime / creds state so a
+ *    {@link PopupStatus} can be derived without importing back into
+ *    `ws.ts` (that would create a cycle: `ws.ts` calls `notify*`
+ *    helpers in here).
  * 3. The derivation rule that turns
  *    `(creds, socketState, session.clientId)` into a single
- *    {@link PopupStatus} tag.
+ *    {@link PopupStatus} tag for a tab.
  *
  * Snapshots are pushed eagerly: the popup never polls. The triggers
  * are deliberate — we broadcast on lifecycle transitions
@@ -22,8 +24,8 @@
  * The state mirrored here is intentionally minimal: a `creds` ref
  * carrying only the `syncUrl` (password is never displayed; see
  * {@link ../messages.PopupSnapshot}) and a `socketState` tag. The
- * authoritative session state lives in `session.ts`; we read from it
- * via the {@link initPopupBroadcast}-injected reference.
+ * authoritative per-tab session state lives in the sessions map owned
+ * by the entrypoint and injected via {@link initPopupBroadcast}.
  */
 
 import type {
@@ -35,156 +37,196 @@ import type { SessionState } from './session'
 
 /**
  * Coarse-grained mirror of `WsRuntime` lifecycle. `'none'` means no
- * WS runtime exists (cold boot before `connect()` or after
- * `disconnect()` plus `clearCreds()`). `'disconnected'` means a
+ * WS runtime exists for the tab (cold boot before `connect()` or
+ * after `disconnect()` plus `clearCreds()`). `'disconnected'` means a
  * runtime existed and the socket dropped (reconnect-pending or
  * terminal) — distinct from `'none'` because the popup shows
  * "Connection lost…" rather than the no-creds copy.
  */
 type SocketState = 'none' | 'connecting' | 'open' | 'disconnected'
 
-let session: SessionState | null = null
-let socketState: SocketState = 'none'
-let creds: { syncUrl: string } | null = null
-const ports = new Set<chrome.runtime.Port>()
+interface TabMirror {
+	socketState: SocketState
+	creds: { syncUrl: string } | null
+}
+
+let sessions: Map<number, SessionState> | null = null
+const mirrors = new Map<number, TabMirror>()
+const portTabs = new Map<chrome.runtime.Port, number>()
 
 /**
- * Wire the broadcast module to the session record. Called once from
- * the background entrypoint at boot. Cannot be done at module-init
- * time because `createSession()` is owned by the entrypoint.
+ * Wire the broadcast module to the per-tab session map. Called once
+ * from the background entrypoint at boot. Cannot be done at module-
+ * init time because the entrypoint owns the map.
  *
- * @param s The mutable session state shared with the WS client.
+ * @param s The per-tab session map shared with the WS pool.
  */
-export function initPopupBroadcast(s: SessionState): void {
-	session = s
+export function initPopupBroadcast(s: Map<number, SessionState>): void {
+	sessions = s
+}
+
+function ensureMirror(tabId: number): TabMirror {
+	let m = mirrors.get(tabId)
+	if (!m) {
+		m = { socketState: 'none', creds: null }
+		mirrors.set(tabId, m)
+	}
+	return m
 }
 
 /**
- * Replace the mirrored creds reference. Called by the entrypoint
- * after `loadCreds()` (boot), after `saveCreds()` (share-URL pickup),
- * and after `clearCreds()` (leave-room — pass `null`). Triggers a
- * broadcast so popups already open see the change immediately.
+ * Replace the mirrored creds reference for a tab. Called by the
+ * entrypoint after `saveCreds()` (share-URL pickup or boot reconnect).
+ * Triggers a broadcast to any port bound to this tab.
  *
  * Only `syncUrl` is mirrored; `syncPassword` never crosses this
  * boundary by design.
  *
- * @param next The new credentials reference, or `null` after a clear.
+ * @param tabId The tab whose mirror to update.
+ * @param next The new credentials reference.
  */
-export function setPopupCreds(next: { syncUrl: string } | null): void {
-	creds = next
-	if (next === null) {
-		// Clearing creds also resets the socket-state mirror — a
-		// `'disconnected'` tag without creds would derive to
-		// `'no_credentials'` anyway, but resetting keeps the internal
-		// invariant clean.
-		socketState = 'none'
-	}
-	broadcast()
+export function setPopupCreds(tabId: number, next: { syncUrl: string }): void {
+	const m = ensureMirror(tabId)
+	m.creds = next
+	broadcastForTab(tabId)
 }
 
 /**
- * Note that the WS client is opening a fresh socket. Called from
- * `ws.openSocket`. Carries `url` because the popup's "Connecting to
- * …" copy needs it and it's not always already in the mirror (the
- * connection-pickup flow does `connect()` before `setPopupCreds()`).
+ * Clear the mirror for a tab after creds wipe / leave-room. Broadcasts
+ * a fresh `no_credentials` snapshot to any port still bound to this
+ * tab.
  *
+ * @param tabId The tab whose mirror to clear.
+ */
+export function notifyPopupCredsCleared(tabId: number): void {
+	mirrors.delete(tabId)
+	broadcastForTab(tabId)
+}
+
+/**
+ * Note that the WS client is opening a fresh socket for a tab. Called
+ * from `ws.openSocket`. Carries `url` because the popup's "Connecting
+ * to …" copy needs it and it's not always already in the mirror.
+ *
+ * @param tabId The tab whose runtime is opening.
  * @param url The WebSocket URL being dialled.
  */
-export function notifyConnecting(url: string): void {
-	socketState = 'connecting'
-	creds = { syncUrl: url }
-	broadcast()
-}
-
-/** Note that the socket reached `'open'`. Called from `ws.onOpen`. */
-export function notifyOpen(): void {
-	socketState = 'open'
-	broadcast()
+export function notifyConnecting(tabId: number, url: string): void {
+	const m = ensureMirror(tabId)
+	m.socketState = 'connecting'
+	m.creds = { syncUrl: url }
+	broadcastForTab(tabId)
 }
 
 /**
- * Note that the socket closed. Called from `ws.onClose` (reconnect
+ * Note that this tab's socket reached `'open'`. Called from
+ * `ws.onOpen`.
+ *
+ * @param tabId The tab whose socket opened.
+ */
+export function notifyOpen(tabId: number): void {
+	const m = ensureMirror(tabId)
+	m.socketState = 'open'
+	broadcastForTab(tabId)
+}
+
+/**
+ * Note that a tab's socket closed. Called from `ws.onClose` (reconnect
  * pending), `ws.scheduleReconnect`'s give-up branch, and
  * `ws.disconnect`. We don't distinguish those at the popup layer —
  * they all surface as `'disconnected'` until creds are explicitly
  * cleared.
- */
-export function notifyDisconnected(): void {
-	socketState = 'disconnected'
-	broadcast()
-}
-
-/**
- * Note that a `ROOM_STATE` frame was applied to the session. Called
- * from `ws.handleFrame` immediately after `applyRoomState`. This is
- * the transition that flips `clientId` from `null` to a value, which
- * in turn flips the derived status from `connecting` to `joined`.
- */
-export function notifyRoomStateChanged(): void {
-	broadcast()
-}
-
-/**
- * Note that a `CURSOR_CHANGE` frame was applied. Called from
- * `ws.handleFrame` immediately after `applyCursorChange`. The cursor
- * is the only popup-visible field that changes outside of lifecycle
- * transitions; without this hook the popup would show a stale cursor
- * line until the next reconnect.
- */
-export function notifyCursorChanged(): void {
-	broadcast()
-}
-
-/**
- * Register a popup `Port`. Pushes one snapshot immediately so the
- * popup never renders an empty / loading state, then removes the
- * port on disconnect. Called from the `chrome.runtime.onConnect`
- * listener in the background entrypoint.
  *
- * @param port The port the popup just opened with name
- *             `'pbsync-popup'`.
+ * @param tabId The tab whose socket closed.
+ */
+export function notifyDisconnected(tabId: number): void {
+	const m = mirrors.get(tabId)
+	if (!m) return
+	m.socketState = 'disconnected'
+	broadcastForTab(tabId)
+}
+
+/**
+ * Note that a `ROOM_STATE` frame was applied to a tab's session.
+ * Called from `ws.handleFrame` immediately after `applyRoomState`.
+ * This is the transition that flips `clientId` from `null` to a
+ * value, which in turn flips the derived status from `connecting` to
+ * `joined`.
+ *
+ * @param tabId The tab whose session was just folded.
+ */
+export function notifyRoomStateChanged(tabId: number): void {
+	broadcastForTab(tabId)
+}
+
+/**
+ * Note that a `CURSOR_CHANGE` frame was applied to a tab's session.
+ * Called from `ws.handleFrame` immediately after `applyCursorChange`.
+ *
+ * @param tabId The tab whose session was just folded.
+ */
+export function notifyCursorChanged(tabId: number): void {
+	broadcastForTab(tabId)
+}
+
+/**
+ * Register a popup `Port`. Reaps the port on disconnect. The first
+ * snapshot is sent once the popup posts a `subscribe` envelope naming
+ * the tab it wants to observe — until then the port is silent.
+ *
+ * @param port The port the popup just opened with name `'pbsync-popup'`.
  */
 export function registerPopupPort(port: chrome.runtime.Port): void {
-	ports.add(port)
-	sendTo(port)
+	port.onMessage.addListener((msg: unknown) => {
+		if (!msg || typeof msg !== 'object') return
+		const env = msg as { kind?: string; tabId?: number }
+		if (env.kind !== 'subscribe') return
+		if (typeof env.tabId !== 'number') return
+		portTabs.set(port, env.tabId)
+		sendTo(port, env.tabId)
+	})
 	port.onDisconnect.addListener(() => {
-		ports.delete(port)
+		portTabs.delete(port)
 	})
 }
 
 /**
- * How many popup ports are currently registered. Used by the
- * manual-verification step ("port set should not grow unboundedly")
- * and for diagnostic logging.
+ * How many popup ports are currently registered. Used by diagnostic
+ * logging and any future health check.
  *
  * @returns The current open-port count.
  */
 export function getRegisteredPopupPortCount(): number {
-	return ports.size
+	return portTabs.size
 }
 
 /**
- * Compute the {@link PopupStatus} the popup should display now. Pure
- * function of the module-local mirrors (`creds`, `socketState`) and
- * the injected `session.clientId`. Exported for tests / future
- * debugging affordances; the broadcast pipeline calls it inline.
+ * Compute the {@link PopupStatus} a popup bound to `tabId` should
+ * display now. Pure function of the per-tab mirror (`creds`,
+ * `socketState`) and the injected session's `clientId`. Exported for
+ * the entrypoint's icon-repaint hook; the broadcast pipeline calls it
+ * inline.
  *
+ * @param tabId The tab whose status to derive.
  * @returns The derived status tag.
  */
-export function getDerivedStatus(): PopupStatus {
-	if (creds === null) return 'no_credentials'
-	if (socketState === 'connecting') return 'connecting'
-	if (socketState === 'open') {
+export function getDerivedStatus(tabId: number): PopupStatus {
+	const m = mirrors.get(tabId)
+	if (!m || m.creds === null) return 'no_credentials'
+	if (m.socketState === 'connecting') return 'connecting'
+	if (m.socketState === 'open') {
+		const session = sessions?.get(tabId)
 		return session?.clientId ? 'joined' : 'connecting'
 	}
 	// socketState === 'none' || 'disconnected' with creds present.
 	return 'disconnected'
 }
 
-function buildSnapshot(): PopupSnapshot {
-	const status = getDerivedStatus()
+function buildSnapshot(tabId: number): PopupSnapshot {
+	const status = getDerivedStatus(tabId)
 	if (status === 'no_credentials') {
 		return {
+			tabId: null,
 			status,
 			clientId: null,
 			cursor: null,
@@ -192,19 +234,22 @@ function buildSnapshot(): PopupSnapshot {
 			syncUrl: null,
 		}
 	}
+	const m = mirrors.get(tabId)
+	const session = sessions?.get(tabId)
 	return {
+		tabId,
 		status,
 		clientId: session?.clientId ?? null,
 		cursor: session?.cursor ?? null,
 		// `mode` is only meaningful once `ROOM_STATE` lands; before then
 		// the session default ('default') would be misleading.
 		mode: status === 'joined' ? (session?.mode ?? 'default') : null,
-		syncUrl: creds?.syncUrl ?? null,
+		syncUrl: m?.creds?.syncUrl ?? null,
 	}
 }
 
-function sendTo(port: chrome.runtime.Port): void {
-	const env: BackgroundToPopup = { kind: 'snapshot', snapshot: buildSnapshot() }
+function sendTo(port: chrome.runtime.Port, tabId: number): void {
+	const env: BackgroundToPopup = { kind: 'snapshot', snapshot: buildSnapshot(tabId) }
 	try {
 		port.postMessage(env)
 	} catch {
@@ -213,12 +258,13 @@ function sendTo(port: chrome.runtime.Port): void {
 	}
 }
 
-function broadcast(): void {
-	if (ports.size === 0) return
-	const env: BackgroundToPopup = { kind: 'snapshot', snapshot: buildSnapshot() }
-	for (const p of ports) {
+function broadcastForTab(tabId: number): void {
+	if (portTabs.size === 0) return
+	const env: BackgroundToPopup = { kind: 'snapshot', snapshot: buildSnapshot(tabId) }
+	for (const [port, boundTabId] of portTabs) {
+		if (boundTabId !== tabId) continue
 		try {
-			p.postMessage(env)
+			port.postMessage(env)
 		} catch {
 			// Port closed mid-send; `onDisconnect` will reap it.
 		}

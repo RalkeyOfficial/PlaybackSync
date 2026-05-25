@@ -10,9 +10,11 @@ via a long-lived `chrome.runtime.Port` named `'pbsync-popup'`.
 The popup has four mutually exclusive views, driven by a single
 `PopupStatus` tag:
 
+The popup is scoped to a single tab: on connect it derives the active tab via `chrome.tabs.query({active: true, currentWindow: true})` and subscribes the background port to that tab's state. Everything below is per-tab — opening the popup over a different tab shows that tab's room.
+
 | Status | When | View |
 |--------|------|------|
-| `no_credentials` | No creds in `chrome.storage.local.pbsync` | Header + grey "No room" pill + guidance copy ("Open a share link…") |
+| `no_credentials` | No creds in this tab's `pbsync.tab.<tabId>` slot | Header + grey "No room" pill + guidance copy ("Open a share link…") |
 | `connecting` | Creds present, socket opening or `ROOM_STATE` not yet received | Amber "Connecting" pill + "Connecting to `<host>`…" copy |
 | `joined` | `ROOM_STATE` applied; `clientId` is set | Green "Joined" pill + cursor block (provider · label, page URL link) + mode chip + Leave Room button |
 | `disconnected` | Creds present, socket dropped (reconnect-pending or terminal) | Red "Offline" pill + "Connection lost. Trying to reconnect…" copy + Leave Room button |
@@ -52,7 +54,8 @@ Two typed envelopes live in [`src/messages.ts`](../src/messages.ts):
 
 | kind | payload | when |
 |------|---------|------|
-| `leave_room` | — | User clicked Leave Room |
+| `subscribe` | `tabId: number` | First envelope after `connect()` — binds the port to a tab |
+| `leave_room` | `tabId: number` | User clicked Leave Room |
 
 **Background → Popup** (`BackgroundToPopup`):
 
@@ -64,6 +67,7 @@ The snapshot shape:
 
 ```ts
 interface PopupSnapshot {
+  tabId: number | null             // null only for the no-creds placeholder
   status: PopupStatus              // derived in the background
   clientId: string | null
   cursor: CursorRef | null         // from session.cursor
@@ -86,8 +90,10 @@ faster than any reasonable poll interval); snapshot-on-open is stale
 (the cursor can move while the popup is open).
 
 A `chrome.runtime.Port` solves both: long-lived, bidirectional,
-auto-cleans on popup close. The background keeps a `Set<Port>` and
-pushes to every entry on every state change.
+auto-cleans on popup close. The background keeps a `Map<Port, tabId>`
+binding every open port to a single tab, and pushes only to ports
+whose bound tab is the one mutating — so opening the popup over tab A
+and tab B simultaneously never crosses streams.
 
 ## What triggers a broadcast
 
@@ -95,14 +101,17 @@ The background calls `notify*` helpers from
 [`src/background/popupBroadcast.ts`](../src/background/popupBroadcast.ts)
 at these exact points:
 
+All hooks take a `tabId` first parameter so they update — and broadcast for — only that tab's mirror.
+
 | Event | Trigger | Hook |
 |-------|---------|------|
-| About to open WebSocket | `ws.openSocket` | `notifyConnecting(url)` |
-| Socket reached `'open'` | `ws.onOpen` | `notifyOpen()` |
-| Socket closed (any reason) | `ws.onClose`, `ws.disconnect` | `notifyDisconnected()` |
-| `ROOM_STATE` applied | `ws.handleFrame` ROOM_STATE arm | `notifyRoomStateChanged()` |
-| `CURSOR_CHANGE` applied | `ws.handleFrame` CURSOR_CHANGE arm | `notifyCursorChanged()` |
-| Creds loaded / accepted / cleared | `bootstrap`, `handleCredentials`, `handlePopupMessage` | `setPopupCreds(…)` |
+| About to open WebSocket | `ws.openSocket` | `notifyConnecting(tabId, url)` |
+| Socket reached `'open'` | `ws.onOpen` | `notifyOpen(tabId)` |
+| Socket closed (any reason) | `ws.onClose`, `ws.disconnect` | `notifyDisconnected(tabId)` |
+| `ROOM_STATE` applied | `ws.handleFrame` ROOM_STATE arm | `notifyRoomStateChanged(tabId)` |
+| `CURSOR_CHANGE` applied | `ws.handleFrame` CURSOR_CHANGE arm | `notifyCursorChanged(tabId)` |
+| Creds accepted / replaced | `ensureConnectedWithCreds` | `setPopupCreds(tabId, {syncUrl})` |
+| Creds wiped (leave / fail / terminal) | `tearDownTab` | `notifyPopupCredsCleared(tabId)` |
 
 Frames that **don't** trigger a broadcast:
 
@@ -116,22 +125,20 @@ Frames that **don't** trigger a broadcast:
 ## Leave Room semantics
 
 The wire protocol has no LEAVE frame. "Leave" is a purely client-side
-operation:
+operation, scoped to the popup's bound tab:
 
-1. Popup posts `{ kind: 'leave_room' }` on the port.
-2. Background calls `disconnect()` — closes the socket with code
-   1000, sets `terminated = true`, stops timers.
-3. Background calls `clearCreds()` — wipes
-   `chrome.storage.local.pbsync`.
-4. Background resets session identity (`clientId`, `lastEventId`,
-   `cursor`, `playlist`) so a subsequent share-URL pickup against a
-   different room can't accidentally JOIN with a stale clientId.
-5. Background calls `setPopupCreds(null)` — clears the broadcast
-   mirror and pushes a fresh `no_credentials` snapshot to every open
-   port.
+1. Popup posts `{ kind: 'leave_room', tabId }` on the port.
+2. Background calls `disconnect(tabId)` — closes that tab's socket with
+   code 1000, sets `terminated = true`, stops its timers, removes the
+   pool entry.
+3. Background calls `tearDownTab(tabId)` — wipes that tab's
+   `pbsync.tab.<tabId>` slot, drops its session from the sessions map,
+   calls `notifyPopupCredsCleared(tabId)` to push a fresh
+   `no_credentials` snapshot to any port still bound to that tab, and
+   greys the toolbar icon for that tab.
 
 The popup re-renders to the no-creds view; it does not close itself.
-The user can stay on that view and read the guidance text.
+Other tabs' runtimes are untouched.
 
 ## Optimistic UI
 

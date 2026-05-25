@@ -1,13 +1,15 @@
 /**
  * Toolbar popup entrypoint. Opens a long-lived
- * `chrome.runtime.Port` named `'pbsync-popup'` to the background, then
- * re-renders the UI on every `snapshot` push. The background guarantees
- * the first snapshot arrives synchronously after the port is registered;
- * we don't render anything until then beyond the static header.
+ * `chrome.runtime.Port` named `'pbsync-popup'` to the background, posts
+ * a `subscribe` envelope naming the tab the popup is interested in
+ * (the active tab in the current window when the popup opened), then
+ * re-renders the UI on every `snapshot` push the background sends back
+ * for that tab.
  *
- * Communication is one-shot in the other direction too: the only
- * outbound message is `{ kind: 'leave_room' }`, fired from the Leave
- * Room button. The button optimistically transitions to a disabled
+ * Communication is one-shot in the other direction too: outbound
+ * messages are the initial `subscribe` and `{ kind: 'leave_room' }`
+ * from the Leave Room button (both tagged with the popup's bound
+ * tabId). The leave button optimistically transitions to a disabled
  * "leaving…" state; the broadcast snapshot that arrives ms later
  * replaces the view with the real `no_credentials` state.
  *
@@ -30,12 +32,20 @@ const pillEl = document.getElementById('status-pill') as HTMLSpanElement
 const pillLabelEl = document.getElementById('status-label') as HTMLSpanElement
 
 let port: chrome.runtime.Port | null = null
+let boundTabId: number | null = null
 let lastSnapshot: PopupSnapshot | null = null
 let leaving = false
 
-connect()
+void connect()
 
-function connect(): void {
+async function connect(): Promise<void> {
+	const tabs = await chrome.tabs.query({ active: true, currentWindow: true })
+	const tabId = tabs[0]?.id
+	if (tabId === undefined) {
+		renderPortLost()
+		return
+	}
+	boundTabId = tabId
 	port = chrome.runtime.connect({ name: POPUP_PORT_NAME })
 	port.onMessage.addListener((msg: BackgroundToPopup) => {
 		if (msg.kind !== 'snapshot') return
@@ -50,6 +60,8 @@ function connect(): void {
 		port = null
 		renderPortLost()
 	})
+	const subscribe: PopupToBackground = { kind: 'subscribe', tabId }
+	port.postMessage(subscribe)
 }
 
 function render(s: PopupSnapshot): void {
@@ -175,9 +187,9 @@ function buildLeaveButton(): HTMLButtonElement {
 }
 
 function onLeaveClicked(): void {
-	if (!port || leaving) return
+	if (!port || leaving || boundTabId === null) return
 	leaving = true
-	const env: PopupToBackground = { kind: 'leave_room' }
+	const env: PopupToBackground = { kind: 'leave_room', tabId: boundTabId }
 	port.postMessage(env)
 	if (lastSnapshot) render(lastSnapshot)
 }

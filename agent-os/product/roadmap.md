@@ -16,12 +16,14 @@ The Nextcloud app side is feature-complete for a small-friend-group launch.
 
 Scaffold lives in [`extension/`](../../extension/) (WXT, Chromium + Firefox).
 
-Goal: a browser extension that runs on supported streaming sites, owns a single
-authoritative WebSocket connection to the daemon from its background worker,
-observes and controls the page's `<video>` element from a content script, and
-applies server commands deterministically without feedback loops. The
-extension is the second first-class client (alongside the dashboard) and
-closes the loop on the "watch together on Crunchyroll/etc." workflow.
+Goal: a browser extension that runs on supported streaming sites, opens one
+authoritative WebSocket per syncing tab from its background worker (each tab
+is a distinct client; multi-room and multi-tab joins are supported in the
+same browser), observes and controls the page's `<video>` element from a
+content script, and applies server commands deterministically without
+feedback loops. The extension is the second first-class client (alongside
+the dashboard) and closes the loop on the "watch together on
+Crunchyroll/etc." workflow.
 
 Concrete work items:
 

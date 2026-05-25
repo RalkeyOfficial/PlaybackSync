@@ -4,6 +4,10 @@
  * module that constructs a `WebSocket`. Everything else (session
  * state, encoding, per-tab cache) is delegated.
  *
+ * One runtime per syncing tab. Runtimes are pooled in {@link pool}
+ * keyed by `chrome.tabs.id`, so multi-room and multi-tab joins coexist
+ * in the same browser without sharing identity.
+ *
  * The shape is a small state machine with three observable phases —
  * `connecting`, `open`, `closed` — driven by `WebSocket` events. On a
  * terminal close (auth fail, room gone, kicked) we stop reconnecting
@@ -36,7 +40,7 @@ import {
 	startClockPing,
 } from './session'
 import { saveClientId, type PbSyncCreds } from './storage'
-import { pickActiveTab } from './tabs'
+import { getTab } from './tabs'
 import {
 	notifyConnecting,
 	notifyCursorChanged,
@@ -66,22 +70,28 @@ const RECONNECT_BACKOFF_MS = [1_000, 2_000, 4_000, 8_000, 16_000, 30_000]
  * Callbacks the entrypoint provides so the WS module can fan out
  * server-driven commands and surface errors without itself knowing
  * about `chrome.*` APIs.
+ *
+ * Each callback set is bound to a single tab via the runtime that owns
+ * it — `dispatchCommand` and `onLifecycleChange` therefore omit the
+ * tabId from their signatures; the entrypoint closes over it when it
+ * constructs the callbacks.
  */
 export interface WsCallbacks {
-	/** Deliver an authoritative command to one tab. */
-	dispatchCommand(tabId: number, cmd: AuthoritativeCommand): void
+	/** Deliver an authoritative command to this runtime's tab. */
+	dispatchCommand(cmd: AuthoritativeCommand): void
 	/** Surface a fatal protocol/connection error for logging. */
 	onTerminal(reason: string, code: string | null): void
 	/**
 	 * Fired whenever the derived popup status may have changed —
 	 * socket open/close and ROOM_STATE applied. Lets the entrypoint
-	 * re-paint per-tab toolbar icons without `ws.ts` knowing about
+	 * re-paint this tab's toolbar icon without `ws.ts` knowing about
 	 * `chrome.action`.
 	 */
 	onLifecycleChange?(): void
 }
 
 interface WsRuntime {
+	tabId: number
 	socket: WebSocket | null
 	heartbeatTimer: ReturnType<typeof setInterval> | null
 	clockTimer: ReturnType<typeof setInterval> | null
@@ -93,22 +103,32 @@ interface WsRuntime {
 	cb: WsCallbacks
 }
 
-let runtime: WsRuntime | null = null
+const pool = new Map<number, WsRuntime>()
 
 /**
- * Open a WebSocket to the daemon and start the connection lifecycle.
- * Idempotent: calling while connected is a no-op.
+ * Whether a runtime is already pooled for `tabId`. Used by the
+ * entrypoint's lazy-connect helper.
+ */
+export function hasRuntime(tabId: number): boolean {
+	return pool.has(tabId)
+}
+
+/**
+ * Open a WebSocket for a specific tab and start its lifecycle.
+ * Idempotent: calling while the tab is already connected is a no-op.
  *
+ * @param tabId Browser tab id this runtime belongs to.
  * @param creds Credentials loaded from {@link loadCreds}.
- * @param session The mutable session state.
+ * @param session The mutable session state for that tab.
  * @param cb Outbound hooks the entrypoint wires up.
  */
-export function connect(creds: PbSyncCreds, session: SessionState, cb: WsCallbacks): void {
-	if (runtime) {
-		log('warn', 'connect called while already connected; ignoring')
+export function connect(tabId: number, creds: PbSyncCreds, session: SessionState, cb: WsCallbacks): void {
+	if (pool.has(tabId)) {
+		log('warn', 'connect called while already connected; ignoring', { tabId })
 		return
 	}
-	runtime = {
+	const r: WsRuntime = {
+		tabId,
 		socket: null,
 		heartbeatTimer: null,
 		clockTimer: null,
@@ -119,64 +139,78 @@ export function connect(creds: PbSyncCreds, session: SessionState, cb: WsCallbac
 		session,
 		cb,
 	}
-	openSocket(runtime)
+	pool.set(tabId, r)
+	openSocket(r)
 }
 
 /**
- * Stop everything: close the socket, kill all timers, prevent
- * reconnection. The entrypoint calls this on creds clear / leave-room.
+ * Stop everything for one tab: close the socket, kill its timers,
+ * prevent reconnection, drop it from the pool. Called by the entrypoint
+ * on `chrome.tabs.onRemoved`, on `fail`, and on leave-room from popup.
+ *
+ * @param tabId Browser tab id whose runtime to tear down.
  */
-export function disconnect(): void {
-	if (!runtime) return
-	const cb = runtime.cb
-	runtime.terminated = true
-	stopTimers(runtime)
-	runtime.socket?.close(1000, 'client disconnect')
-	runtime = null
-	notifyDisconnected()
-	cb.onLifecycleChange?.()
+export function disconnect(tabId: number): void {
+	const r = pool.get(tabId)
+	if (!r) return
+	r.terminated = true
+	stopTimers(r)
+	r.socket?.close(1000, 'client disconnect')
+	pool.delete(tabId)
+	notifyDisconnected(tabId)
+	r.cb.onLifecycleChange?.()
 }
 
 /**
- * Forward a local intent as a wire `EVENT` frame. Called after the
- * entrypoint has run suppression filtering.
+ * Forward a local intent as a wire `EVENT` frame on the given tab's
+ * runtime. Called after the entrypoint has run suppression filtering.
+ *
+ * @param tabId Browser tab id whose runtime should emit the event.
+ * @param intent The play/pause/seek intent to encode.
  */
-export function sendEvent(intent: { type: 'play' | 'pause' | 'seek'; time: number }): void {
-	if (!runtime?.socket || runtime.socket.readyState !== WebSocket.OPEN) return
+export function sendEvent(tabId: number, intent: { type: 'play' | 'pause' | 'seek'; time: number }): void {
+	const r = pool.get(tabId)
+	if (!r?.socket || r.socket.readyState !== WebSocket.OPEN) return
 	const frame: OutboundFrame = intent.type === 'seek'
 		? { type: 'EVENT', event: 'seek', value: intent.time, clientTs: nowMs() }
 		: { type: 'EVENT', event: intent.type, clientTs: nowMs() }
-	send(runtime, frame)
+	send(r, frame)
 }
 
 /**
- * Notify the daemon of a buffer transition. Called by the entrypoint
- * when an incoming `status` flips `playerState` to/from `'buffering'`.
+ * Notify the daemon of a buffer transition on a given tab's runtime.
+ * Called by the entrypoint when an incoming `status` flips
+ * `playerState` to/from `'buffering'`.
+ *
+ * @param tabId Browser tab id whose runtime should emit the frame.
+ * @param kind `BUFFER_START` or `BUFFER_END`.
+ * @param videoPos Current playhead at the transition.
  */
-export function sendBuffer(kind: 'BUFFER_START' | 'BUFFER_END', videoPos: number): void {
-	if (!runtime?.socket || runtime.socket.readyState !== WebSocket.OPEN) return
-	send(runtime, { type: kind, videoPos })
+export function sendBuffer(tabId: number, kind: 'BUFFER_START' | 'BUFFER_END', videoPos: number): void {
+	const r = pool.get(tabId)
+	if (!r?.socket || r.socket.readyState !== WebSocket.OPEN) return
+	send(r, { type: kind, videoPos })
 }
 
 // ─── Socket lifecycle ────────────────────────────────────────────────
 
 function openSocket(r: WsRuntime): void {
-	log('info', 'connecting', { url: redactUrl(r.creds.syncUrl) })
-	// Each connection re-gates: a cached tab from a prior connection has to
-	// be re-converged by the fresh ROOM_STATE before its intents flow again.
+	log('info', 'connecting', { tabId: r.tabId, url: redactUrl(r.creds.syncUrl) })
+	// Each connection re-gates: the tab has to be re-converged by the
+	// fresh ROOM_STATE before its intents flow again.
 	resetConvergence(r.session)
-	notifyConnecting(r.creds.syncUrl)
+	notifyConnecting(r.tabId, r.creds.syncUrl)
 	const socket = new WebSocket(r.creds.syncUrl)
 	r.socket = socket
 
 	socket.addEventListener('open', () => onOpen(r))
 	socket.addEventListener('message', (ev) => onMessage(r, ev))
 	socket.addEventListener('close', (ev) => onClose(r, ev))
-	socket.addEventListener('error', () => log('warn', 'socket error (close will follow)'))
+	socket.addEventListener('error', () => log('warn', 'socket error (close will follow)', { tabId: r.tabId }))
 }
 
 function onOpen(r: WsRuntime): void {
-	log('info', 'open; sending JOIN')
+	log('info', 'open; sending JOIN', { tabId: r.tabId })
 	r.reconnectAttempt = 0
 	send(r, {
 		type: 'JOIN',
@@ -186,18 +220,18 @@ function onOpen(r: WsRuntime): void {
 	})
 	startTimers(r)
 	scheduleInitialClockPings(r)
-	notifyOpen()
+	notifyOpen(r.tabId)
 	r.cb.onLifecycleChange?.()
 }
 
 function onMessage(r: WsRuntime, ev: MessageEvent): void {
 	if (typeof ev.data !== 'string') {
-		log('warn', 'non-string frame; dropping')
+		log('warn', 'non-string frame; dropping', { tabId: r.tabId })
 		return
 	}
 	const decoded = decode(ev.data)
 	if (!decoded.ok) {
-		log('warn', 'decode failed', { error: decoded.error, detail: decoded.detail })
+		log('warn', 'decode failed', { tabId: r.tabId, error: decoded.error, detail: decoded.detail })
 		return
 	}
 	handleFrame(r, decoded.frame)
@@ -206,8 +240,8 @@ function onMessage(r: WsRuntime, ev: MessageEvent): void {
 function onClose(r: WsRuntime, ev: CloseEvent): void {
 	stopTimers(r)
 	r.socket = null
-	log('info', 'close', { code: ev.code, reason: ev.reason })
-	notifyDisconnected()
+	log('info', 'close', { tabId: r.tabId, code: ev.code, reason: ev.reason })
+	notifyDisconnected(r.tabId)
 	r.cb.onLifecycleChange?.()
 	if (r.terminated) return
 
@@ -216,7 +250,7 @@ function onClose(r: WsRuntime, ev: CloseEvent): void {
 	if (TERMINAL_ERROR_CODES.has(reason)) {
 		r.cb.onTerminal(reason, reason)
 		r.terminated = true
-		runtime = null
+		pool.delete(r.tabId)
 		return
 	}
 	scheduleReconnect(r)
@@ -227,13 +261,13 @@ function scheduleReconnect(r: WsRuntime): void {
 	const delay = RECONNECT_BACKOFF_MS[idx]
 	r.reconnectAttempt += 1
 	if (r.reconnectAttempt > RECONNECT_BACKOFF_MS.length + 1) {
-		log('error', 'giving up after repeated reconnect failures')
+		log('error', 'giving up after repeated reconnect failures', { tabId: r.tabId })
 		r.terminated = true
-		runtime = null
+		pool.delete(r.tabId)
 		r.cb.onTerminal('reconnect exhausted', null)
 		return
 	}
-	log('info', 'reconnecting', { inMs: delay, attempt: r.reconnectAttempt })
+	log('info', 'reconnecting', { tabId: r.tabId, inMs: delay, attempt: r.reconnectAttempt })
 	setTimeout(() => {
 		if (r.terminated) return
 		openSocket(r)
@@ -246,25 +280,25 @@ function handleFrame(r: WsRuntime, frame: InboundFrame): void {
 	switch (frame.type) {
 		case 'ROOM_STATE': {
 			if (r.session.clientId !== frame.clientId) {
-				void saveClientId(frame.clientId)
+				void saveClientId(r.tabId, frame.clientId)
 			}
-			dispatchAll(r, applyRoomState(r.session, frame))
-			notifyRoomStateChanged()
+			dispatchToOwner(r, applyRoomState(r.session, frame))
+			notifyRoomStateChanged(r.tabId)
 			r.cb.onLifecycleChange?.()
 			return
 		}
 		case 'STATE':
-			dispatchAll(r, applyState(r.session, frame))
+			dispatchToOwner(r, applyState(r.session, frame))
 			return
 		case 'CURSOR_CHANGE':
-			dispatchAll(r, applyCursorChange(r.session, frame))
-			notifyCursorChanged()
+			dispatchToOwner(r, applyCursorChange(r.session, frame))
+			notifyCursorChanged(r.tabId)
 			return
 		case 'PLAYLIST_UPDATE':
 			applyPlaylistUpdate(r.session, frame)
 			return
 		case 'SYNC_ADJUST':
-			dispatchAll(r, applySyncAdjust(r.session, frame))
+			dispatchToOwner(r, applySyncAdjust(r.session, frame))
 			return
 		case 'CLOCK_PONG': {
 			const t1 = frame.clientSendTime
@@ -274,7 +308,7 @@ function handleFrame(r: WsRuntime, frame: InboundFrame): void {
 			return
 		}
 		case 'ERROR':
-			log('warn', 'server ERROR frame', { code: frame.code, message: frame.message })
+			log('warn', 'server ERROR frame', { tabId: r.tabId, code: frame.code, message: frame.message })
 			if (TERMINAL_ERROR_CODES.has(frame.code)) {
 				// Mark terminated synchronously: the daemon sends ERROR
 				// immediately before closing the socket, and without this the
@@ -283,27 +317,16 @@ function handleFrame(r: WsRuntime, frame: InboundFrame): void {
 				// initiated close.
 				r.terminated = true
 				r.cb.onTerminal(frame.message, frame.code)
-				runtime = null
+				pool.delete(r.tabId)
 			}
 			return
 	}
 }
 
-function dispatchAll(r: WsRuntime, cmds: AuthoritativeCommand[]): void {
+function dispatchToOwner(r: WsRuntime, cmds: AuthoritativeCommand[]): void {
 	if (cmds.length === 0) return
-	const active = pickActiveTab()
-	if (!active) {
-		// No tab has reported status yet — stash the convergence target so the
-		// entrypoint can flush it the moment the first `status` arrives. Newer
-		// frames overwrite older ones; we always want to converge to the
-		// freshest authoritative state.
-		log('info', 'no active tab; deferring convergence', { count: cmds.length })
-		r.session.pendingConvergence = cmds
-		return
-	}
-	const [tabId] = active
-	for (const cmd of cmds) r.cb.dispatchCommand(tabId, cmd)
-	markConverged(r.session, tabId)
+	for (const cmd of cmds) r.cb.dispatchCommand(cmd)
+	markConverged(r.session)
 }
 
 // ─── Timers ────────────────────────────────────────────────────────
@@ -326,10 +349,8 @@ function stopTimers(r: WsRuntime): void {
 }
 
 function fireHeartbeat(r: WsRuntime): void {
-	const active = pickActiveTab()
-	if (!active) return
-	const [, entry] = active
-	const state = entry.latestState
+	const entry = getTab(r.tabId)
+	const state = entry?.latestState
 	if (!state) return
 	send(r, { type: 'HEARTBEAT', currentPos: state.currentPos, playerState: state.playerState })
 }
@@ -343,7 +364,7 @@ function fireClockPing(r: WsRuntime): void {
 function scheduleInitialClockPings(r: WsRuntime): void {
 	for (let i = 0; i < CLOCK_PING_BURST_COUNT; i += 1) {
 		setTimeout(() => {
-			if (!runtime || runtime !== r) return
+			if (pool.get(r.tabId) !== r) return
 			if (r.socket?.readyState !== WebSocket.OPEN) return
 			fireClockPing(r)
 		}, i * CLOCK_PING_BURST_SPACING_MS)

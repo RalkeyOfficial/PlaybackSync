@@ -1,8 +1,8 @@
 /**
- * Background service worker entrypoint. Boots the WS client when
- * credentials are present in `chrome.storage.local`, routes messages
- * from content scripts (intent / status / identity / fail), and
- * dispatches authoritative commands back to the right tab.
+ * Background service worker entrypoint. Pools one WS client per syncing
+ * tab; routes messages from content scripts (intent / status / identity
+ * / fail) into the matching per-tab runtime; dispatches authoritative
+ * commands back to that tab.
  *
  * Everything WS-related lives in `src/background/`; this file is the
  * thin glue that owns `chrome.*` APIs and forwards.
@@ -15,91 +15,96 @@ import type {
 	PopupToBackground,
 } from '@/src/messages'
 import {
+	type SessionState,
 	createSession,
 	hasConverged,
 	inSettleWindow,
-	markConverged,
 	recordCommand,
-	resetConvergence,
 	shouldSuppress,
 } from '@/src/background/session'
-import { clearCreds, loadCreds, saveCreds } from '@/src/background/storage'
-import { forgetTab, getTab, pickActiveTab, recordIdentity, recordStatus } from '@/src/background/tabs'
-import { forgetIconForTab, initGreyscaleDefaults, setActiveTab } from '@/src/background/icon'
+import {
+	clearCreds,
+	loadAllCreds,
+	loadCreds,
+	saveCreds,
+	wipeIfFreshBrowserSession,
+} from '@/src/background/storage'
+import { forgetTab, getTab, recordIdentity, recordStatus } from '@/src/background/tabs'
+import { forgetIconForTab, initGreyscaleDefaults, setColored } from '@/src/background/icon'
 import {
 	getDerivedStatus,
 	initPopupBroadcast,
+	notifyPopupCredsCleared,
 	registerPopupPort,
 	setPopupCreds,
 } from '@/src/background/popupBroadcast'
-import { connect, disconnect, sendBuffer, sendEvent, type WsCallbacks } from '@/src/background/ws'
+import {
+	connect,
+	disconnect,
+	hasRuntime,
+	sendBuffer,
+	sendEvent,
+	type WsCallbacks,
+} from '@/src/background/ws'
 
-const session = createSession()
-/** Tracks the latest `playerState` per tab so we can detect buffer transitions. */
-const lastPlayerStateByTab = new Map<number, 'playing' | 'paused' | 'buffering'>()
-
-/**
- * Callbacks the WS client hands back to this entrypoint. Shared between
- * `bootstrap()` (boot-time connect when storage already had creds) and
- * the `credentials` message handler (runtime connect on share-URL
- * pickup) so the two paths can't drift.
- */
-const wsCallbacks: WsCallbacks = {
-	dispatchCommand: (tabId, cmd) => dispatchCommand(tabId, cmd),
-	onTerminal: (reason, code) => {
-		// Terminal codes (ROOM_NOT_FOUND, ROOM_EXPIRED, ROOM_DELETED, KICKED,
-		// AUTH_FAILED, CLIENT_ID_IN_USE) all mean the stored credentials are
-		// dead — no reconnect can succeed, so wipe them now rather than
-		// re-attempting on the next service-worker boot. Logged at `warn`
-		// (not `error`) because these are expected protocol outcomes; in
-		// MV3, any `console.error` from a service worker is surfaced on the
-		// browser's extension-management page as a red error notification.
-		console.warn('[playbacksync:bg] terminal close', { reason, code })
-		void tearDownSession()
-	},
-	onLifecycleChange: () => recomputeActiveIcon(),
-}
+/** Per-tab session state. One entry per pooled WS runtime. */
+const sessions = new Map<number, SessionState>()
 
 /**
- * Wipe persisted credentials, reset session-level identity, and clear the
- * popup mirror. Shared between the owner-driven `leave_room` flow and the
- * server-driven terminal-close flow so the two can't drift on what counts
- * as "this session is over".
- *
- * Does not call `disconnect()` — callers that need it (e.g. `leave_room`)
- * invoke `disconnect()` themselves first; terminal closes have already
- * torn the socket down by the time `onTerminal` fires.
+ * Build the WS callback set for a given tab. The runtime closes over
+ * `tabId` so `dispatchCommand` and `onLifecycleChange` don't need to
+ * carry it.
  */
-async function tearDownSession(): Promise<void> {
-	await clearCreds()
-	session.clientId = null
-	session.lastEventId = 0
-	session.cursor = null
-	session.playlist = []
-	session.playlistVersion = null
-	resetConvergence(session)
-	setPopupCreds(null)
-}
-
-/**
- * Reconcile the toolbar icon with current session + tab-cache state.
- * Greyscale-everywhere unless the WS room is `joined`, in which case
- * the freshest-reporting tab gets the color variant. Cheap to call —
- * idempotent and a no-op when the chosen tab hasn't changed.
- */
-function recomputeActiveIcon(): void {
-	if (getDerivedStatus() !== 'joined') {
-		setActiveTab(null)
-		return
+function makeCallbacks(tabId: number): WsCallbacks {
+	return {
+		dispatchCommand: (cmd) => dispatchCommand(tabId, cmd),
+		onTerminal: (reason, code) => {
+			// Terminal codes (ROOM_NOT_FOUND, ROOM_EXPIRED, ROOM_DELETED, KICKED,
+			// AUTH_FAILED, CLIENT_ID_IN_USE) all mean this tab's stored creds
+			// are dead — no reconnect can succeed, so wipe them now rather than
+			// re-attempting on the next service-worker boot. Logged at `warn`
+			// (not `error`) because these are expected protocol outcomes; in
+			// MV3, any `console.error` from a service worker is surfaced on the
+			// browser's extension-management page as a red error notification.
+			console.warn('[playbacksync:bg] terminal close', { tabId, reason, code })
+			void tearDownTab(tabId)
+		},
+		onLifecycleChange: () => recomputeIconForTab(tabId),
 	}
-	const active = pickActiveTab()
-	setActiveTab(active ? active[0] : null)
+}
+
+/**
+ * Wipe one tab's persisted credentials and per-tab session state, and
+ * clear its popup mirror. Shared between the owner-driven `leave_room`
+ * flow and the server-driven terminal-close flow so the two can't drift
+ * on what counts as "this tab's session is over".
+ *
+ * Does not call `disconnect(tabId)` — callers that need it (e.g.
+ * `leave_room`) invoke it themselves first; terminal closes have
+ * already torn the socket down by the time `onTerminal` fires.
+ */
+async function tearDownTab(tabId: number): Promise<void> {
+	await clearCreds(tabId)
+	sessions.delete(tabId)
+	notifyPopupCredsCleared(tabId)
+	setColored(tabId, false)
+}
+
+/**
+ * Reconcile one tab's toolbar icon with its current runtime state.
+ * Color when the WS room is `joined`, greyscale otherwise. Cheap to
+ * call — idempotent.
+ *
+ * @param tabId The tab whose icon to repaint.
+ */
+function recomputeIconForTab(tabId: number): void {
+	setColored(tabId, getDerivedStatus(tabId) === 'joined')
 }
 
 export default defineBackground(() => {
 	console.log('[playbacksync:bg] worker booted')
 
-	initPopupBroadcast(session)
+	initPopupBroadcast(sessions)
 	void initGreyscaleDefaults()
 	void bootstrap()
 
@@ -123,13 +128,21 @@ export default defineBackground(() => {
 		})
 	})
 
+	// chrome.tabs.onRemoved fires synchronously before the tab id can be
+	// reused for a new tab, so the cleanup below is safe against id reuse.
+	// forgetIconForTab runs *first* so the synchronous setColored(false)
+	// triggered from disconnect's onLifecycleChange short-circuits — calling
+	// chrome.action.setIcon on a tab that just went away surfaces as an
+	// "Unchecked runtime.lastError: No tab with id" warning even when the
+	// returned promise is caught, so the safest fix is to never make the
+	// call in the first place.
 	chrome.tabs.onRemoved.addListener((tabId: number) => {
-		forgetTab(tabId)
-		lastPlayerStateByTab.delete(tabId)
-		session.convergedTabs.delete(tabId)
-		session.settleUntilByTab.delete(tabId)
 		forgetIconForTab(tabId)
-		recomputeActiveIcon()
+		disconnect(tabId)
+		notifyPopupCredsCleared(tabId)
+		void clearCreds(tabId)
+		forgetTab(tabId)
+		sessions.delete(tabId)
 	})
 })
 
@@ -139,34 +152,74 @@ export default defineBackground(() => {
  */
 const POPUP_PORT_NAME = 'pbsync-popup'
 
+/**
+ * Service-worker boot path. Wipes orphan storage on the first boot of a
+ * fresh browser session, then reconnects every tab whose creds slot
+ * still has a live `chrome.tabs.id`. Slots whose tab no longer exists
+ * are pruned.
+ */
 async function bootstrap(): Promise<void> {
-	const creds = await loadCreds()
-	if (!creds) {
+	await wipeIfFreshBrowserSession()
+	const all = await loadAllCreds()
+	if (all.size === 0) {
 		console.log(
-			'[playbacksync:bg] no creds in chrome.storage.local.pbsync; '
-			+ 'follow a room share link or seed manually via DevTools to connect',
+			'[playbacksync:bg] no per-tab creds in chrome.storage.local; '
+			+ 'follow a room share link to connect',
 		)
-		setPopupCreds(null)
 		return
 	}
-	setPopupCreds({ syncUrl: creds.syncUrl })
-	connect(creds, session, wsCallbacks)
+	for (const [tabId, creds] of all) {
+		try {
+			await chrome.tabs.get(tabId)
+		} catch {
+			// Tab no longer exists — orphan slot from a previous worker
+			// generation. Prune.
+			await clearCreds(tabId)
+			continue
+		}
+		ensureConnectedWithCreds(tabId, creds)
+	}
+}
+
+/**
+ * Lazy WS bootstrap for a single tab. If a runtime is already pooled
+ * for this tab, no-op. Otherwise read the per-tab creds slot, build a
+ * fresh session, and connect.
+ *
+ * Called from the message routes that imply this tab should be syncing
+ * (`status` once the adapter is reporting, `credentials` right after
+ * share-URL pickup).
+ *
+ * @param tabId Browser tab id whose runtime to bring up.
+ */
+async function ensureConnected(tabId: number): Promise<void> {
+	if (hasRuntime(tabId)) return
+	const creds = await loadCreds(tabId)
+	if (!creds) return
+	ensureConnectedWithCreds(tabId, creds)
+}
+
+function ensureConnectedWithCreds(tabId: number, creds: { syncUrl: string; syncPassword: string; clientId?: string }): void {
+	if (hasRuntime(tabId)) return
+	const session = createSession()
+	sessions.set(tabId, session)
+	setPopupCreds(tabId, { syncUrl: creds.syncUrl })
+	connect(tabId, creds, session, makeCallbacks(tabId))
 }
 
 async function routeMessage(tabId: number | undefined, msg: ContentToBackground): Promise<void> {
-	// The `credentials` arm is browser-runtime-global and has no tabId
-	// requirement, so it's handled before the tab-scoped guard below.
-	if (msg.kind === 'credentials') {
-		await handleCredentials(msg.syncUrl, msg.syncPassword)
-		return
-	}
-
-	// Every other arm is tab-scoped and useless without a sender tab.
+	// Every arm is tab-scoped now — `credentials` writes to the
+	// capturing tab's slot, so a sender tab id is required.
 	if (tabId === undefined) return
 
 	switch (msg.kind) {
+		case 'credentials':
+			await handleCredentials(tabId, msg.syncUrl, msg.syncPassword)
+			return
 		case 'intent': {
-			if (!hasConverged(session, tabId)) {
+			const session = sessions.get(tabId)
+			if (!session) return
+			if (!hasConverged(session)) {
 				// Native video events fired before the room's authoritative
 				// state has been applied to this tab are not real user actions
 				// — typically the site's own resume-position logic firing as
@@ -177,7 +230,7 @@ async function routeMessage(tabId: number | undefined, msg: ContentToBackground)
 				})
 				return
 			}
-			if (inSettleWindow(session, tabId)) {
+			if (inSettleWindow(session)) {
 				// Same family of cause as pre-convergence drops, but late: the
 				// page's auto-resume / auto-play can fire seconds after the
 				// adapter has applied the room's first authoritative command,
@@ -188,27 +241,29 @@ async function routeMessage(tabId: number | undefined, msg: ContentToBackground)
 				})
 				return
 			}
-			if (shouldSuppress(session, tabId, msg.intent)) {
+			if (shouldSuppress(session, msg.intent)) {
 				console.log('[playbacksync:bg] suppressed echo intent', {
 					tabId, type: msg.intent.type,
 				})
 				return
 			}
-			sendEvent(msg.intent)
+			sendEvent(tabId, msg.intent)
 			return
 		}
 		case 'status': {
 			recordStatus(tabId, msg.adapterId, msg.state)
-			flushPendingConvergence(tabId)
-			recomputeActiveIcon()
-			const prev = lastPlayerStateByTab.get(tabId)
-			if (prev !== msg.state.playerState) {
-				if (msg.state.playerState === 'buffering') {
-					sendBuffer('BUFFER_START', msg.state.currentPos)
-				} else if (prev === 'buffering') {
-					sendBuffer('BUFFER_END', msg.state.currentPos)
+			void ensureConnected(tabId)
+			const session = sessions.get(tabId)
+			if (session) {
+				const prev = session.lastPlayerState
+				if (prev !== msg.state.playerState) {
+					if (msg.state.playerState === 'buffering') {
+						sendBuffer(tabId, 'BUFFER_START', msg.state.currentPos)
+					} else if (prev === 'buffering') {
+						sendBuffer(tabId, 'BUFFER_END', msg.state.currentPos)
+					}
+					session.lastPlayerState = msg.state.playerState
 				}
-				lastPlayerStateByTab.set(tabId, msg.state.playerState)
 			}
 			return
 		}
@@ -219,36 +274,28 @@ async function routeMessage(tabId: number | undefined, msg: ContentToBackground)
 			console.warn('[playbacksync:bg] adapter failed', {
 				tabId, adapterId: msg.adapterId, reason: msg.reason,
 			})
+			disconnect(tabId)
+			await clearCreds(tabId)
 			forgetTab(tabId)
-			lastPlayerStateByTab.delete(tabId)
-			session.convergedTabs.delete(tabId)
-			session.settleUntilByTab.delete(tabId)
+			sessions.delete(tabId)
 			forgetIconForTab(tabId)
-			recomputeActiveIcon()
 			return
 	}
 }
 
 /**
- * First-write-wins handler for the share-URL credential handoff. When
- * `pbsync` storage already has an entry, the new credentials are
- * ignored so a stale share-link revisit can't accidentally hop rooms.
- * Switching rooms is the future "leave room" flow's job (clear, then
- * pickup runs on the next link click).
+ * Per-tab share-URL credential handoff. Each tab writes to its own
+ * `pbsync.tab.<tabId>` slot, so multi-tab and multi-room joins coexist
+ * without first-write-wins fighting.
  *
+ * @param tabId Browser tab id of the page that captured the share URL.
  * @param syncUrl WebSocket URL produced by `ShareController::buildWebSocketUrl`.
  * @param syncPassword Plaintext one-time password the visitor typed at the Basic Auth prompt.
  */
-async function handleCredentials(syncUrl: string, syncPassword: string): Promise<void> {
-	const existing = await loadCreds()
-	if (existing) {
-		console.log('[playbacksync:bg] share-URL creds ignored; pbsync already populated')
-		return
-	}
-	await saveCreds({ syncUrl, syncPassword })
-	setPopupCreds({ syncUrl })
-	console.log('[playbacksync:bg] share-URL creds accepted; connecting')
-	connect({ syncUrl, syncPassword }, session, wsCallbacks)
+async function handleCredentials(tabId: number, syncUrl: string, syncPassword: string): Promise<void> {
+	await saveCreds(tabId, { syncUrl, syncPassword })
+	console.log('[playbacksync:bg] share-URL creds accepted; connecting', { tabId })
+	ensureConnectedWithCreds(tabId, { syncUrl, syncPassword })
 }
 
 /**
@@ -256,46 +303,36 @@ async function handleCredentials(syncUrl: string, syncPassword: string): Promise
  * (`leave_room`); future owner-driven affordances (cursor change
  * requests, playlist edits) will add more.
  *
- * On `leave_room`: tear down the WS socket, wipe stored creds, and
- * clear the popup-broadcast mirror. The mirror clear broadcasts a
- * `no_credentials` snapshot, which is what the popup re-renders to.
+ * On `leave_room`: tear down the WS socket for the popup's bound tab,
+ * wipe its creds, and clear its popup mirror. The mirror clear
+ * broadcasts a `no_credentials` snapshot, which is what the popup
+ * re-renders to.
  *
  * @param msg The decoded envelope from the popup port.
  */
 async function handlePopupMessage(msg: PopupToBackground): Promise<void> {
 	switch (msg.kind) {
 		case 'leave_room': {
-			console.log('[playbacksync:bg] popup requested leave_room')
-			disconnect()
-			await tearDownSession()
+			console.log('[playbacksync:bg] popup requested leave_room', { tabId: msg.tabId })
+			disconnect(msg.tabId)
+			await tearDownTab(msg.tabId)
 			return
 		}
+		case 'subscribe':
+			// Handled by popupBroadcast.ts via the port directly.
+			return
 	}
 }
 
-/**
- * If a convergence target was stashed because no tab had reported status
- * when ROOM_STATE / STATE / SYNC_ADJUST arrived, flush it to the freshest-
- * reporting tab now. Called from the `status` handler right after
- * `recordStatus` so `pickActiveTab` can see the new entry.
- *
- * @param reportingTabId The tab whose status just arrived; only flush when
- *   it is the one `pickActiveTab` picks, so we don't surprise an unrelated
- *   tab with commands meant for the synced video.
- */
-function flushPendingConvergence(reportingTabId: number): void {
-	const pending = session.pendingConvergence
-	if (pending === null) return
-	const active = pickActiveTab()
-	if (!active || active[0] !== reportingTabId) return
-	for (const cmd of pending) dispatchCommand(reportingTabId, cmd)
-	markConverged(session, reportingTabId)
-}
-
 function dispatchCommand(tabId: number, cmd: AuthoritativeCommand): void {
+	const session = sessions.get(tabId)
+	if (!session) {
+		console.warn('[playbacksync:bg] dispatch with no session', { tabId })
+		return
+	}
 	// Arm the suppression window *before* the command lands, so the
 	// reflected native event from the adapter is dropped.
-	recordCommand(session, tabId, cmd)
+	recordCommand(session, cmd)
 	const entry = getTab(tabId)
 	if (!entry) {
 		console.warn('[playbacksync:bg] dispatch to unknown tab', { tabId })
@@ -306,3 +343,4 @@ function dispatchCommand(tabId: number, cmd: AuthoritativeCommand): void {
 		// Tab closed or content script not present; nothing actionable.
 	})
 }
+

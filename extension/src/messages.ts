@@ -79,6 +79,12 @@ export type PopupStatus =
  * by accident.
  */
 export interface PopupSnapshot {
+	/**
+	 * The tab this snapshot describes. `null` only when the popup
+	 * subscribed for a tab that has no per-tab creds slot yet (the
+	 * snapshot is the empty `no_credentials` placeholder).
+	 */
+	tabId: number | null
 	/** Derived connection state. */
 	status: PopupStatus
 	/** Server-assigned client id, or `null` before the first `ROOM_STATE`. */
@@ -98,16 +104,21 @@ export interface PopupSnapshot {
 /**
  * Popup → background. The popup opens a long-lived
  * `chrome.runtime.Port` named `'pbsync-popup'` and posts these
- * envelopes over it. Currently a single arm; future owner-driven
- * affordances (cursor change request, playlist edit) will add more.
+ * envelopes over it.
  *
- * - `leave_room` — wipe stored creds and tear down the WS socket.
- *   The background broadcasts a fresh `no_credentials` snapshot
- *   afterwards; the popup re-renders to the no-creds view without
- *   closing.
+ * - `subscribe` — first envelope after `connect()`. Names the tab the
+ *   popup is interested in (derived via
+ *   `chrome.tabs.query({active: true, currentWindow: true})`). The
+ *   background binds the port to that tab; subsequent snapshots
+ *   delivered over the port describe only that tab.
+ * - `leave_room` — wipe the named tab's stored creds and tear down its
+ *   WS socket. The background broadcasts a fresh `no_credentials`
+ *   snapshot for that tab afterwards; the popup re-renders to the
+ *   no-creds view without closing.
  */
 export type PopupToBackground =
-	| { kind: 'leave_room' }
+	| { kind: 'subscribe'; tabId: number }
+	| { kind: 'leave_room'; tabId: number }
 
 /**
  * Background → popup. Pushed over the same `'pbsync-popup'` port the

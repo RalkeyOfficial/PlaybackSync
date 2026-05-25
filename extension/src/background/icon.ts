@@ -1,13 +1,10 @@
 /**
  * Per-tab toolbar-icon state. The manifest's `default_icon` is the
  * greyscale variant, so any tab we never touch is automatically
- * "inactive". This module owns the single exception: the one tab that
- * is currently being synced by the WS room gets the color variant via
- * `chrome.action.setIcon({ tabId, … })`.
- *
- * Only one tab is colored at a time — it tracks `pickActiveTab()` from
- * `tabs.ts`, the freshest video-reporting tab. When the active tab
- * flips, we revert the previously-colored tab and color the new one.
+ * "inactive". This module owns the exception: each tab whose WS room
+ * is currently `joined` gets the color variant via
+ * `chrome.action.setIcon({ tabId, … })`. Multiple tabs can be colored
+ * simultaneously — one per syncing tab.
  */
 
 const COLOR_PATHS = {
@@ -26,20 +23,20 @@ const GREY_PATHS = {
 	128: 'icon/128-grey.png',
 } as const
 
-/** Tab whose icon is currently color. `null` while no tab is being synced. */
-let activeTabId: number | null = null
+/** Tabs whose icon is currently color. */
+const coloredTabs = new Set<number>()
 
 /**
  * Install the runtime default of greyscale. The manifest's `default_icon`
  * stays color so listings (Chrome Web Store, `chrome://extensions`) show
  * the brand; this call overrides the toolbar at runtime so every tab
- * starts grey until `setActiveTab` paints one of them color.
+ * starts grey until {@link setColored} paints one of them color.
  *
  * Called on every service-worker boot — MV3 workers idle out, and the
  * per-tab color override from a previous worker generation can survive
  * on tabs we no longer track. We re-grey every open tab to flush those
- * stale overrides so the next `setActiveTab` transition starts from a
- * clean slate.
+ * stale overrides so the next {@link setColored} transition starts from
+ * a clean slate.
  */
 export async function initGreyscaleDefaults(): Promise<void> {
 	void chrome.action.setIcon({ path: GREY_PATHS }).catch(() => {})
@@ -55,35 +52,39 @@ export async function initGreyscaleDefaults(): Promise<void> {
 }
 
 /**
- * Make `next` the colored tab. Reverts the previously-colored tab to
- * greyscale (if any), then paints `next` color. Pass `null` to clear
- * — the previously-colored tab goes back to greyscale and nothing is
- * colored. No-op when `next === activeTabId`.
+ * Paint a single tab's icon. `on=true` switches it to the color
+ * variant and remembers the tab; `on=false` reverts it to greyscale
+ * and forgets it. Idempotent — calling twice in the same direction
+ * is a cheap no-op.
  *
- * @param next The tabId that should be colored, or `null` to clear.
+ * @param tabId The tabId whose icon to paint.
+ * @param on `true` for color, `false` for greyscale.
  */
-export function setActiveTab(next: number | null): void {
-	if (next === activeTabId) return
-	const prev = activeTabId
-	activeTabId = next
-	if (prev !== null) paintTab(prev, GREY_PATHS)
-	if (next !== null) paintTab(next, COLOR_PATHS)
+export function setColored(tabId: number, on: boolean): void {
+	const wasColored = coloredTabs.has(tabId)
+	if (on === wasColored) return
+	if (on) {
+		coloredTabs.add(tabId)
+		paintTab(tabId, COLOR_PATHS)
+	} else {
+		coloredTabs.delete(tabId)
+		paintTab(tabId, GREY_PATHS)
+	}
 }
 
 /**
  * Drop a tabId from internal tracking — call from
  * `chrome.tabs.onRemoved`. Doesn't issue any `setIcon` call (the tab
- * is gone), but prevents `setActiveTab(next)` from later trying to
- * grey-out a dead tab.
+ * is gone), but keeps the colored-tabs set tidy.
  *
  * @param tabId The tabId that just went away.
  */
 export function forgetIconForTab(tabId: number): void {
-	if (activeTabId === tabId) activeTabId = null
+	coloredTabs.delete(tabId)
 }
 
 function paintTab(tabId: number, path: Record<number, string>): void {
-	// A tab can disappear between pickActiveTab() and this call; swallow
-	// the resulting "No tab with id" error.
+	// A tab can disappear between the decision to paint and this call;
+	// swallow the resulting "No tab with id" error.
 	void chrome.action.setIcon({ tabId, path }).catch(() => {})
 }

@@ -1,12 +1,12 @@
 # Storage
 
-The extension uses `chrome.storage.local` for the few pieces of state that must survive a service-worker restart. Everything else is module-state in the running worker (which is fine — MV3 restores it on the next wake-up).
+The extension uses `chrome.storage.local` for the few pieces of state that must survive a service-worker restart, plus `chrome.storage.session` for one cold-boot sentinel. Everything else is module-state in the running worker (which is fine — MV3 restores it on the next wake-up).
 
-The wrapper is at [`src/background/storage.ts`](../src/background/storage.ts). Only the WS client reads/writes through it; nothing else in the codebase touches `chrome.storage` directly.
+The wrapper is at [`src/background/storage.ts`](../src/background/storage.ts). Only the WS client + background entrypoint read/write through it; nothing else in the codebase touches `chrome.storage` directly.
 
-## Schema (key `pbsync`)
+## Schema — one slot per syncing tab
 
-One JSON object lives at `chrome.storage.local.pbsync`:
+Each tab that is (or was) syncing has its own JSON object under `chrome.storage.local['pbsync.tab.<tabId>']`:
 
 ```jsonc
 {
@@ -18,22 +18,28 @@ One JSON object lives at `chrome.storage.local.pbsync`:
 
 | Field | Set by | Read by | Why it lives here |
 |-------|--------|---------|-------------------|
-| `syncUrl` | Share-URL pickup (preferred) or DevTools (fallback) | `ws.ts` on every connect | Tells the client which room to join |
+| `syncUrl` | Share-URL pickup on that tab | `ws.ts` on every connect for that tab | Tells the client which room to join |
 | `syncPassword` | Same | `ws.ts` (sent inside `JOIN`) | Authenticates against `room.password_hash` |
 | `clientId` | `ws.ts` on the first `ROOM_STATE` after JOIN | `ws.ts` on subsequent reconnects (becomes `JOIN.clientId`) | Lets the daemon resume the session via tombstone replay |
 
-The whole object is read at background-worker boot. Missing creds = the WS client stays idle and logs a single hint line.
+Per-tab keying means multiple rooms can coexist in one browser, share-URL pickups never fight for one global slot, and `chrome.tabs.onRemoved` has a precise cleanup signal: remove the matching key, no one else cares.
 
-## Share-URL pickup (preferred)
+## Cold-boot sentinel
 
-The standard way to get credentials into `pbsync` is to follow a room share link — the dashboard surfaces these per room.
+`chrome.storage.session['pbsync.booted']` is a single boolean. Set on the first service-worker boot of a browser session by `wipeIfFreshBrowserSession()`; cleared by the browser on each restart. When the sentinel is absent at boot, every `pbsync.tab.*` key is removed before `bootstrap()` reads them — so a browser restart never auto-rejoins.
+
+`chrome.storage.session` is MV3-only. A Firefox MV2 port will substitute a module-scope `let booted = false` flag set on first `defineBackground` invocation.
+
+## Share-URL pickup
+
+The standard way creds enter the extension is the share-link flow:
 
 1. Visit `/apps/playbacksync/r/{uuid}`; the browser surfaces a Basic Auth prompt.
 2. Enter the one-time password; `ShareController` 302s to `room.bootstrapUrl?sync_url=…&sync_password=…`.
-3. The dedicated content script [`entrypoints/credentials.content.ts`](../entrypoints/credentials.content.ts) sniffs those params at `document_start`, sends a `credentials` message to the background.
-4. The background calls `loadCreds()`. If `pbsync` is empty it writes the new pair via `saveCreds()` and calls `ws.connect()`. If `pbsync` is already populated it logs `share-URL creds ignored; pbsync already populated` and does nothing.
+3. The dedicated content script [`entrypoints/credentials.content.ts`](../entrypoints/credentials.content.ts) sniffs those params at `document_start` and sends a `credentials` message to the background — tagged with the capturing tab's `sender.tab.id` (Chrome supplies this).
+4. The background's `handleCredentials(tabId, …)` writes the pair to `pbsync.tab.<tabId>` via `saveCreds(tabId, …)` and calls `ensureConnectedWithCreds(tabId, …)`.
 
-This is **first-write-wins**: once you're in a room, share-link revisits are a no-op. To switch rooms, clear creds (see below) and follow the new link.
+There is **no first-write-wins guard**. Each tab gets its own slot. Pasting a share URL into a second tab joins that tab to its own room without disturbing the first.
 
 The URL is left untouched after handoff — `sync_password` stays visible in the address bar. Hardening that path is a server-side concern (fragment handoff, server-set cookie) and out of scope for this slice.
 
@@ -41,29 +47,31 @@ The URL is left untouched after handoff — `sync_password` stays visible in the
 
 Available as a manual fallback / debug tool when there's no convenient share link (e.g. testing against `occ playbacksync:ws-serve` without a real dashboard round-trip):
 
-1. Create a room via the PlaybackSync dashboard. Copy `bootstrapUrl` (actually you want the WS URL — `wss://<host>/index.php/apps/playbacksync/ws/<uuid>`) and the one-time password.
-2. With `npm run dev` running and the extension loaded, open the **background service worker's DevTools** — `chrome://extensions` → PlaybackSync → "Inspect views: service worker".
-3. In the worker console, run:
+1. Create a room via the PlaybackSync dashboard. Copy the WS URL (`wss://<host>/index.php/apps/playbacksync/ws/<uuid>`) and the one-time password.
+2. Find the tab id you want to seed: open the page you want to sync, run `(await chrome.tabs.query({active: true, currentWindow: true}))[0].id` in any extension DevTools console.
+3. With `npm run dev` running and the extension loaded, open the **background service worker's DevTools** — `chrome://extensions` → PlaybackSync → "Inspect views: service worker".
+4. In the worker console, run:
    ```js
    await chrome.storage.local.set({
-     pbsync: {
+     'pbsync.tab.<TAB_ID>': {
        syncUrl: 'wss://<host>/index.php/apps/playbacksync/ws/<uuid>',
        syncPassword: '<password>',
      },
    })
    ```
-4. Reload the extension (`chrome://extensions` → "Reload"). The next worker boot picks up the creds and calls `ws.connect()`.
+5. Reload the extension (`chrome://extensions` → "Reload"). The next worker boot picks up the slot via `loadAllCreds()` and calls `ensureConnectedWithCreds()`.
 
-To leave the room / wipe creds:
+To leave the room / wipe creds for a single tab:
 
 ```js
-await chrome.storage.local.remove('pbsync')
+await chrome.storage.local.remove('pbsync.tab.<TAB_ID>')
 ```
 
 To inspect what's currently stored:
 
 ```js
-await chrome.storage.local.get('pbsync')
+const all = await chrome.storage.local.get(null)
+Object.fromEntries(Object.entries(all).filter(([k]) => k.startsWith('pbsync.tab.')))
 ```
 
 ## Lifecycle
@@ -71,32 +79,39 @@ await chrome.storage.local.get('pbsync')
 ```
 Background boot
   │
-  ▼ loadCreds()
-   ├─ no entry          → idle (hint logged, no connect)
-   └─ entry present
+  ▼ wipeIfFreshBrowserSession()
+   ├─ sentinel present → no-op
+   └─ sentinel absent  → remove every pbsync.tab.* key, then set sentinel
+  │
+  ▼ loadAllCreds()
+   ├─ empty → idle (hint logged, no connects)
+   └─ entries present, for each (tabId, creds):
        │
-       ▼ ws.connect(creds, session, cb)
-       │
-       ▼ first ROOM_STATE
-       saveClientId(frame.clientId)        ← only writes if it actually changed
-       │
-       (steady state)
-       │
-       ▼ on close (terminal)
-       caller may clearCreds()             ← e.g. AUTH_FAILED → don't auto-retry with bad password
+       ▼ chrome.tabs.get(tabId)
+        ├─ tab missing → clearCreds(tabId)        ← orphan prune
+        └─ tab live    → ensureConnectedWithCreds(tabId, creds)
+                          │
+                          ▼ first ROOM_STATE for that tab
+                          saveClientId(tabId, frame.clientId)
+                          │
+                          (steady state)
+                          │
+                          ▼ on chrome.tabs.onRemoved
+                          disconnect(tabId) + clearCreds(tabId)
+                          │
+                          ▼ on terminal close (AUTH_FAILED / KICKED / …)
+                          tearDownTab(tabId) wipes the slot automatically
 ```
 
-`saveClientId` reads-then-writes so a stale clientId can't overwrite credentials someone just updated.
+`saveClientId(tabId, …)` reads-then-writes so a stale clientId can't overwrite a slot whose creds were just rewritten.
 
 ## What's deliberately *not* stored here
 
-- **Cursor / playlist / playerState.** These are room-shared and authoritative server-side. Caching them locally would just risk drift.
-- **`lastEventId`.** Held in `SessionState` only — losing it across a worker restart is fine; the worst case is we don't get a replay on reconnect, which is recoverable (we get a fresh `ROOM_STATE` instead).
-- **Per-tab state.** Tabs come and go; no point persisting them.
+- **Cursor / playlist / playerState.** Room-shared and authoritative server-side. Caching them locally would just risk drift.
+- **`lastEventId`.** Held in each tab's `SessionState` only — losing it across a worker restart is fine; the worst case is we don't get a replay on reconnect, which is recoverable (we get a fresh `ROOM_STATE` instead).
 - **Per-adapter cache.** Adapters are stateless across page loads.
 
 ## Future tightening
 
-- **Replace-and-reconnect on a fresh share link.** Today's policy is first-write-wins — once `pbsync` is populated, subsequent share-link visits are ignored. The popup will eventually expose a "leave room" action that calls `clearCreds`, after which the next share link is picked up normally. Adding mid-flight replace semantics is a follow-up once that UI exists.
-- **Auto-`clearCreds` on terminal `AUTH_FAILED`.** Today the WS module's `onTerminal` callback only logs. When the daemon hard-rejects credentials (e.g. password rotated server-side) we should wipe them so the next share-link visit isn't blocked by stale-and-broken creds.
-- **Multi-room keying.** When per-room state matters (multi-room arbitration), `pbsync` will likely grow into a map keyed by room UUID. That's a schema change worth flagging at the time, not pre-empting now.
+- **Auto-`clearCreds` on terminal `AUTH_FAILED`** for one tab is already wired (`tearDownTab` runs on every terminal close). What's still missing is surfacing a popup notification so the user understands why their tab dropped out.
+- **Cross-tab clientId sharing.** Today each tab mints its own `clientId`. The "one identity per browser" idea is parked in [`EXTENSION_TODO.md`](../../EXTENSION_TODO.md); making it work would mean pivoting from per-tab WS to per-room WS, plus solving within-room arbitration.
