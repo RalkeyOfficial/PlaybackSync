@@ -97,6 +97,22 @@ export interface AdapterContext {
 	emitIntent(intent: LocalIntent): void
 
 	/**
+	 * Announce that the user clicked an in-page navigation control (e.g. an
+	 * episode button) and is moving to a different `VideoRef`. The runtime
+	 * forwards the trigger to the background, which decides — based on the
+	 * room's current mode and playlist — whether to send a
+	 * `CURSOR_CHANGE_REQUEST`, drop it silently, or soft-leave the room.
+	 *
+	 * Adapters should call this passively (no `preventDefault`): the host
+	 * page's own routing handles the local navigation; we just piggyback
+	 * the announcement so the rest of the room can follow.
+	 *
+	 * @param target Full identity of the video the user is navigating to,
+	 *   in the same shape used for `JOIN.catalogFragment` entries.
+	 */
+	emitCursorTrigger(target: VideoRefWithMeta): void
+
+	/**
 	 * Register the one handler that applies authoritative commands from the
 	 * server. Calling this twice replaces the previous handler.
 	 */

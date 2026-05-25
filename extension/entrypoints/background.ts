@@ -14,6 +14,7 @@ import type {
 	ContentToBackground,
 	PopupToBackground,
 } from '@/src/messages'
+import type { VideoRefWithMeta } from '@/src/background/protocol'
 import {
 	type SessionState,
 	createSession,
@@ -45,12 +46,25 @@ import {
 	reportCatalog,
 	reportIdentity,
 	sendBuffer,
+	sendCursorChangeRequest,
 	sendEvent,
 	type WsCallbacks,
 } from '@/src/background/ws'
 
 /** Per-tab session state. One entry per pooled WS runtime. */
 const sessions = new Map<number, SessionState>()
+
+/**
+ * Tabs that the user soft-left (auto-leave on out-of-playlist or
+ * single-mode click). Their `pbsync.tab.<tabId>` slot stays so a Rejoin
+ * click can reconnect in one step, but until then, status messages from
+ * the still-running content script must NOT trigger an auto-reconnect
+ * via {@link ensureConnected} — that would defeat the whole point of
+ * the soft-leave and loop the room through join/leave cycles every
+ * heartbeat. The flag is cleared by explicit Rejoin, hard Leave room,
+ * and tab close.
+ */
+const softLeftTabs = new Set<number>()
 
 /**
  * Build the WS callback set for a given tab. The runtime closes over
@@ -88,6 +102,7 @@ function makeCallbacks(tabId: number): WsCallbacks {
 async function tearDownTab(tabId: number): Promise<void> {
 	await clearCreds(tabId)
 	sessions.delete(tabId)
+	softLeftTabs.delete(tabId)
 	notifyPopupCredsCleared(tabId)
 	setColored(tabId, false)
 }
@@ -145,6 +160,7 @@ export default defineBackground(() => {
 		void clearCreds(tabId)
 		forgetTab(tabId)
 		sessions.delete(tabId)
+		softLeftTabs.delete(tabId)
 	})
 })
 
@@ -254,7 +270,9 @@ async function routeMessage(tabId: number | undefined, msg: ContentToBackground)
 		}
 		case 'status': {
 			recordStatus(tabId, msg.adapterId, msg.state)
-			void ensureConnected(tabId)
+			// Soft-left tabs intentionally stay disconnected until Rejoin,
+			// even though the content script is still polling status.
+			if (!softLeftTabs.has(tabId)) void ensureConnected(tabId)
 			const session = sessions.get(tabId)
 			if (session) {
 				const prev = session.lastPlayerState
@@ -283,6 +301,9 @@ async function routeMessage(tabId: number | undefined, msg: ContentToBackground)
 		case 'catalog':
 			reportCatalog(tabId, msg.catalog)
 			return
+		case 'cursor_trigger':
+			await handleCursorTrigger(tabId, msg.target)
+			return
 		case 'fail':
 			console.warn('[playbacksync:bg] adapter failed', {
 				tabId, adapterId: msg.adapterId, reason: msg.reason,
@@ -291,6 +312,7 @@ async function routeMessage(tabId: number | undefined, msg: ContentToBackground)
 			await clearCreds(tabId)
 			forgetTab(tabId)
 			sessions.delete(tabId)
+			softLeftTabs.delete(tabId)
 			forgetIconForTab(tabId)
 			return
 	}
@@ -312,14 +334,116 @@ async function handleCredentials(tabId: number, syncUrl: string, syncPassword: s
 }
 
 /**
- * Handle a popup → background message. Currently a single arm
- * (`leave_room`); future owner-driven affordances (cursor change
- * requests, playlist edits) will add more.
+ * Resolve a user-initiated cursor trigger emitted by the adapter when
+ * the user clicks an in-page navigation control. The local navigation
+ * has already happened (or is happening) — this decides only what to
+ * tell the room about it. Behaviour matrix:
  *
- * On `leave_room`: tear down the WS socket for the popup's bound tab,
- * wipe its creds, and clear its popup mirror. The mirror clear
- * broadcasts a `no_credentials` snapshot, which is what the popup
- * re-renders to.
+ * | mode     | target in playlist | not in playlist |
+ * | -------- | ------------------ | --------------- |
+ * | default  | send request       | soft-leave      |
+ * | single   | soft-leave         | soft-leave      |
+ * | freeform | drop (deferred)    | drop (deferred) |
+ *
+ * "Soft-leave" tears down the per-tab WS runtime but **keeps** the
+ * stored creds slot, so the popup can offer a one-click Rejoin without
+ * the user re-typing or re-following the share link. Distinct from
+ * `leave_room` (hard leave) which also wipes credentials.
+ *
+ * Freeform is a deferred concern owned by the separate `PLAYLIST_UPDATE`
+ * spec — clicks in freeform mode are dropped here rather than silently
+ * triggering the server's auto-append, which would defeat the point of
+ * having a playlist at all.
+ *
+ * @param tabId Browser tab the trigger came from.
+ * @param target Full video identity the user clicked toward.
+ */
+async function handleCursorTrigger(tabId: number, target: VideoRefWithMeta): Promise<void> {
+	const session = sessions.get(tabId)
+	if (!session) {
+		// No active room on this tab — nothing to announce, nothing to
+		// leave. Adapter probably attached listeners before the WS came
+		// up; harmless.
+		return
+	}
+	if (session.mode === 'freeform') {
+		console.log('[playbacksync:bg] cursor_trigger dropped (freeform deferred)', {
+			tabId, videoId: target.videoId,
+		})
+		return
+	}
+
+	const inPlaylist = session.playlist.some(
+		(entry) => entry.providerId === target.providerId && entry.videoId === target.videoId,
+	)
+
+	if (session.mode === 'single' || !inPlaylist) {
+		console.log('[playbacksync:bg] cursor_trigger soft-leaving', {
+			tabId, mode: session.mode, videoId: target.videoId, inPlaylist,
+		})
+		await softLeaveTab(tabId)
+		return
+	}
+
+	console.log('[playbacksync:bg] cursor_trigger forwarding as CURSOR_CHANGE_REQUEST', {
+		tabId, videoId: target.videoId,
+	})
+	sendCursorChangeRequest(tabId, target)
+}
+
+/**
+ * Tear down a tab's WS runtime and per-tab session **without** wiping
+ * its stored creds slot. The popup re-renders to `disconnected` (creds
+ * present + no socket), surfacing a Rejoin affordance. Contrast with
+ * {@link tearDownTab}, which is the hard-leave path used by terminal
+ * close codes and the popup's `leave_room` envelope.
+ *
+ * @param tabId Browser tab to soft-leave.
+ */
+async function softLeaveTab(tabId: number): Promise<void> {
+	disconnect(tabId)
+	sessions.delete(tabId)
+	softLeftTabs.add(tabId)
+	// Deliberately NOT calling clearCreds / notifyPopupCredsCleared —
+	// the credentials slot stays so Rejoin works in one click.
+	// `disconnect()` already broadcasts the `disconnected` snapshot via
+	// `notifyDisconnected`, and recomputes the toolbar icon.
+}
+
+/**
+ * Re-establish the WS runtime for a tab using its still-stored creds
+ * after a soft-leave. No-op if the runtime is already up (the popup
+ * shouldn't normally surface Rejoin in that case, but be defensive) or
+ * if the creds slot was somehow wiped before the user clicked.
+ *
+ * @param tabId Browser tab the popup is bound to.
+ */
+async function handleRejoinRoom(tabId: number): Promise<void> {
+	if (hasRuntime(tabId)) {
+		console.log('[playbacksync:bg] rejoin_room ignored: runtime already up', { tabId })
+		softLeftTabs.delete(tabId)
+		return
+	}
+	const creds = await loadCreds(tabId)
+	if (!creds) {
+		console.warn('[playbacksync:bg] rejoin_room with no stored creds', { tabId })
+		softLeftTabs.delete(tabId)
+		return
+	}
+	console.log('[playbacksync:bg] popup requested rejoin_room', { tabId })
+	softLeftTabs.delete(tabId)
+	ensureConnectedWithCreds(tabId, creds)
+}
+
+/**
+ * Handle a popup → background message. Three arms:
+ *
+ * - `leave_room` — hard leave: tear down the WS socket, wipe creds,
+ *   clear the popup mirror. The mirror clear broadcasts a
+ *   `no_credentials` snapshot, which is what the popup re-renders to.
+ * - `rejoin_room` — re-establish the WS runtime using still-stored
+ *   creds after a soft-leave (auto-leave on out-of-playlist click).
+ * - `subscribe` — handled by `popupBroadcast.ts` via the port directly.
  *
  * @param msg The decoded envelope from the popup port.
  */
@@ -331,6 +455,9 @@ async function handlePopupMessage(msg: PopupToBackground): Promise<void> {
 			await tearDownTab(msg.tabId)
 			return
 		}
+		case 'rejoin_room':
+			await handleRejoinRoom(msg.tabId)
+			return
 		case 'subscribe':
 			// Handled by popupBroadcast.ts via the port directly.
 			return

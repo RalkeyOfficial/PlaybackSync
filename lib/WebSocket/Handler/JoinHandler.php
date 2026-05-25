@@ -155,6 +155,14 @@ class JoinHandler {
 			$replay,
 		));
 
+		// Unicast the room's playlist to the joiner: ROOM_STATE only carries
+		// `playlistVersion`, so without this the joiner doesn't learn the
+		// entries until the next mutation. Clients need them to resolve
+		// `CURSOR_CHANGE_REQUEST` targets against the room's known set.
+		if ($runtime->playlist !== []) {
+			$conn->send($this->encoder->playlistUpdate($runtime->playlist, $nowMs));
+		}
+
 		// JOIN steering: unicast a CURSOR_CHANGE when the joiner's tab is
 		// on the wrong video (or on a video the room doesn't know yet, in
 		// any non-freeform mode). Freeform with `currentlyShowing` omitted

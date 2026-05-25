@@ -46,7 +46,7 @@ export const SUPPRESSION_WINDOW_MS = 600
  * The window arms exactly once per connection (on first convergence), so
  * mid-session state updates don't keep re-locking the user out.
  */
-export const JOIN_SETTLE_WINDOW_MS = 5000
+export const JOIN_SETTLE_WINDOW_MS = 1_000
 
 /** Recorded outbound command timing; used by {@link shouldSuppress}. */
 interface RecentCommand {

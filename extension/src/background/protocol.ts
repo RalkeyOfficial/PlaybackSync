@@ -401,14 +401,35 @@ function decodeCursorChange(o: Obj): { ok: true; frame: CursorChangeFrame } | De
 
 function decodePlaylistUpdate(o: Obj): { ok: true; frame: PlaylistUpdateInFrame } | DecodeError {
 	const entries = o['entries']
-	if (!Array.isArray(entries)) return shape('PLAYLIST_UPDATE.entries must be array')
 	const playlistVersion = asString(o['playlistVersion'])
 	const serverTs = asInt(o['serverTs'])
 	if (playlistVersion === null || serverTs === null) return shape('PLAYLIST_UPDATE missing fields')
 
+	const parsed = decodePlaylistEntries(entries, 'PLAYLIST_UPDATE')
+	if (!parsed.ok) return parsed
+	return {
+		ok: true,
+		frame: { type: 'PLAYLIST_UPDATE', entries: parsed.entries, playlistVersion, serverTs },
+	}
+}
+
+/**
+ * Parse the `entries` array shared by `PLAYLIST_UPDATE` and `ROOM_STATE`.
+ * Both carry the same wire shape; the encoder uses `encodePlaylistEntry`
+ * for either. The caller passes its frame name so the shape errors stay
+ * traceable to the originating decode path.
+ *
+ * @param raw The unparsed `entries` field — must be an array.
+ * @param frameName Frame name used in error messages.
+ */
+function decodePlaylistEntries(
+	raw: unknown,
+	frameName: 'PLAYLIST_UPDATE' | 'ROOM_STATE',
+): { ok: true; entries: PlaylistEntry[] } | DecodeError {
+	if (!Array.isArray(raw)) return shape(`${frameName}.entries must be array`)
 	const parsed: PlaylistEntry[] = []
-	for (const e of entries) {
-		if (!isObj(e)) return shape('PLAYLIST_UPDATE.entries[] not object')
+	for (const e of raw) {
+		if (!isObj(e)) return shape(`${frameName}.entries[] not object`)
 		const entryId = asString(e['entryId'])
 		const position = asInt(e['position'])
 		const providerId = asString(e['providerId'])
@@ -421,14 +442,14 @@ function decodePlaylistUpdate(o: Obj): { ok: true; frame: PlaylistUpdateInFrame 
 			entryId === null || position === null || providerId === null
 			|| videoId === null || pageUrl === null || addedAt === null || lastSeenAt === null
 		) {
-			return shape('PLAYLIST_UPDATE.entries[] missing required fields')
+			return shape(`${frameName}.entries[] missing required fields`)
 		}
 		if (
 			source !== 'scraped'
 			&& source !== 'curated'
 			&& source !== 'auto_appended'
 		) {
-			return shape('PLAYLIST_UPDATE.entries[].source invalid')
+			return shape(`${frameName}.entries[].source invalid`)
 		}
 		parsed.push({
 			entryId,
@@ -444,10 +465,7 @@ function decodePlaylistUpdate(o: Obj): { ok: true; frame: PlaylistUpdateInFrame 
 			lastSeenAt,
 		})
 	}
-	return {
-		ok: true,
-		frame: { type: 'PLAYLIST_UPDATE', entries: parsed, playlistVersion, serverTs },
-	}
+	return { ok: true, entries: parsed }
 }
 
 function decodeSyncAdjust(o: Obj): { ok: true; frame: SyncAdjustFrame } | DecodeError {

@@ -160,6 +160,14 @@
 				background: var(--danger);
 				color: var(--danger-fg);
 			}
+			.btn--primary {
+				background: var(--accent);
+				color: var(--accent-fg);
+				border-color: var(--accent);
+			}
+			.btn--primary:hover:not(:disabled) {
+				filter: brightness(1.08);
+			}
 			.btn:disabled {
 				opacity: 0.5;
 				cursor: progress;

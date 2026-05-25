@@ -73,6 +73,9 @@ export default defineContentScript({
 			sendCatalog(adapterId, catalog) {
 				send({ kind: 'catalog', adapterId, catalog })
 			},
+			sendCursorTrigger(adapterId, target) {
+				send({ kind: 'cursor_trigger', adapterId, target })
+			},
 		}
 
 		chrome.runtime.onMessage.addListener((msg: BackgroundToContent) => {

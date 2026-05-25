@@ -232,6 +232,27 @@ export function sendEvent(tabId: number, intent: { type: 'play' | 'pause' | 'see
 }
 
 /**
+ * Send a `CURSOR_CHANGE_REQUEST` frame for a given tab. Used after the
+ * background's per-mode decision logic accepts a user-initiated cursor
+ * trigger (e.g. an episode-button click) and resolves it to a target
+ * already in the room's playlist. The server arbitrates by mode; the
+ * matching `CURSOR_CHANGE` broadcast comes back through the normal
+ * inbound path.
+ *
+ * No-op if the runtime isn't pooled or the socket isn't open — the
+ * caller doesn't need to inspect runtime state before calling.
+ *
+ * @param tabId Browser tab id whose runtime should emit the frame.
+ * @param target Full identity of the target video; the server matches
+ *   it against the existing playlist by `(providerId, videoId)`.
+ */
+export function sendCursorChangeRequest(tabId: number, target: VideoRefWithMeta): void {
+	const r = pool.get(tabId)
+	if (!r?.socket || r.socket.readyState !== WebSocket.OPEN) return
+	send(r, { type: 'CURSOR_CHANGE_REQUEST', target, clientTs: nowMs() })
+}
+
+/**
  * Notify the daemon of a buffer transition on a given tab's runtime.
  * Called by the entrypoint when an incoming `status` flips
  * `playerState` to/from `'buffering'`.
@@ -457,6 +478,15 @@ function handleFrame(r: WsRuntime, frame: InboundFrame): void {
 			dispatchToOwner(r, applyState(r.session, frame))
 			return
 		case 'CURSOR_CHANGE':
+			// Re-arm the join settle window: miruro (and similar players) auto-
+			// restore the viewer's last position on the new episode shortly
+			// after the source loads, which the adapter would otherwise observe
+			// as a fresh `seeking` event and ship to the room as a real EVENT.
+			// `resetConvergence` flips the gate off; the terminal
+			// `markConverged` inside `dispatchToOwner` flips it back on and
+			// arms a fresh settle window — matching exactly the pattern that
+			// already covers JOIN-time auto-resume.
+			resetConvergence(r.session)
 			dispatchToOwner(r, applyCursorChange(r.session, frame))
 			notifyCursorChanged(r.tabId)
 			return

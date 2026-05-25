@@ -58,6 +58,19 @@ export type ContentToBackground =
 		 */
 		catalog: VideoRefWithMeta[] | null
 	}
+	| {
+		kind: 'cursor_trigger'
+		adapterId: string
+		/**
+		 * Full identity of the video the user clicked toward (e.g. an
+		 * episode button). The background looks the target up against the
+		 * current room's playlist + mode to decide whether to send a
+		 * `CURSOR_CHANGE_REQUEST`, drop the trigger, or soft-leave the
+		 * room. Adapters never preventDefault on the originating click —
+		 * the host page's own routing handles the local nav.
+		 */
+		target: VideoRefWithMeta
+	}
 	| { kind: 'credentials'; syncUrl: string; syncPassword: string }
 
 /**
@@ -137,14 +150,19 @@ export interface PopupSnapshot {
  *   `chrome.tabs.query({active: true, currentWindow: true})`). The
  *   background binds the port to that tab; subsequent snapshots
  *   delivered over the port describe only that tab.
- * - `leave_room` — wipe the named tab's stored creds and tear down its
- *   WS socket. The background broadcasts a fresh `no_credentials`
- *   snapshot for that tab afterwards; the popup re-renders to the
- *   no-creds view without closing.
+ * - `leave_room` — hard leave: wipe the named tab's stored creds and
+ *   tear down its WS socket. The background broadcasts a fresh
+ *   `no_credentials` snapshot for that tab afterwards; the popup
+ *   re-renders to the no-creds view without closing.
+ * - `rejoin_room` — re-establish the named tab's WS runtime using its
+ *   still-stored creds after a soft-leave (auto-leave on out-of-
+ *   playlist or single-mode click). The popup surfaces this only when
+ *   `status === 'disconnected'`.
  */
 export type PopupToBackground =
 	| { kind: 'subscribe'; tabId: number }
 	| { kind: 'leave_room'; tabId: number }
+	| { kind: 'rejoin_room'; tabId: number }
 
 /**
  * Background → popup. Pushed over the same `'pbsync-popup'` port the

@@ -60,7 +60,7 @@ const LOAD_BUTTON_SETTLE_MS = 300;
  * listener wiring — the user can press play themselves, and the room's
  * authoritative state will reconcile.
  */
-const LOAD_TIMEOUT_MS = 3_000;
+const LOAD_TIMEOUT_MS = 5_000;
 
 /**
  * Selectors used by {@link MiruroAdapter.scrapeCatalog}. miruro's class
@@ -110,12 +110,15 @@ const EPISODE_LIST_WAIT_TIMEOUT_MS = 1_500;
 class MiruroAdapter implements Adapter {
   readonly id = 'miruro';
 
+  private ctx: AdapterContext | null = null;
   private video: HTMLVideoElement | null = null;
   private listeners: Array<[keyof HTMLMediaElementEventMap, () => void]> = [];
   private pendingObserver: MutationObserver | null = null;
   private pendingTimer: ReturnType<typeof setTimeout> | null = null;
   private catalogObserver: MutationObserver | null = null;
   private catalogTimer: ReturnType<typeof setTimeout> | null = null;
+  private cursorTriggerContainer: Element | null = null;
+  private cursorTriggerHandler: ((ev: Event) => void) | null = null;
   private destroyed = false;
 
   canHandlePage(url: URL): boolean {
@@ -131,6 +134,7 @@ class MiruroAdapter implements Adapter {
   }
 
   async init(ctx: AdapterContext): Promise<void> {
+    this.ctx = ctx;
     const pathMatch = PATH_RE.exec(location.pathname);
     const showId = pathMatch?.[1];
     if (!showId) {
@@ -186,7 +190,7 @@ class MiruroAdapter implements Adapter {
           // only for switch exhaustiveness.
           return;
         case 'cursor_change':
-          // In-page navigation on cursor change lands in a later spec.
+          this.applyCursorChange(cmd.pageUrl);
           return;
       }
     });
@@ -224,6 +228,7 @@ class MiruroAdapter implements Adapter {
     const container = await this.waitForEpisodeList();
     if (this.destroyed || !container) return null;
 
+    this.attachEpisodeListClickHandler(container, showId);
     const entries = this.collectEpisodeEntries(container, showId);
     return entries.length > 0 ? entries : null;
   }
@@ -232,6 +237,11 @@ class MiruroAdapter implements Adapter {
     this.destroyed = true;
     this.cancelPendingObserver();
     this.cancelCatalogObserver();
+    if (this.cursorTriggerContainer && this.cursorTriggerHandler) {
+      this.cursorTriggerContainer.removeEventListener('click', this.cursorTriggerHandler);
+    }
+    this.cursorTriggerContainer = null;
+    this.cursorTriggerHandler = null;
     if (this.video) {
       for (const [evt, fn] of this.listeners) {
         this.video.removeEventListener(evt, fn);
@@ -239,6 +249,7 @@ class MiruroAdapter implements Adapter {
     }
     this.listeners = [];
     this.video = null;
+    this.ctx = null;
   }
 
   /**
@@ -365,6 +376,115 @@ class MiruroAdapter implements Adapter {
       clearTimeout(this.catalogTimer);
       this.catalogTimer = null;
     }
+  }
+
+  /**
+   * Apply an authoritative `cursor_change` command by replaying the
+   * user's own click path: find the episode button whose extracted
+   * `EP <n>` matches the target's `?ep=` parameter, then `.click()` it
+   * so miruro's SPA routing performs the navigation exactly as it does
+   * for a real user. The episode is matched on the parsed ep number,
+   * not on playlist order — owners can reorder the room's playlist
+   * freely, and the cursor still resolves to the right DOM element.
+   *
+   * Falls back to a full `location.href` navigation when:
+   * - we're already at the target URL (typical for the original sender,
+   *   whose SPA route updated before the broadcast came back);
+   * - the target URL parses to a different show (miruro's SPA only
+   *   handles in-show ep changes);
+   * - the episode list isn't in the DOM yet (cold page mid-hydration);
+   * - no button matches the target ep (paginated lists, season filters).
+   *
+   * The synthetic `.click()` is filtered out of the cursor-trigger
+   * listener via `Event.isTrusted` so we don't loop the broadcast back
+   * to the server as a fresh `CURSOR_CHANGE_REQUEST`.
+   *
+   * @param pageUrl The target page URL from the broadcast.
+   */
+  private applyCursorChange(pageUrl: string): void {
+    if (location.href === pageUrl) return;
+
+    let target: URL;
+    try {
+      target = new URL(pageUrl);
+    } catch {
+      return;
+    }
+
+    const targetShowId = PATH_RE.exec(target.pathname)?.[1];
+    const targetEpStr = target.searchParams.get('ep');
+    const currentShowId = PATH_RE.exec(location.pathname)?.[1];
+    if (!targetShowId || !targetEpStr || currentShowId !== targetShowId) {
+      location.href = pageUrl;
+      return;
+    }
+
+    const targetEp = parseInt(targetEpStr, 10);
+    if (!Number.isFinite(targetEp)) {
+      location.href = pageUrl;
+      return;
+    }
+
+    const container = document.querySelector(EPISODE_LIST_CONTAINER_SELECTOR);
+    if (!container) {
+      location.href = pageUrl;
+      return;
+    }
+
+    for (const btn of container.querySelectorAll<HTMLButtonElement>(EPISODE_LIST_ENTRY_SELECTOR)) {
+      if (this.extractEpisodeNumber(btn) === targetEp) {
+        btn.click();
+        return;
+      }
+    }
+
+    location.href = pageUrl;
+  }
+
+  /**
+   * Attach a single delegated `click` listener to the episode-list
+   * container so any episode button click — current or future — emits a
+   * cursor trigger. Listener is passive: it does NOT call
+   * `preventDefault`, so miruro's own SPA routing handles the local nav
+   * exactly as it always does. The background decides per current room
+   * mode whether to forward the trigger as a `CURSOR_CHANGE_REQUEST`,
+   * drop it, or soft-leave the room.
+   *
+   * Delegation on the container (rather than per-button listeners + a
+   * `WeakSet`) is robust against miruro re-rendering the list when the
+   * user changes seasons or scrolls — the container is the stable
+   * mount point, the inner buttons churn.
+   *
+   * @param container The `#episodes-list-container` element returned by
+   *   {@link waitForEpisodeList}.
+   * @param showId The slug extracted from `/watch/<showId>` in
+   *   {@link init}.
+   */
+  private attachEpisodeListClickHandler(container: Element, showId: string): void {
+    if (this.cursorTriggerHandler) return;
+    const handler = (ev: Event) => {
+      // Skip the synthetic clicks {@link applyCursorChange} dispatches to
+      // replay an authoritative cursor change in this tab — otherwise the
+      // broadcast would loop back to the server as a fresh
+      // `CURSOR_CHANGE_REQUEST`.
+      if (!ev.isTrusted) return;
+      const target = ev.target;
+      if (!(target instanceof Element)) return;
+      const button = target.closest<HTMLButtonElement>(EPISODE_LIST_ENTRY_SELECTOR);
+      if (!button || !container.contains(button)) return;
+      const ep = this.extractEpisodeNumber(button);
+      if (ep === null) return;
+      this.ctx?.emitCursorTrigger({
+        providerId: 'miruro',
+        videoId: `${showId}-ep${ep}`,
+        pageUrl: `${location.origin}/watch/${showId}?ep=${ep}`,
+        episodeNumber: ep,
+        label: button.title.trim() || null,
+      });
+    };
+    container.addEventListener('click', handler);
+    this.cursorTriggerContainer = container;
+    this.cursorTriggerHandler = handler;
   }
 
   /**

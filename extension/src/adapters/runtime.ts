@@ -85,6 +85,14 @@ export interface RuntimeBridge {
 	 * once per adapter lifetime, after activation.
 	 */
 	sendCatalog(adapterId: string, catalog: VideoRefWithMeta[] | null): void
+	/**
+	 * Forward a user-initiated cursor trigger emitted by the adapter when
+	 * the user clicks an in-page navigation control (e.g. an episode
+	 * button). The background decides per current room mode whether to
+	 * issue a `CURSOR_CHANGE_REQUEST`, drop the trigger, or soft-leave the
+	 * room — the runtime stays mode-unaware.
+	 */
+	sendCursorTrigger(adapterId: string, target: VideoRefWithMeta): void
 }
 
 type RuntimeState =
@@ -256,6 +264,9 @@ function buildContext(adapterId: string): AdapterContext {
 	return {
 		emitIntent(intent) {
 			bridge?.sendIntent(adapterId, intent)
+		},
+		emitCursorTrigger(target) {
+			bridge?.sendCursorTrigger(adapterId, target)
 		},
 		onCommand(handler) {
 			pendingHandler = handler
