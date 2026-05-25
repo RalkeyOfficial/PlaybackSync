@@ -64,6 +64,7 @@ Close reasons that *stop* the reconnect loop (the daemon already told us "don't 
 |------|---------|
 | `ROOM_NOT_FOUND` | UUID in the URL doesn't match a room |
 | `ROOM_EXPIRED` | Room past its TTL |
+| `ROOM_DELETED` | Room was deleted by its owner |
 | `AUTH_FAILED` | Wrong password |
 | `KICKED` | Owner kicked this client |
 | `CLIENT_ID_IN_USE` | Another live connection holds our clientId |

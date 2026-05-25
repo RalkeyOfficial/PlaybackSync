@@ -302,7 +302,7 @@ curl -u alice:alice \
 DELETE /apps/playbacksync/api/v1/rooms/{uuid}
 ```
 
-Permanently deletes the room. There is no soft-delete or undo; the row is gone immediately. The WebSocket sync server is not signalled by this call — connected clients will fail their next heartbeat (because the room is gone) and reconnect attempts will get `ROOM_NOT_FOUND`. To disconnect a single participant without deleting the room, use the kick endpoint below.
+Permanently deletes the room. There is no soft-delete or undo; the row is gone immediately. After the DB delete, `RoomService` fires a best-effort `POST /admin/rooms/{uuid}/destroy` to the daemon's loopback admin endpoint — every connected client receives a final `{type:"ERROR", code:"ROOM_DELETED"}` frame, the socket is closed, and the in-memory runtime is dropped. The call is fire-and-forget: if the daemon is unreachable, the DB remains the source of truth and any orphaned runtime falls out via `Tick`'s TTL path. To disconnect a single participant without deleting the room, use the kick endpoint below.
 
 #### Path parameters
 

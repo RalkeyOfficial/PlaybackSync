@@ -538,6 +538,7 @@ GET  /admin/rooms/presence?uuids=<csv>
 POST /admin/rooms/{uuid}/playback
 POST /admin/rooms/{uuid}/broadcast
 POST /admin/rooms/{uuid}/clients/{clientId}/disconnect
+POST /admin/rooms/{uuid}/destroy
 GET  /admin/rooms/{uuid}/events/stream
 GET  /admin/events/stream
 POST /admin/events
@@ -593,6 +594,12 @@ Triggered by the Nextcloud PHP layer after a DB write (playlist add/remove via d
 `kind` ∈ `cursor_change` / `playlist_update` / `room_state`. `userId` is the Nextcloud owner, forwarded to the event log envelope. The daemon's runtime is re-read from the DB; the appropriate broadcast goes to every connected client.
 
 Returns `200 {"result":"broadcast"}` on success, or `200 {"result":"no_runtime"}` when no client is connected (next JOIN re-hydrates from DB anyway).
+
+### `POST /admin/rooms/{uuid}/destroy`
+
+Fired by `RoomService::deleteOwnedRoom` after the DB row has been removed. Mirrors the `Tick` `ROOM_EXPIRED` close path: every connected client receives a final `{type:"ERROR", code:"ROOM_DELETED"}` frame, the socket is closed, and `RoomRegistry::remove` drops the runtime. No request body. Returns `200 {"result":"destroyed"}` on success, `404 {"error":"room_not_found"}` when no live runtime existed (no clients had joined yet — nothing to do).
+
+The PHP client (`AdminRoomDestroyClient`) is fire-and-forget: it swallows transport failures and the 404 because the DB is the source of truth, and any orphaned runtime would eventually fall out via `Tick`'s TTL path.
 
 ### `POST /admin/rooms/{uuid}/playback`, `POST .../clients/.../disconnect`, `GET .../events/stream`, `GET /admin/events/stream`, `POST /admin/events`, `GET /healthz`
 

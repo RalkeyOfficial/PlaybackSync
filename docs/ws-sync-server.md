@@ -242,12 +242,13 @@ Daemon-level options (`--host`, `--port`) override the corresponding app-config 
 
 ### Admin HTTP setup
 
-The PHP-side rooms API talks to the daemon over a small HMAC-signed HTTP endpoint co-located with the WebSocket server. Four routes today:
+The PHP-side rooms API talks to the daemon over a small HMAC-signed HTTP endpoint co-located with the WebSocket server. Five routes today:
 
 - `GET  /healthz` — daemon liveness + light stats. **Unauthenticated**: loopback-only, no sensitive data in the response. Single-path carve-out before HMAC verification, audited with an explicit `if` rather than a general allowlist.
 - `GET  /admin/rooms/presence?uuids=<csv>` — point-in-time presence map for the rooms list / detail view.
 - `POST /admin/rooms/{uuid}/clients/{clientId}/disconnect` — owner-initiated kick. Sends the targeted client a final `{type:"ERROR", code:"KICKED"}` frame, closes the socket, and records a per-room reconnect block of `ws_kick_block_ms`.
 - `POST /admin/rooms/{uuid}/playback` — owner-initiated playback command. JSON body `{action: "play"|"pause"|"seek"|"reset", videoPos?: number}`. The daemon drives the same `PlaybackState::applyPlay/applyPause/applySeek` calls as a peer client's `EVENT` frame, appends to the event log so reconnecting clients replay the change, and broadcasts a `STATE` frame to every connection in the room. Returns 404 if no client has joined the room yet (no in-memory runtime to mutate), which the PHP controller maps to a 409 the dashboard renders as "no clients are connected".
+- `POST /admin/rooms/{uuid}/destroy` — owner-initiated room delete. Fired after `RoomService::deleteOwnedRoom` removes the DB row; mirrors the `Tick` `ROOM_EXPIRED` close path — final `{type:"ERROR", code:"ROOM_DELETED"}` frame per client, socket close, runtime drop. Fire-and-forget on the PHP side: transport failures and the 404 ("no live runtime") are both swallowed because the DB is the source of truth and `Tick`'s TTL sweep eventually catches any orphan.
 
 The shared secret (`ws_admin_secret`) is **seeded automatically** by a repair step on `occ app:enable` and on every `occ upgrade`, so operators don't normally need to touch it.
 
