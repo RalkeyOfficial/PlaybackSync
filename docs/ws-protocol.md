@@ -447,6 +447,7 @@ Suppressed entirely while the client is `buffering` and during the
 | `JOIN_TIMEOUT` | No JOIN within 5 s | yes |
 | `ROOM_NOT_FOUND` | URL UUID doesn't match a room | yes |
 | `ROOM_EXPIRED` | Room is past its TTL | yes |
+| `ROOM_DELETED` | Room was deleted by its owner | yes |
 | `AUTH_FAILED` | Wrong password | yes |
 | `CLIENT_ID_IN_USE` | A live connection already holds this `clientId` | yes |
 | `KICKED` | Room owner forcibly disconnected this client | yes |

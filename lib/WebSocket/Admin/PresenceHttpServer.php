@@ -42,6 +42,7 @@ class PresenceHttpServer implements HttpServerInterface {
 	private const PLAYBACK_PATTERN = '#^/admin/rooms/(?P<uuid>[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/playback$#';
 	private const BROADCAST_PATTERN = '#^/admin/rooms/(?P<uuid>[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/broadcast$#';
 	private const EVENTS_STREAM_PATTERN = '#^/admin/rooms/(?P<uuid>[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/events/stream$#';
+	private const DESTROY_PATTERN = '#^/admin/rooms/(?P<uuid>[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/destroy$#';
 
 	private ?HealthController $healthController = null;
 
@@ -53,6 +54,7 @@ class PresenceHttpServer implements HttpServerInterface {
 		private readonly RoomBroadcastController $broadcastController,
 		private readonly EventStreamController $eventStreamController,
 		private readonly EventIngestController $eventIngestController,
+		private readonly RoomDestroyController $destroyController,
 		private readonly LoggerInterface $logger,
 	) {
 	}
@@ -117,6 +119,15 @@ class PresenceHttpServer implements HttpServerInterface {
 					KickController::RESULT_KICKED => $this->respond($conn, 200, ['result' => 'kicked']),
 					KickController::RESULT_ROOM_NOT_FOUND => $this->respond($conn, 404, ['error' => 'room_not_found']),
 					KickController::RESULT_CLIENT_NOT_FOUND => $this->respond($conn, 404, ['error' => 'client_not_found']),
+				};
+				return;
+			}
+
+			if ($method === 'POST' && preg_match(self::DESTROY_PATTERN, strtolower($path), $m) === 1) {
+				$result = $this->destroyController->destroy($m['uuid'], $nowMs);
+				match ($result) {
+					RoomDestroyController::RESULT_DESTROYED => $this->respond($conn, 200, ['result' => 'destroyed']),
+					RoomDestroyController::RESULT_ROOM_NOT_FOUND => $this->respond($conn, 404, ['error' => 'room_not_found']),
 				};
 				return;
 			}
@@ -201,6 +212,7 @@ class PresenceHttpServer implements HttpServerInterface {
 				|| preg_match(self::PLAYBACK_PATTERN, strtolower($path)) === 1
 				|| preg_match(self::BROADCAST_PATTERN, strtolower($path)) === 1
 				|| preg_match(self::EVENTS_STREAM_PATTERN, strtolower($path)) === 1
+				|| preg_match(self::DESTROY_PATTERN, strtolower($path)) === 1
 				|| $path === self::ROUTE
 				|| $path === self::GLOBAL_EVENTS_STREAM_ROUTE
 				|| $path === self::EVENTS_INGEST_ROUTE

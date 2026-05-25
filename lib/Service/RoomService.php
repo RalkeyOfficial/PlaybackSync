@@ -37,6 +37,7 @@ class RoomService {
 		private AdminKickClient $adminKickClient,
 		private AdminPlaybackClient $adminPlaybackClient,
 		private AdminEventClient $adminEventClient,
+		private AdminRoomDestroyClient $adminRoomDestroyClient,
 	) {
 	}
 
@@ -190,6 +191,10 @@ class RoomService {
 	public function deleteOwnedRoom(string $userId, string $uuid): void {
 		$room = $this->getOwnedRoom($userId, $uuid);
 		$this->mapper->delete($room);
+		// Tell the daemon to drop the live runtime and close any connected
+		// sockets. Best-effort: the DB is the source of truth, and any
+		// orphaned runtime will eventually fall out via `Tick`'s TTL path.
+		$this->adminRoomDestroyClient->destroy($room->getUuid());
 		$this->adminEventClient->record(
 			'room_deleted',
 			'lifecycle',

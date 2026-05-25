@@ -47,9 +47,35 @@ const lastPlayerStateByTab = new Map<number, 'playing' | 'paused' | 'buffering'>
 const wsCallbacks: WsCallbacks = {
 	dispatchCommand: (tabId, cmd) => dispatchCommand(tabId, cmd),
 	onTerminal: (reason, code) => {
+		// Terminal codes (ROOM_NOT_FOUND, ROOM_EXPIRED, ROOM_DELETED, KICKED,
+		// AUTH_FAILED, CLIENT_ID_IN_USE) all mean the stored credentials are
+		// dead — no reconnect can succeed, so wipe them now rather than
+		// re-attempting on the next service-worker boot.
 		console.error('[playbacksync:bg] terminal close', { reason, code })
+		void tearDownSession()
 	},
 	onLifecycleChange: () => recomputeActiveIcon(),
+}
+
+/**
+ * Wipe persisted credentials, reset session-level identity, and clear the
+ * popup mirror. Shared between the owner-driven `leave_room` flow and the
+ * server-driven terminal-close flow so the two can't drift on what counts
+ * as "this session is over".
+ *
+ * Does not call `disconnect()` — callers that need it (e.g. `leave_room`)
+ * invoke `disconnect()` themselves first; terminal closes have already
+ * torn the socket down by the time `onTerminal` fires.
+ */
+async function tearDownSession(): Promise<void> {
+	await clearCreds()
+	session.clientId = null
+	session.lastEventId = 0
+	session.cursor = null
+	session.playlist = []
+	session.playlistVersion = null
+	resetConvergence(session)
+	setPopupCreds(null)
 }
 
 /**
@@ -238,17 +264,7 @@ async function handlePopupMessage(msg: PopupToBackground): Promise<void> {
 		case 'leave_room': {
 			console.log('[playbacksync:bg] popup requested leave_room')
 			disconnect()
-			await clearCreds()
-			// Also reset session-level identity so a subsequent
-			// share-URL pickup against a different room can't accidentally
-			// JOIN with a stale clientId.
-			session.clientId = null
-			session.lastEventId = 0
-			session.cursor = null
-			session.playlist = []
-			session.playlistVersion = null
-			resetConvergence(session)
-			setPopupCreds(null)
+			await tearDownSession()
 			return
 		}
 	}

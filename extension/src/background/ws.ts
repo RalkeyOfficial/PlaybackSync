@@ -50,6 +50,7 @@ import type { AuthoritativeCommand } from '@/src/adapters/types'
 const TERMINAL_ERROR_CODES = new Set([
 	'ROOM_NOT_FOUND',
 	'ROOM_EXPIRED',
+	'ROOM_DELETED',
 	'AUTH_FAILED',
 	'KICKED',
 	'CLIENT_ID_IN_USE',
@@ -275,7 +276,14 @@ function handleFrame(r: WsRuntime, frame: InboundFrame): void {
 		case 'ERROR':
 			log('warn', 'server ERROR frame', { code: frame.code, message: frame.message })
 			if (TERMINAL_ERROR_CODES.has(frame.code)) {
+				// Mark terminated synchronously: the daemon sends ERROR
+				// immediately before closing the socket, and without this the
+				// subsequent close-event would fall through to the reconnect
+				// path because `ev.reason` is typically empty on a server-
+				// initiated close.
+				r.terminated = true
 				r.cb.onTerminal(frame.message, frame.code)
+				runtime = null
 			}
 			return
 	}

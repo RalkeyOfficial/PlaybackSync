@@ -10,6 +10,7 @@ use OCA\PlaybackSync\Db\RoomMapper;
 use OCA\PlaybackSync\Service\AdminEventClient;
 use OCA\PlaybackSync\Service\AdminKickClient;
 use OCA\PlaybackSync\Service\AdminPlaybackClient;
+use OCA\PlaybackSync\Service\AdminRoomDestroyClient;
 use OCA\PlaybackSync\Service\Exceptions\ClientNotFoundException;
 use OCA\PlaybackSync\Service\Exceptions\CreateRestrictedException;
 use OCA\PlaybackSync\Service\Exceptions\InvalidRoomInputException;
@@ -37,6 +38,7 @@ class RoomServiceTest extends TestCase {
 	private AdminKickClient&MockObject $adminKickClient;
 	private AdminPlaybackClient&MockObject $adminPlaybackClient;
 	private AdminEventClient&MockObject $adminEventClient;
+	private AdminRoomDestroyClient&MockObject $adminRoomDestroyClient;
 	private RoomService $service;
 
 	private const FIXED_TIME_S = 1_700_000_000;
@@ -52,6 +54,7 @@ class RoomServiceTest extends TestCase {
 		$this->adminKickClient = $this->createMock(AdminKickClient::class);
 		$this->adminPlaybackClient = $this->createMock(AdminPlaybackClient::class);
 		$this->adminEventClient = $this->createMock(AdminEventClient::class);
+		$this->adminRoomDestroyClient = $this->createMock(AdminRoomDestroyClient::class);
 
 		$this->timeFactory->method('getTime')->willReturn(self::FIXED_TIME_S);
 
@@ -79,6 +82,7 @@ class RoomServiceTest extends TestCase {
 			$this->adminKickClient,
 			$this->adminPlaybackClient,
 			$this->adminEventClient,
+			$this->adminRoomDestroyClient,
 		);
 	}
 
@@ -473,6 +477,9 @@ class RoomServiceTest extends TestCase {
 		$room = $this->makeRoom('alice', expiresInSeconds: 3600);
 		$this->mapper->method('findByUuid')->willReturn($room);
 		$this->mapper->expects($this->once())->method('delete')->with($room);
+		$this->adminRoomDestroyClient->expects($this->once())
+			->method('destroy')
+			->with($room->getUuid());
 
 		$this->service->deleteOwnedRoom('alice', 'uuid-1');
 	}
@@ -486,6 +493,7 @@ class RoomServiceTest extends TestCase {
 		$room = $this->makeRoom('bob', expiresInSeconds: 3600);
 		$this->mapper->method('findByUuid')->willReturn($room);
 		$this->mapper->expects($this->never())->method('delete');
+		$this->adminRoomDestroyClient->expects($this->never())->method('destroy');
 
 		$this->expectException(RoomNotFoundException::class);
 		$this->service->deleteOwnedRoom('alice', 'uuid-1');
@@ -619,6 +627,7 @@ class RoomServiceTest extends TestCase {
 			$this->adminKickClient,
 			$this->adminPlaybackClient,
 			$this->adminEventClient,
+			$this->adminRoomDestroyClient,
 		);
 	}
 
