@@ -50,8 +50,11 @@ const wsCallbacks: WsCallbacks = {
 		// Terminal codes (ROOM_NOT_FOUND, ROOM_EXPIRED, ROOM_DELETED, KICKED,
 		// AUTH_FAILED, CLIENT_ID_IN_USE) all mean the stored credentials are
 		// dead — no reconnect can succeed, so wipe them now rather than
-		// re-attempting on the next service-worker boot.
-		console.error('[playbacksync:bg] terminal close', { reason, code })
+		// re-attempting on the next service-worker boot. Logged at `warn`
+		// (not `error`) because these are expected protocol outcomes; in
+		// MV3, any `console.error` from a service worker is surfaced on the
+		// browser's extension-management page as a red error notification.
+		console.warn('[playbacksync:bg] terminal close', { reason, code })
 		void tearDownSession()
 	},
 	onLifecycleChange: () => recomputeActiveIcon(),

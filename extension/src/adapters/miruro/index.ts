@@ -59,7 +59,7 @@ const LOAD_BUTTON_SETTLE_MS = 300;
  * listener wiring — the user can press play themselves, and the room's
  * authoritative state will reconcile.
  */
-const LOAD_TIMEOUT_MS = 5_000;
+const LOAD_TIMEOUT_MS = 3_000;
 
 /**
  * Adapter for the miruro family of streaming sites (`miruro.tv` / `.to` /
