@@ -37,6 +37,7 @@ The runtime hands you a context in `init`. It's the only way to communicate outw
 ```ts
 interface AdapterContext {
   emitIntent(intent: LocalIntent): void
+  emitCursorTrigger(target: VideoRefWithMeta): void
   onCommand(handler: (cmd: AuthoritativeCommand) => void): void
   setIdentity(identity: ContentIdentity): void
   fail(reason: string): void
@@ -45,6 +46,7 @@ interface AdapterContext {
 ```
 
 - **`emitIntent(...)`** — call when the user does something to the video. The runtime forwards it to the background, which (after suppression filtering) sends a wire `EVENT`. Don't call this when *you* changed the playhead in response to a `command` — that would be a feedback loop.
+- **`emitCursorTrigger(target)`** — call when the user clicks an in-page navigation control (e.g. an episode button) and the page is about to move to a different `VideoRef`. Call passively — **do not `preventDefault`**; the host page's own routing handles the local nav, we just piggyback the announcement. The background decides per the current room's mode + playlist whether to send `CURSOR_CHANGE_REQUEST`, drop the trigger, or soft-leave the room (see [`protocol-client.md`](protocol-client.md#viewer-driven-cursor-changes)). The adapter stays mode-unaware. Filter on `Event.isTrusted` so synthetic clicks dispatched by your own `cursor_change` command handler don't loop back.
 - **`onCommand(handler)`** — register exactly one handler. Calling it again replaces the previous handler. The handler must apply commands **verbatim** — no interpretation, no transformation. `play` means `video.play()`, full stop.
 - **`setIdentity(identity)`** — call once, after you've found the video and parsed the URL. See "Strict content identity" below.
 - **`fail(reason)`** — non-fatal-to-the-extension, but fatal-to-the-adapter. The runtime stops the activation, the page becomes silent, and the user sees nothing. Use this when the page looks supportable but actually isn't (video element missing, identity unparseable). Don't use it for "this URL isn't ours" — that's what `canHandlePage` is for.
@@ -120,7 +122,7 @@ The three `playerState` values map directly to the wire field:
 3. **Write `canHandlePage`.** Just URL inspection. Return true on the URLs you fully support; everything else returns false.
 4. **In `init`**: find the video element. If it's absent on the URLs `canHandlePage` matched, call `ctx.fail(...)` rather than waiting for it — the page is shaped differently than you expected.
 5. **Attach listeners.** `play`, `pause`, `seeking` on the video element. Each handler builds a `LocalIntent` with the current `video.currentTime` and calls `ctx.emitIntent`.
-6. **Register the command handler.** Inside `ctx.onCommand`, switch on `cmd.type` and apply verbatim. `nudge_rate` is a no-op (the runtime handled it before it got here); `cursor_change` is a no-op until the navigation-on-cursor-change spec lands.
+6. **Register the command handler.** Inside `ctx.onCommand`, switch on `cmd.type` and apply verbatim. `nudge_rate` is a no-op (the runtime handled it before it got here). For `cursor_change` you need to drive the page to `cmd.pageUrl` however the site does it — synthetically clicking the matching DOM control where the site's own routing handles the rest (see the miruro adapter for a working example), with a fallback to `location.href` when an in-page click can't be matched. If your site has no usable in-page nav control, a `location.href` assignment is a perfectly fine default.
 7. **Implement `setPlaybackRate`.** One line: `if (this.video) this.video.playbackRate = rate`. The runtime calls it with the nudge clamp and again with `1` to restore.
 8. **Set identity.** Parse `location.pathname` (and maybe query params) into `{ providerId, videoId, normalizedUrl }`. Be strict — if you can't, `ctx.fail`.
 9. **Implement `getState`.** Mirror the template's shape: `paused → 'paused'`, `!paused && readyState < 3 → 'buffering'`, otherwise `'playing'`.

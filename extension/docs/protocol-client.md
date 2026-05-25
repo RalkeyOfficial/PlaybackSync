@@ -139,7 +139,9 @@ The flag flips via `markConverged(session)`, called from `dispatchToOwner` immed
 
 ### 3. Post-convergence settle window
 
-The page's auto-resume logic can also fire *after* the adapter has applied the room's first command — sometimes a second or two later, well outside the 600 ms echo window. `JOIN_SETTLE_WINDOW_MS` (1000 ms) is armed exactly once per connection by `markConverged`, which writes `settleUntil = Date.now() + JOIN_SETTLE_WINDOW_MS`; `inSettleWindow(session)` drops any intent from that tab while `Date.now() < settleUntil` (logged as `dropping settle-window intent`), then clears the field. The "first convergence only" rule is deliberate — re-arming on every STATE-driven re-dispatch would keep re-locking the user out of their own intents mid-session.
+The page's auto-resume logic can also fire *after* the adapter has applied the room's first command — sometimes a second or two later, well outside the 600 ms echo window. `JOIN_SETTLE_WINDOW_MS` (1000 ms) is armed by `markConverged`, which writes `settleUntil = Date.now() + JOIN_SETTLE_WINDOW_MS`; `inSettleWindow(session)` drops any intent from that tab while `Date.now() < settleUntil` (logged as `dropping settle-window intent`), then clears the field.
+
+The window is armed at two points: once per connection (after the initial JOIN converges), and again on every inbound `CURSOR_CHANGE` — the latter handled by `resetConvergence` on the `CURSOR_CHANGE` arm of `handleFrame`, so the next `markConverged` triggered by the post-cursor-change dispatch re-arms a fresh settle window. This covers sites (miruro is the primary case) that auto-restore the viewer's last position on the new episode shortly after the source loads — without the re-arm, the adapter would observe that as a real `seeking` event and ship it to the room. The window is *not* armed on every STATE-driven re-dispatch — that would keep re-locking the user out of their own intents mid-session.
 
 ### Reset on (re)connection
 
@@ -155,5 +157,19 @@ The content runtime polls `adapter.getState()` every 1 s and pushes a `status` m
 
 ## What's deliberately not implemented yet
 
-- **`CURSOR_CHANGE_REQUEST` from the extension** — the encoder type is in `protocol.ts` but no caller fires it. Needs UI to trigger.
-- **`PLAYLIST_UPDATE` from the extension** — same; encoder ready, no scraping path beyond the first-JOIN `catalogFragment`.
+- **`PLAYLIST_UPDATE` from the extension** — encoder ready, no scraping path beyond the first-JOIN `catalogFragment`.
+
+## Viewer-driven cursor changes
+
+`CURSOR_CHANGE_REQUEST` is wired up via adapter-emitted **cursor triggers**. When an adapter observes the user clicking an in-page navigation control (e.g. a miruro episode button) it calls `ctx.emitCursorTrigger(target)` with the destination `VideoRefWithMeta`; the runtime forwards a `cursor_trigger` envelope to the background, which arbitrates per the current room's mode:
+
+| Mode | Target in playlist? | Background action |
+|---|---|---|
+| `default` | yes | Send `CURSOR_CHANGE_REQUEST` (videoRef form) |
+| `default` | no | **Soft-leave** the room |
+| `single` | any | **Soft-leave** the room |
+| `freeform` | any | Drop silently (deferred to a future `PLAYLIST_UPDATE` spec) |
+
+Soft-leave tears down the per-tab WS runtime but leaves the `pbsync.tab.<tabId>` creds slot intact so the popup can offer a one-click Rejoin alongside Leave Room (see [`popup.md`](popup.md)). A `softLeftTabs` gate suppresses the content runtime's status heartbeat from auto-reconnecting through `ensureConnected` while the tab is soft-left — otherwise the room would churn through join/leave cycles every second.
+
+On the receiver side, the incoming `CURSOR_CHANGE` is dispatched to the adapter as an `AuthoritativeCommand` of type `cursor_change`; per-adapter logic decides how to navigate (see the [adapter contract](adapter-contract.md) and [`adapter-miruro.md`](adapter-miruro.md) for the synthetic-click approach used on miruro). The runtime re-arms the join settle window on every `CURSOR_CHANGE` so the site's auto-resume seek on the new ep is dropped, mirroring the JOIN-time auto-resume handling.

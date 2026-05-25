@@ -17,7 +17,7 @@ The popup is scoped to a single tab: on connect it derives the active tab via `c
 | `no_credentials` | No creds in this tab's `pbsync.tab.<tabId>` slot | Header + grey "No room" pill + guidance copy ("Open a share link…") |
 | `connecting` | Creds present, socket opening or `ROOM_STATE` not yet received | Amber "Connecting" pill + "Connecting to `<host>`…" copy |
 | `joined` | `ROOM_STATE` applied; `clientId` is set | Green "Joined" pill + cursor block (provider · label, page URL link) + mode chip + Leave Room button |
-| `disconnected` | Creds present, socket dropped (reconnect-pending or terminal) | Red "Offline" pill + "Connection lost. Trying to reconnect…" copy + Leave Room button |
+| `disconnected` | Creds present, socket dropped (reconnect-pending, terminal, or soft-left by background) | Red "Offline" pill + "Disconnected from the room. Press Rejoin to reconnect, or Leave room to discard the credentials." copy + **Rejoin Room** + Leave Room buttons |
 
 The cursor block reads:
 
@@ -55,7 +55,8 @@ Two typed envelopes live in [`src/messages.ts`](../src/messages.ts):
 | kind | payload | when |
 |------|---------|------|
 | `subscribe` | `tabId: number` | First envelope after `connect()` — binds the port to a tab |
-| `leave_room` | `tabId: number` | User clicked Leave Room |
+| `leave_room` | `tabId: number` | User clicked Leave Room (hard leave — wipes creds) |
+| `rejoin_room` | `tabId: number` | User clicked Rejoin Room from the `disconnected` view — re-establishes the WS runtime using the still-stored creds |
 
 **Background → Popup** (`BackgroundToPopup`):
 
@@ -125,7 +126,9 @@ Frames that **don't** trigger a broadcast:
 ## Leave Room semantics
 
 The wire protocol has no LEAVE frame. "Leave" is a purely client-side
-operation, scoped to the popup's bound tab:
+operation, scoped to the popup's bound tab. Two variants exist:
+
+### Hard leave (user-driven, via Leave Room)
 
 1. Popup posts `{ kind: 'leave_room', tabId }` on the port.
 2. Background calls `disconnect(tabId)` — closes that tab's socket with
@@ -140,6 +143,32 @@ operation, scoped to the popup's bound tab:
 The popup re-renders to the no-creds view; it does not close itself.
 Other tabs' runtimes are untouched.
 
+### Soft leave (background-driven, via cursor-trigger arbitration)
+
+When the user clicks an in-page navigation control (e.g. an episode
+button) and the background decides the click can't be honoured (default
+mode + target not in playlist, or single mode + any click — see
+[`protocol-client.md`](protocol-client.md#viewer-driven-cursor-changes)),
+the room is soft-left:
+
+1. Background tears down the WS runtime for that tab (close socket,
+   stop timers, drop pool entry — same as the hard path).
+2. The `pbsync.tab.<tabId>` storage slot is **left intact**.
+3. A fresh snapshot with `status: 'disconnected'` is pushed to any port
+   bound to that tab; the popup renders the disconnected view with both
+   the **Rejoin Room** and Leave Room buttons.
+4. The tab is added to a `softLeftTabs` gate that suppresses the
+   content runtime's 1 Hz status heartbeat from auto-reconnecting
+   through `ensureConnected`. Without this gate the heartbeat would
+   re-arm the WS runtime within a second of the soft-leave and the room
+   would churn through join/leave cycles.
+
+Clicking **Rejoin Room** posts `{ kind: 'rejoin_room', tabId }` on the
+port. The background reads the still-stored creds, clears the
+`softLeftTabs` entry, and re-runs the standard connect path —
+equivalent to opening a fresh share link except no credential prompt is
+involved.
+
 ## Optimistic UI
 
 The Leave Room button transitions to a disabled "Leaving…" state the
@@ -148,6 +177,11 @@ arrive. The push (typically within a few ms) replaces the entire view
 with the real no-creds state. The optimistic transition exists so
 that if the user clicks twice it doesn't fire two `leave_room`
 messages.
+
+The Rejoin Room button follows the same pattern: clicking it disables
+the button and swaps the label to "Rejoining…" until the next snapshot
+push lands — typically the `connecting` snapshot that the background
+emits the moment it re-opens the WS.
 
 ## Cross-browser packaging
 

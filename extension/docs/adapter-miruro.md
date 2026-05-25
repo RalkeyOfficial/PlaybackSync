@@ -101,6 +101,39 @@ Multi-season shows render a separate season picker (`#root > … > ._seasonCardG
 
 The miruro UI navigates between episodes via `history.pushState` (URL changes from `?ep=4` to `?ep=5` with no full reload). The runtime's `installNavigationListeners` ([`runtime.ts:184-207`](../src/adapters/runtime.ts#L184-L207)) catches this and calls `destroy()` + re-evaluates the registry. The adapter therefore re-binds to the new episode automatically; no in-adapter SPA handling is needed.
 
+## Viewer-driven cursor changes
+
+The adapter both **announces** the user's episode-list clicks toward the room and **applies** authoritative `cursor_change` commands by replaying a click on the matching button. See [`adapter-contract.md` §The `AdapterContext` bridge](adapter-contract.md#the-adaptercontext-bridge) and [`protocol-client.md` §Viewer-driven cursor changes](protocol-client.md#viewer-driven-cursor-changes) for the cross-cutting flow.
+
+### Sender path (announce)
+
+The adapter attaches one **delegated, passive** `click` listener on `#episodes-list-container` rather than per-button listeners — robust against miruro re-rendering the inner buttons, no per-button bookkeeping. The handler:
+
+1. Filters on `Event.isTrusted` so synthetic clicks dispatched by the receiver path (below) don't loop back to the server.
+2. Resolves the clicked `button[data-episode-id]` via `closest()`.
+3. Parses the ep number from the button's `title` attribute via `EPISODE_TITLE_RE`.
+4. Builds a `VideoRefWithMeta` in the same shape `scrapeCatalog` produces (full `pageUrl`, `videoId = ${showId}-ep${ep}`, `episodeNumber`, `label`).
+5. Calls `ctx.emitCursorTrigger(target)`.
+
+The listener never calls `preventDefault` — miruro's own SPA routing handles the local nav; we just piggyback the announcement. `destroy()` removes the delegated listener.
+
+### Receiver path (apply)
+
+The `cursor_change` arm of `onCommand` calls `applyCursorChange(pageUrl)`:
+
+1. Parse the target URL. Extract `?ep=`.
+2. Find the in-page `button[data-episode-id]` whose parsed `EP <n>` matches. **Match is by parsed ep number, not by playlist order** — owners can reorder the room's playlist freely without affecting which DOM element gets clicked.
+3. Synthetically `.click()` the button — miruro's SPA routing fires exactly as for a real click. The `Event.isTrusted === false` filter on the sender path keeps the replay from being announced back to the server.
+
+Fall back to a full `location.href` navigation when:
+
+- we're already at the target URL (typical for the original sender, whose SPA route updated before the broadcast came back),
+- the target URL parses to a different show (miruro's SPA only handles in-show ep changes),
+- the episode list isn't in the DOM yet (cold page mid-hydration),
+- no button matches the target ep (paginated lists, season filters).
+
+The runtime re-arms the join settle window on every `CURSOR_CHANGE` so miruro's auto-resume seek on the new ep is dropped, mirroring the JOIN-time auto-resume handling already in place.
+
 ## Out of scope
 
 - Cross-origin iframe support — miruro's player is top-level, so this isn't needed.

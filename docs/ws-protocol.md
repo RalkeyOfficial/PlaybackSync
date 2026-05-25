@@ -110,8 +110,11 @@ After authenticating the joiner and merging any `catalogFragment`, the
 server compares `currentlyShowing` against the room's cursor and decides
 whether to unicast a `CURSOR_CHANGE` back to that connection so the
 extension can navigate the tab to the right video. The new client always
-receives `ROOM_STATE` first; steering, when it happens, follows
-immediately.
+receives `ROOM_STATE` first; whenever the room's playlist is non-empty a
+unicast `PLAYLIST_UPDATE` follows immediately (so the joiner can resolve
+`CURSOR_CHANGE_REQUEST` targets against the room's known set before any
+subsequent mutation — `ROOM_STATE` itself only carries `playlistVersion`,
+not the entries); steering, when it happens, follows that.
 
 | Mode | Joiner state | Server action |
 |---|---|---|
@@ -475,6 +478,7 @@ Client                                  Server
   |--JOIN{password, currentlyShowing, catalogFragment[ep 1-4]}-->|
   |   (server merges fragment, sets cursor=ep3 from currentlyShowing)
   |<-ROOM_STATE{clientId, cursor=ep3, playlistVersion, ...}--|   (save clientId)
+  |<-PLAYLIST_UPDATE{entries:[ep1..ep4]}-------------------|   (only when playlist is non-empty)
   |   (no steer — currentlyShowing matched the seeded cursor)
   |--CLOCK_PING-------------------------->|
   |<-CLOCK_PONG--------------------------|
@@ -492,6 +496,7 @@ Client                                  Server
   |--JOIN{password, currentlyShowing=ep1}-->|
   |   (cursor is on ep3 — mismatch)
   |<-ROOM_STATE{cursor=ep3, ...}-----------|
+  |<-PLAYLIST_UPDATE{entries:[...]}--------|   (only when playlist is non-empty)
   |<-CURSOR_CHANGE{cursor=ep3}-------------|   (unicast, not broadcast)
   |   (extension navigates the tab to ep3)
 ```
