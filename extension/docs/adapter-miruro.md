@@ -53,6 +53,11 @@ button.dispatchEvent(new KeyboardEvent('keydown', eventInit))
 button.dispatchEvent(new KeyboardEvent('keyup', eventInit))
 ```
 
+Two timing quirks sit around the dispatch:
+
+1. **Button appears after the `<video>`.** Vidstack's layout overlay lands a few frames after the `<video>` itself, so a synchronous lookup right after `waitForVideo` resolves is racy. `waitForLoadButton` re-observes `document.body` for up to `LOAD_BUTTON_WAIT_TIMEOUT_MS` (5 s), and short-circuits via the video's `loadstart` event so a page that loads its source on its own (refresh, second activation, server-side hydration) doesn't wait the full timeout. Returns `null` on timeout, in which case the adapter logs and lets the user start playback manually.
+2. **Click handler wires up after the button mounts.** Vidstack inserts the button into the DOM *before* its click handler is fully attached — the responsive-layout pass + capability detection settle a few hundred ms later. Dispatching immediately reaches a no-op handler, so the adapter waits `LOAD_BUTTON_SETTLE_MS` (300 ms, verified empirically) after the button appears before firing the synthesized keys.
+
 After `loadedmetadata` arrives (5 s timeout), the adapter immediately `video.pause()`s. Vidstack auto-plays on load; pausing pre-empts that so the room's first authoritative command wins without a race. If the source is already populated (refresh, second activation), the trigger is a no-op.
 
 ## Catalog scraping
