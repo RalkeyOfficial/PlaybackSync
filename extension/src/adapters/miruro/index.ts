@@ -38,6 +38,22 @@ const LOAD_BUTTON_SELECTOR = '#player-container .vds-video-layout button';
 const VIDEO_WAIT_TIMEOUT_MS = 10_000;
 
 /**
+ * How long to wait for the manual-load button after the `<video>` element
+ * has appeared. The button is rendered by the Vidstack layout overlay and
+ * lands a few frames after the `<video>` itself, so a synchronous lookup
+ * right after {@link VIDEO_SELECTOR} resolves is racy.
+ */
+const LOAD_BUTTON_WAIT_TIMEOUT_MS = 5_000;
+
+/**
+ * Settle time between the button appearing in the DOM and dispatching the
+ * synthesized Space activation. Vidstack inserts the button before its
+ * click handler is fully wired; dispatching immediately reaches a no-op
+ * handler. Verified empirically on miruro: 300ms covers the gap.
+ */
+const LOAD_BUTTON_SETTLE_MS = 300;
+
+/**
  * How long to wait for `loadedmetadata` after dispatching the synthesized
  * space-press. If the source never arrives the adapter still proceeds with
  * listener wiring — the user can press play themselves, and the room's
@@ -207,6 +223,47 @@ class MiruroAdapter implements Adapter {
     });
   }
 
+  /**
+   * Resolve once the manual-load button exists. The button is rendered by
+   * the Vidstack layout overlay a few frames after the `<video>` itself,
+   * so a synchronous lookup right after {@link waitForVideo} resolves
+   * misses it on cold loads. Short-circuits via the video's `loadstart`
+   * event so a page that loads its source on its own doesn't waste the
+   * full timeout. Resolves to `null` after
+   * {@link LOAD_BUTTON_WAIT_TIMEOUT_MS} or if the video begins loading on
+   * its own.
+   *
+   * @param video Player element returned by {@link waitForVideo}, watched
+   *   for `loadstart` so we can give up on the manual-load path early
+   *   when the source arrives without intervention.
+   */
+  private waitForLoadButton(video: HTMLVideoElement): Promise<HTMLButtonElement | null> {
+    const immediate = document.querySelector<HTMLButtonElement>(LOAD_BUTTON_SELECTOR);
+    if (immediate) return Promise.resolve(immediate);
+
+    return new Promise(resolve => {
+      const onLoadStart = () => finish(null);
+      const finish = (el: HTMLButtonElement | null) => {
+        this.cancelPendingObserver();
+        video.removeEventListener('loadstart', onLoadStart);
+        resolve(el);
+      };
+
+      video.addEventListener('loadstart', onLoadStart, { once: true });
+
+      this.pendingObserver = new MutationObserver(() => {
+        const el = document.querySelector<HTMLButtonElement>(LOAD_BUTTON_SELECTOR);
+        if (el) finish(el);
+      });
+      this.pendingObserver.observe(document.body, {
+        childList: true,
+        subtree: true,
+      });
+
+      this.pendingTimer = setTimeout(() => finish(null), LOAD_BUTTON_WAIT_TIMEOUT_MS);
+    });
+  }
+
   private cancelPendingObserver(): void {
     if (this.pendingObserver) {
       this.pendingObserver.disconnect();
@@ -235,14 +292,27 @@ class MiruroAdapter implements Adapter {
       return;
     }
 
-    const button = document.querySelector<HTMLButtonElement>(LOAD_BUTTON_SELECTOR);
+    const button = await this.waitForLoadButton(video);
+    if (this.destroyed) return;
+    if (video.currentSrc) {
+      ctx.log('info', 'video gained a source while waiting for manual-load button');
+      return;
+    }
     if (!button) {
       ctx.log(
         'warn',
-        'no source and no manual-load button — letting the user start playback manually'
+        `no source and no manual-load button after ${LOAD_BUTTON_WAIT_TIMEOUT_MS}ms — letting the user start playback manually`
       );
       return;
     }
+
+    // Vidstack inserts the button into the DOM before its click handler is
+    // fully wired up. A synchronous dispatch reaches the button but the
+    // handler is a no-op; the responsive-layout pass + capability detection
+    // settle a few hundred ms later, and only then does the click actually
+    // start playback. See {@link LOAD_BUTTON_SETTLE_MS}.
+    await new Promise(r => setTimeout(r, LOAD_BUTTON_SETTLE_MS));
+    if (this.destroyed) return;
 
     ctx.log('info', 'dispatching synthesized Space keydown/keyup on manual-load button');
     button.focus();
