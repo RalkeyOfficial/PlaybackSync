@@ -56,7 +56,10 @@ class CursorService {
 			}
 
 			$previousCursorEntryId = $room->getCursorEntryId();
-			$outcome = $this->resolveAndApply($room, $target, $clientId, $previousCursorEntryId);
+			$previousCursorEntry = $previousCursorEntryId !== null
+				? $this->findEntryById($room, $previousCursorEntryId)
+				: null;
+			$outcome = $this->resolveAndApply($room, $target, $clientId, $previousCursorEntryId, $previousCursorEntry);
 
 			$this->db->commit();
 			return $outcome;
@@ -66,13 +69,13 @@ class CursorService {
 		}
 	}
 
-	private function resolveAndApply(Room $room, CursorTarget $target, string $clientId, ?string $previousCursorEntryId): CursorChangeOutcome {
+	private function resolveAndApply(Room $room, CursorTarget $target, string $clientId, ?string $previousCursorEntryId, ?PlaylistEntry $previousCursorEntry): CursorChangeOutcome {
 		if ($target->isByEntryId()) {
 			$entry = $this->findEntryById($room, (string)$target->entryId);
 			if ($entry === null) {
 				throw new CursorEntryNotFoundException('cursor target ' . $target->entryId . ' is not in the playlist');
 			}
-			return $this->commitCursorMove($room, $entry, appendedEntry: null, previousCursorEntryId: $previousCursorEntryId);
+			return $this->commitCursorMove($room, $entry, appendedEntry: null, previousCursorEntryId: $previousCursorEntryId, previousCursorEntry: $previousCursorEntry);
 		}
 
 		$ref = $target->videoRef;
@@ -85,13 +88,13 @@ class CursorService {
 
 		if ($room->getSingleMode()) {
 			if ($existing !== null) {
-				return $this->commitCursorMove($room, $existing, appendedEntry: null, previousCursorEntryId: $previousCursorEntryId);
+				return $this->commitCursorMove($room, $existing, appendedEntry: null, previousCursorEntryId: $previousCursorEntryId, previousCursorEntry: $previousCursorEntry);
 			}
 			throw new PlaylistLockedException('playlist is locked while single mode is enabled');
 		}
 
 		if ($existing !== null) {
-			return $this->commitCursorMove($room, $existing, appendedEntry: null, previousCursorEntryId: $previousCursorEntryId);
+			return $this->commitCursorMove($room, $existing, appendedEntry: null, previousCursorEntryId: $previousCursorEntryId, previousCursorEntry: $previousCursorEntry);
 		}
 
 		if (!$room->getFreeformMode()) {
@@ -104,7 +107,7 @@ class CursorService {
 		// call `commitCursorMove` so the cursor change is persisted in one
 		// write alongside the appended entry.
 		$appended = $this->playlistService->appendForFreeformCursor($room, $ref, $clientId);
-		return $this->commitCursorMove($room, $appended, appendedEntry: $appended, previousCursorEntryId: $previousCursorEntryId);
+		return $this->commitCursorMove($room, $appended, appendedEntry: $appended, previousCursorEntryId: $previousCursorEntryId, previousCursorEntry: $previousCursorEntry);
 	}
 
 	private function findEntryById(Room $room, string $entryId): ?PlaylistEntry {
@@ -126,7 +129,7 @@ class CursorService {
 		return null;
 	}
 
-	private function commitCursorMove(Room $room, PlaylistEntry $cursor, ?PlaylistEntry $appendedEntry, ?string $previousCursorEntryId): CursorChangeOutcome {
+	private function commitCursorMove(Room $room, PlaylistEntry $cursor, ?PlaylistEntry $appendedEntry, ?string $previousCursorEntryId, ?PlaylistEntry $previousCursorEntry): CursorChangeOutcome {
 		$room->setCursorEntryId($cursor->entryId);
 		$this->mapper->update($room);
 		return new CursorChangeOutcome(
@@ -134,6 +137,7 @@ class CursorService {
 			appendedEntry: $appendedEntry,
 			playlist: $room->getPlaylistEntries(),
 			previousCursorEntryId: $previousCursorEntryId,
+			previousCursorEntry: $previousCursorEntry,
 		);
 	}
 }

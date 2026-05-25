@@ -58,12 +58,14 @@ class PlaybackController {
 		switch ($action) {
 			case self::ACTION_PLAY:
 				$eventId = $runtime->state->applyPlay($nowMs);
-				$this->emit($runtime, 'play', null, $nowMs, $eventId, $ownerUserId);
+				// Snapshot videoPos *after* the transition — that's the point
+				// playback resumed from, which is what the event log surfaces.
+				$this->emit($runtime, 'play', $runtime->state->videoPos, $nowMs, $eventId, $ownerUserId);
 				break;
 
 			case self::ACTION_PAUSE:
 				$eventId = $runtime->state->applyPause($nowMs);
-				$this->emit($runtime, 'pause', null, $nowMs, $eventId, $ownerUserId);
+				$this->emit($runtime, 'pause', $runtime->state->videoPos, $nowMs, $eventId, $ownerUserId);
 				break;
 
 			case self::ACTION_SEEK:
@@ -78,7 +80,7 @@ class PlaybackController {
 				// Reset = pause then seek to 0. Two events, last-write-wins
 				// state — reconnecting clients replay both in order.
 				$pauseId = $runtime->state->applyPause($nowMs);
-				$this->emit($runtime, 'pause', null, $nowMs, $pauseId, $ownerUserId);
+				$this->emit($runtime, 'pause', $runtime->state->videoPos, $nowMs, $pauseId, $ownerUserId);
 				$seekId = $runtime->state->applySeek(0.0, $nowMs);
 				$this->emit($runtime, 'seek', 0.0, $nowMs, $seekId, $ownerUserId);
 				break;

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace OCA\PlaybackSync\WebSocket\Handler;
 
+use OCA\PlaybackSync\Db\PlaylistEntry;
 use OCA\PlaybackSync\Db\RoomMapper;
 use OCA\PlaybackSync\Service\CursorService;
 use OCA\PlaybackSync\Service\Dto\CursorTarget;
@@ -123,22 +124,40 @@ class CursorChangeHandler {
 			$peerConn->send($cursorFrame);
 		}
 
-		// 3. Log the cursor_change envelope.
-		$runtime->pushEvent(
-			'cursor_change',
-			[
+		// 3. Log the cursor_change envelope. Use pushEnvelope (not pushEvent)
+		// so the data shape matches the owner-triggered path in
+		// RoomBroadcastController — the event-log UI parses one shape.
+		$runtime->pushEnvelope([
+			'ts' => $nowMs,
+			'type' => 'cursor_change',
+			'category' => 'playback',
+			'actor' => 'client',
+			'actorId' => $client->nickname,
+			'data' => [
 				'from' => $outcome->previousCursorEntryId,
 				'to' => $outcome->cursor->entryId,
-				'videoRef' => [
-					'providerId' => $outcome->cursor->providerId,
-					'videoId' => $outcome->cursor->videoId,
-					'pageUrl' => $outcome->cursor->pageUrl,
-				],
+				'fromVideoRef' => $outcome->previousCursorEntry !== null
+					? self::videoRefOf($outcome->previousCursorEntry)
+					: null,
+				'videoRef' => self::videoRefOf($outcome->cursor),
 			],
-			$client->nickname,
-			$nowMs,
-			$eventId,
-		);
+			'playbackEventId' => $eventId,
+		]);
+	}
+
+	/**
+	 * Project a playlist entry onto the videoRef shape used in cursor_change
+	 * event payloads. Includes `label` and `episodeNumber` when present so the
+	 * dashboard event log can render a human summary instead of just an id.
+	 */
+	private static function videoRefOf(PlaylistEntry $entry): array {
+		return [
+			'providerId' => $entry->providerId,
+			'videoId' => $entry->videoId,
+			'pageUrl' => $entry->pageUrl,
+			'label' => $entry->label,
+			'episodeNumber' => $entry->episodeNumber,
+		];
 	}
 
 	private function refreshRuntime(RoomRuntime $runtime): void {

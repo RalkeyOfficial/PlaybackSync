@@ -18,6 +18,11 @@ use OCA\PlaybackSync\Db\PlaylistEntry;
  *   `PLAYLIST_UPDATE` payload when `appendedEntry` is set.
  * - `previousCursorEntryId` is the entry the cursor used to point at
  *   (or null if it was unset). Used for the event-log payload.
+ * - `previousCursorEntry` is the full playlist entry the cursor used
+ *   to point at, if it still existed in the playlist at lookup time.
+ *   Carries the prior label / episodeNumber / videoRef so the event-log
+ *   envelope can render a meaningful "from → to" summary instead of
+ *   just two opaque entry ids.
  */
 final class CursorChangeOutcome {
 
@@ -29,6 +34,7 @@ final class CursorChangeOutcome {
 		public readonly ?PlaylistEntry $appendedEntry,
 		public readonly array $playlist,
 		public readonly ?string $previousCursorEntryId,
+		public readonly ?PlaylistEntry $previousCursorEntry = null,
 	) {
 	}
 }

@@ -247,6 +247,24 @@ function dataSummary(event: EventLogEntry): string {
 			return t('playbacksync', 'to {time}', { time: formatVideoPos(pos) })
 		}
 	}
+	if (event.type === 'play' || event.type === 'pause') {
+		const pos = (event.data?.value ?? event.data?.videoPos) as number | undefined
+		if (typeof pos === 'number') {
+			return t('playbacksync', 'at {time}', { time: formatVideoPos(pos) })
+		}
+	}
+	if (event.type === 'cursor_change') {
+		const fromRef = event.data?.fromVideoRef as VideoRefLike | null | undefined
+		const toRef = event.data?.videoRef as VideoRefLike | null | undefined
+		const fromLabel = videoRefLabel(fromRef)
+		const toLabel = videoRefLabel(toRef)
+		if (fromLabel && toLabel) {
+			return t('playbacksync', '{from} → {to}', { from: fromLabel, to: toLabel })
+		}
+		if (toLabel) {
+			return t('playbacksync', 'to {label}', { label: toLabel })
+		}
+	}
 	if (event.type === 'client_left') {
 		const nickname = event.data?.nickname as string | undefined
 		const reason = event.data?.reason as string | undefined
@@ -310,6 +328,35 @@ function dataSummary(event: EventLogEntry): string {
 		}
 	}
 	return ''
+}
+
+/** Minimal shape of the `videoRef` / `fromVideoRef` blobs on cursor_change. */
+interface VideoRefLike {
+	providerId?: string
+	videoId?: string
+	pageUrl?: string
+	label?: string | null
+	episodeNumber?: number | null
+}
+
+/**
+ * Compact human label for a cursor_change videoRef. Prefers the `label` field
+ * (typically the episode title) and falls back to `Ep N` if only the episode
+ * number is known, then to the raw `videoId` so something always renders.
+ *
+ * @param ref the videoRef blob from the event payload, or null/undefined
+ */
+function videoRefLabel(ref: VideoRefLike | null | undefined): string {
+	if (!ref) {
+		return ''
+	}
+	if (ref.label) {
+		return ref.label
+	}
+	if (typeof ref.episodeNumber === 'number') {
+		return t('playbacksync', 'Ep {n}', { n: ref.episodeNumber })
+	}
+	return ref.videoId ?? ''
 }
 
 /**

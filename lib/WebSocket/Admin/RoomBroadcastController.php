@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace OCA\PlaybackSync\WebSocket\Admin;
 
+use OCA\PlaybackSync\Db\PlaylistEntry;
 use OCA\PlaybackSync\Db\RoomMapper;
 use OCA\PlaybackSync\WebSocket\MessageEncoder;
 use OCA\PlaybackSync\WebSocket\RoomRegistry;
@@ -64,6 +65,14 @@ class RoomBroadcastController {
 			return self::RESULT_ROOM_NOT_FOUND;
 		}
 
+		// Capture the runtime's *current* cursor before refresh — for the
+		// cursor_change kind this is the "from" the dashboard navigated away
+		// from. Read pre-refresh because the DB write has already replaced
+		// the cursor by the time this controller fires.
+		$previousCursorEntry = $kind === self::KIND_CURSOR_CHANGE
+			? $runtime->cursorEntry()
+			: null;
+
 		// The DB is the source of truth — refresh the runtime cache
 		// before deciding what to broadcast so the wire frame matches
 		// what's persisted.
@@ -71,7 +80,7 @@ class RoomBroadcastController {
 
 		switch ($kind) {
 			case self::KIND_CURSOR_CHANGE:
-				return $this->broadcastCursorChange($runtime, $nowMs, $ownerUserId);
+				return $this->broadcastCursorChange($runtime, $previousCursorEntry, $nowMs, $ownerUserId);
 
 			case self::KIND_PLAYLIST_UPDATE:
 				return $this->broadcastPlaylistUpdate($runtime, $nowMs, $ownerUserId);
@@ -89,7 +98,7 @@ class RoomBroadcastController {
 		}
 	}
 
-	private function broadcastCursorChange(RoomRuntime $runtime, int $nowMs, ?string $ownerUserId): string {
+	private function broadcastCursorChange(RoomRuntime $runtime, ?PlaylistEntry $previousCursorEntry, int $nowMs, ?string $ownerUserId): string {
 		$cursor = $runtime->cursorEntry();
 		if ($cursor === null) {
 			// Nothing to point at; treat as a no-op rather than an error.
@@ -97,6 +106,11 @@ class RoomBroadcastController {
 			// only entry — predictable behaviour beats a 5xx.
 			return self::RESULT_BROADCAST;
 		}
+
+		// If the runtime's pre-refresh cursor pointed at the *same* entry the
+		// DB now holds, this broadcast isn't actually a cursor move — skip
+		// reporting a `from` so the event-log doesn't render `A → A`.
+		$hasMoved = $previousCursorEntry !== null && $previousCursorEntry->entryId !== $cursor->entryId;
 
 		$eventId = $runtime->state->applyEpisodeReset($nowMs);
 		$frame = $this->encoder->cursorChange($cursor, $eventId, $nowMs);
@@ -111,16 +125,29 @@ class RoomBroadcastController {
 			'actor' => 'owner',
 			'actorId' => $ownerUserId,
 			'data' => [
+				'from' => $hasMoved ? $previousCursorEntry->entryId : null,
 				'to' => $cursor->entryId,
-				'videoRef' => [
-					'providerId' => $cursor->providerId,
-					'videoId' => $cursor->videoId,
-					'pageUrl' => $cursor->pageUrl,
-				],
+				'fromVideoRef' => $hasMoved ? self::videoRefOf($previousCursorEntry) : null,
+				'videoRef' => self::videoRefOf($cursor),
 			],
 			'playbackEventId' => $eventId,
 		]);
 		return self::RESULT_BROADCAST;
+	}
+
+	/**
+	 * Project a playlist entry onto the videoRef shape used in cursor_change
+	 * event payloads. Includes `label` and `episodeNumber` when present so the
+	 * dashboard event log can render a human summary instead of just an id.
+	 */
+	private static function videoRefOf(PlaylistEntry $entry): array {
+		return [
+			'providerId' => $entry->providerId,
+			'videoId' => $entry->videoId,
+			'pageUrl' => $entry->pageUrl,
+			'label' => $entry->label,
+			'episodeNumber' => $entry->episodeNumber,
+		];
 	}
 
 	private function broadcastPlaylistUpdate(RoomRuntime $runtime, int $nowMs, ?string $ownerUserId): string {

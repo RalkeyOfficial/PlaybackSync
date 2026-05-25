@@ -59,9 +59,19 @@ class EventHandler {
 			default => throw new MessageException('INVALID_MESSAGE', 'Unknown event'), // already validated, but exhaustive
 		};
 
+		// Surface the playback position alongside every play/pause/seek event
+		// so the dashboard event log can render "at 1:23" instead of a bare
+		// "Played" / "Paused" line. PlaybackState::apply* has already snapped
+		// `videoPos` to the moment of the transition, so reading it here is
+		// the correct value for both the play (where playback resumed) and
+		// the pause (where playback stopped).
+		$value = $payload['event'] === 'seek'
+			? $payload['value']
+			: $runtime->state->videoPos;
+
 		$runtime->pushEvent(
 			$payload['event'],
-			$payload['event'] === 'seek' ? $payload['value'] : null,
+			$value,
 			$client->nickname,
 			$nowMs,
 			$eventId,
