@@ -1,10 +1,16 @@
 /**
  * One-shot content script for the share-URL → background credential
- * handoff. Runs at `document_start` on every page so we sniff the URL
- * before any client-side router has had a chance to munge the query
- * string; activates only when the URL carries *both* `sync_url` and
- * `sync_password` (the exact params `ShareController::buildRedirectUrl`
- * appends to `room.bootstrapUrl`).
+ * handoff. Runs at `document_start` on every adapter host so we sniff
+ * the URL before any client-side router has had a chance to munge the
+ * query string; activates only when the URL carries *both* `sync_url`
+ * and `sync_password` (the exact params
+ * `ShareController::buildRedirectUrl` appends to `room.bootstrapUrl`).
+ *
+ * The `matches` allowlist is sourced from
+ * `src/adapters/host-matches.ts` so the sniffer is scoped to the same
+ * set of hosts the adapter runtime supports — the redirect target is
+ * always one of those hosts, so widening it would only add review
+ * friction without enabling any real flow.
  *
  * Behaviour:
  *
@@ -25,10 +31,11 @@
  * scope for this slice.
  */
 
+import { ADAPTER_MATCHES } from '@/src/adapters/host-matches'
 import type { ContentToBackground } from '@/src/messages'
 
 export default defineContentScript({
-	matches: ['<all_urls>'],
+	matches: [...ADAPTER_MATCHES],
 	runAt: 'document_start',
 	main() {
 		const params = new URLSearchParams(window.location.search)

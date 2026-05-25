@@ -1,20 +1,25 @@
 /**
- * Content-script entrypoint. Runs on every page (workshop §2 rule 3:
- * unsupported pages stay silent) and bootstraps the adapter runtime
- * with a {@link RuntimeBridge} that forwards every outbound call to
- * the background via `chrome.runtime.sendMessage`. Inbound `command`
- * messages from the background are routed straight into the runtime,
- * which dispatches them to the active adapter.
+ * Content-script entrypoint. Runs on every adapter host (workshop §2
+ * rule 3: unsupported pages stay silent) and bootstraps the adapter
+ * runtime with a {@link RuntimeBridge} that forwards every outbound
+ * call to the background via `chrome.runtime.sendMessage`. Inbound
+ * `command` messages from the background are routed straight into the
+ * runtime, which dispatches them to the active adapter.
+ *
+ * The `matches` allowlist is sourced from `wxt.config.ts#ADAPTER_MATCHES`
+ * so the manifest's `host_permissions` and the content-script matches
+ * cannot drift apart.
  *
  * This file deliberately knows nothing about the protocol — the
  * runtime owns adapter lifecycle, the background owns the WebSocket.
  */
 
 import { deliverCommand, start, type RuntimeBridge } from '@/src/adapters/runtime'
+import { ADAPTER_MATCHES } from '@/src/adapters/host-matches'
 import type { BackgroundToContent, ContentToBackground } from '@/src/messages'
 
 export default defineContentScript({
-	matches: ['<all_urls>'],
+	matches: [...ADAPTER_MATCHES],
 	runAt: 'document_idle',
 	main() {
 		const send = (msg: ContentToBackground) => {

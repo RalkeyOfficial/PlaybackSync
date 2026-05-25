@@ -1,4 +1,5 @@
 import { defineConfig } from 'wxt'
+import { ADAPTER_MATCHES } from './src/adapters/host-matches'
 
 export default defineConfig({
 	imports: {
@@ -15,11 +16,7 @@ export default defineConfig({
 			'alarms',
 			'tabs',
 		],
-		// Plugin-based content script: every page must give the runtime a chance
-		// to evaluate the adapter registry. Real adapters narrow themselves in
-		// canHandlePage(); unsupported pages stay silent (workshop §2 rule 3).
-		// Revisit pre-store-submission — an explicit allowlist may be preferred.
-		host_permissions: ['<all_urls>'],
+		host_permissions: [...ADAPTER_MATCHES],
 		action: {
 			default_title: 'PlaybackSync',
 		},

@@ -11,6 +11,7 @@ This directory is the source of truth for *how the extension is shaped and why*.
 - **Working on the protocol client?** [`protocol-client.md`](protocol-client.md) covers JOIN, reconnect, clock-sync, heartbeats, suppression — the WS-side concerns.
 - **Setting up creds for dev?** [`storage.md`](storage.md) shows the `chrome.storage.local` shape and the DevTools snippet to seed it.
 - **Touching the toolbar popup?** [`popup.md`](popup.md) covers the snapshot channel, the `PopupStatus` state machine, and the leave-room flow.
+- **Submitting to a browser store?** [`store-listing.md`](store-listing.md) is the canonical copy + reviewer-notes source; [`privacy.md`](privacy.md) is the hosted privacy policy.
 
 ## Index
 
@@ -21,6 +22,8 @@ This directory is the source of truth for *how the extension is shaped and why*.
 | [`adapter-contract.md`](adapter-contract.md) | `Adapter` / `AdapterContext` / `LocalIntent` / `AuthoritativeCommand` / `ContentIdentity` / `VideoState` — how to write an adapter |
 | [`storage.md`](storage.md) | `chrome.storage.local.pbsync` schema; dev-time creds workflow |
 | [`popup.md`](popup.md) | Toolbar popup: snapshot channel, `PopupStatus`, leave-room flow |
+| [`store-listing.md`](store-listing.md) | Short / long descriptions, reviewer notes, screenshot brief, pre-submission checklist |
+| [`privacy.md`](privacy.md) | Data-handling statement (the version hosted at the privacy-policy URL) |
 
 ## Documentation policy
 
