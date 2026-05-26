@@ -22,6 +22,7 @@ This directory is the source of truth for *how the extension is shaped and why*.
 | [`adapter-contract.md`](adapter-contract.md) | `Adapter` / `AdapterContext` / `LocalIntent` / `AuthoritativeCommand` / `ContentIdentity` / `VideoState` — how to write an adapter |
 | [`storage.md`](storage.md) | Per-tab `chrome.storage.local['pbsync.tab.<tabId>']` schema; cold-boot sentinel; dev-time creds workflow |
 | [`popup.md`](popup.md) | Toolbar popup: snapshot channel, `PopupStatus`, leave-room flow |
+| [`playlist-update.md`](playlist-update.md) | `sendPlaylistUpdate` background API for out-of-flow playlist contributions; freeform-chain rule; mode gating |
 | [`store-listing.md`](store-listing.md) | Short / long descriptions, reviewer notes, screenshot brief, pre-submission checklist |
 | [`privacy.md`](privacy.md) | Data-handling statement (the version hosted at the privacy-policy URL) |
 

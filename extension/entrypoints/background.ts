@@ -339,21 +339,25 @@ async function handleCredentials(tabId: number, syncUrl: string, syncPassword: s
  * has already happened (or is happening) — this decides only what to
  * tell the room about it. Behaviour matrix:
  *
- * | mode     | target in playlist | not in playlist |
- * | -------- | ------------------ | --------------- |
- * | default  | send request       | soft-leave      |
- * | single   | soft-leave         | soft-leave      |
- * | freeform | drop (deferred)    | drop (deferred) |
+ * | mode     | target in playlist | not in playlist           |
+ * | -------- | ------------------ | ------------------------- |
+ * | default  | send request       | soft-leave                |
+ * | single   | soft-leave         | soft-leave                |
+ * | freeform | send request       | send request (server auto-appends) |
  *
  * "Soft-leave" tears down the per-tab WS runtime but **keeps** the
  * stored creds slot, so the popup can offer a one-click Rejoin without
  * the user re-typing or re-following the share link. Distinct from
  * `leave_room` (hard leave) which also wipes credentials.
  *
- * Freeform is a deferred concern owned by the separate `PLAYLIST_UPDATE`
- * spec — clicks in freeform mode are dropped here rather than silently
- * triggering the server's auto-append, which would defeat the point of
- * having a playlist at all.
+ * Freeform forwards every click unconditionally: the server's
+ * `CursorService::resolveAndApply` auto-appends the not-in-playlist
+ * target in the same transaction as the cursor move (capped by
+ * `freeform_auto_append_cap`, oldest `auto_appended` entries pruned
+ * first). This is freeform's whole intent — "clicks are cursor changes,
+ * the playlist is a side effect" — so deferring to the server's
+ * existing branch is preferable to a separate extension-side
+ * `PLAYLIST_UPDATE` round-trip.
  *
  * @param tabId Browser tab the trigger came from.
  * @param target Full video identity the user clicked toward.
@@ -366,10 +370,12 @@ async function handleCursorTrigger(tabId: number, target: VideoRefWithMeta): Pro
 		// up; harmless.
 		return
 	}
+
 	if (session.mode === 'freeform') {
-		console.log('[playbacksync:bg] cursor_trigger dropped (freeform deferred)', {
+		console.log('[playbacksync:bg] cursor_trigger forwarding (freeform)', {
 			tabId, videoId: target.videoId,
 		})
+		sendCursorChangeRequest(tabId, target)
 		return
 	}
 

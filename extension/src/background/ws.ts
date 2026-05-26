@@ -24,6 +24,7 @@
 import {
 	type InboundFrame,
 	type OutboundFrame,
+	type PlaylistEntrySource,
 	type VideoRef,
 	type VideoRefWithMeta,
 	decode,
@@ -250,6 +251,63 @@ export function sendCursorChangeRequest(tabId: number, target: VideoRefWithMeta)
 	const r = pool.get(tabId)
 	if (!r?.socket || r.socket.readyState !== WebSocket.OPEN) return
 	send(r, { type: 'CURSOR_CHANGE_REQUEST', target, clientTs: nowMs() })
+}
+
+/**
+ * Send a `PLAYLIST_UPDATE` frame for a given tab. The server merges the
+ * candidate `entries` into the room's playlist by `(providerId,
+ * videoId)`, then broadcasts the post-merge playlist as an inbound
+ * `PLAYLIST_UPDATE` that every client (including this one) applies via
+ * `applyPlaylistUpdate`.
+ *
+ * This function is currently dormant: no UI in the extension calls it.
+ * It exists so the next adapter or popup affordance that wants to
+ * contribute entries from outside the existing in-page episode-list
+ * surface (handled by the cursor-trigger path; see {@link
+ * sendCursorChangeRequest}) has a single, mode-aware entry point. The
+ * shape is deliberately minimal — a future caller decides what counts
+ * as "contributing this page" in its own context, builds the
+ * `VideoRefWithMeta` payload, and calls in here.
+ *
+ * **Freeform chain rule.** When the session is in freeform mode and
+ * `opts.chainCursorTo` is provided, the function follows the merge with
+ * a `CURSOR_CHANGE_REQUEST` for the same ref. This mirrors freeform's
+ * intent ("clicks are cursor changes, the playlist is a side effect")
+ * so callers don't have to replicate the rule. The two frames go out on
+ * the same socket and are processed in order by the server: the merge
+ * commits inside the room lock, then the cursor-change reacquires the
+ * lock and resolves against the merged playlist. In default mode
+ * `chainCursorTo` is ignored — adding and navigating are kept separate
+ * to match the cursor-trigger spec's default-mode philosophy.
+ *
+ * **Single mode.** The server rejects `PLAYLIST_UPDATE` in single mode
+ * with `single_mode_locked`. This function does **not** pre-gate;
+ * callers are expected to read `session.mode` from the popup snapshot
+ * (or wherever they track it) and hide their UI in single mode.
+ *
+ * No-op if the runtime isn't pooled or the socket isn't open — same
+ * fail-quiet contract as the rest of the send helpers.
+ *
+ * @param tabId Browser tab id whose runtime should emit the frame.
+ * @param entries Candidate entries to merge. Each must include
+ *   `providerId`, `videoId`, `pageUrl`; `label` / `episodeNumber` /
+ *   `seasonNumber` / `source` are optional. Server enforces a 200-entry
+ *   per-message cap.
+ * @param opts Optional. `chainCursorTo` is honored only when the
+ *   session is in freeform mode; ignored otherwise.
+ */
+export function sendPlaylistUpdate(
+	tabId: number,
+	entries: Array<VideoRefWithMeta & { source?: PlaylistEntrySource }>,
+	opts?: { chainCursorTo?: VideoRefWithMeta },
+): void {
+	const r = pool.get(tabId)
+	if (!r?.socket || r.socket.readyState !== WebSocket.OPEN) return
+	send(r, { type: 'PLAYLIST_UPDATE', entries, clientTs: nowMs() })
+
+	if (opts?.chainCursorTo && r.session.mode === 'freeform') {
+		sendCursorChangeRequest(tabId, opts.chainCursorTo)
+	}
 }
 
 /**

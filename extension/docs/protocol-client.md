@@ -157,7 +157,7 @@ The content runtime polls `adapter.getState()` every 1 s and pushes a `status` m
 
 ## What's deliberately not implemented yet
 
-- **`PLAYLIST_UPDATE` from the extension** — encoder ready, no scraping path beyond the first-JOIN `catalogFragment`.
+- **`PLAYLIST_UPDATE` from the extension — caller UI.** The outbound encoder and a dormant background caller (`sendPlaylistUpdate` in `src/background/ws.ts`) are wired; no extension surface invokes it today. Freeform clicks don't need it — they go through the cursor-trigger path and the server auto-appends. See [`playlist-update.md`](playlist-update.md) for the API shape and what a future caller would look like.
 
 ## Viewer-driven cursor changes
 
@@ -168,8 +168,11 @@ The content runtime polls `adapter.getState()` every 1 s and pushes a `status` m
 | `default` | yes | Send `CURSOR_CHANGE_REQUEST` (videoRef form) |
 | `default` | no | **Soft-leave** the room |
 | `single` | any | **Soft-leave** the room |
-| `freeform` | any | Drop silently (deferred to a future `PLAYLIST_UPDATE` spec) |
+| `freeform` | yes | Send `CURSOR_CHANGE_REQUEST` (videoRef form) |
+| `freeform` | no | Send `CURSOR_CHANGE_REQUEST`; the server auto-appends the target in the same transaction (`source: auto_appended`, pruned by `freeform_auto_append_cap`) |
 
 Soft-leave tears down the per-tab WS runtime but leaves the `pbsync.tab.<tabId>` creds slot intact so the popup can offer a one-click Rejoin alongside Leave Room (see [`popup.md`](popup.md)). A `softLeftTabs` gate suppresses the content runtime's status heartbeat from auto-reconnecting through `ensureConnected` while the tab is soft-left — otherwise the room would churn through join/leave cycles every second.
+
+Freeform forwards every click unconditionally — "clicks are cursor changes, the playlist is a side effect" — so the extension never needs a separate `PLAYLIST_UPDATE` round-trip to follow a click. The server's auto-append-on-cursor-change branch in `CursorService::resolveAndApply` does the work in one transaction. See [`playlist-update.md`](playlist-update.md) for when the dormant `sendPlaylistUpdate` API would be called instead (out-of-flow contributions from a non-episode-list surface).
 
 On the receiver side, the incoming `CURSOR_CHANGE` is dispatched to the adapter as an `AuthoritativeCommand` of type `cursor_change`; per-adapter logic decides how to navigate (see the [adapter contract](adapter-contract.md) and [`adapter-miruro.md`](adapter-miruro.md) for the synthetic-click approach used on miruro). The runtime re-arms the join settle window on every `CURSOR_CHANGE` so the site's auto-resume seek on the new ep is dropped, mirroring the JOIN-time auto-resume handling.
