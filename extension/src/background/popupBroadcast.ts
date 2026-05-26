@@ -39,9 +39,10 @@ import type { SessionState } from './session'
  * Coarse-grained mirror of `WsRuntime` lifecycle. `'none'` means no
  * WS runtime exists for the tab (cold boot before `connect()` or
  * after `disconnect()` plus `clearCreds()`). `'disconnected'` means a
- * runtime existed and the socket dropped (reconnect-pending or
- * terminal) — distinct from `'none'` because the popup shows
- * "Connection lost…" rather than the no-creds copy.
+ * runtime existed and the socket dropped (reconnect-pending) —
+ * distinct from `'none'` because the popup shows the reconnecting
+ * copy rather than the no-creds copy. Terminal closes wipe creds and
+ * flip the mirror to `'none'`, never surfacing as `'disconnected'`.
  */
 type SocketState = 'none' | 'connecting' | 'open' | 'disconnected'
 

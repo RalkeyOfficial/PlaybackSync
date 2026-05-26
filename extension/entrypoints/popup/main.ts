@@ -35,7 +35,6 @@ let port: chrome.runtime.Port | null = null
 let boundTabId: number | null = null
 let lastSnapshot: PopupSnapshot | null = null
 let leaving = false
-let rejoining = false
 
 void connect()
 
@@ -51,7 +50,6 @@ async function connect(): Promise<void> {
 	port.onMessage.addListener((msg: BackgroundToPopup) => {
 		if (msg.kind !== 'snapshot') return
 		leaving = false
-		rejoining = false
 		lastSnapshot = msg.snapshot
 		render(msg.snapshot)
 	})
@@ -128,9 +126,8 @@ function buildBody(s: PopupSnapshot): DocumentFragment {
 			break
 		case 'disconnected':
 			frag.appendChild(makeCopy(
-				'Disconnected from the room. Press Rejoin to reconnect, or Leave room to discard the credentials.',
+				'Disconnected from the room. Reconnecting automatically; use Leave room to discard the credentials.',
 			))
-			frag.appendChild(buildRejoinButton())
 			frag.appendChild(buildLeaveButton())
 			break
 	}
@@ -189,28 +186,10 @@ function buildLeaveButton(): HTMLButtonElement {
 	return btn
 }
 
-function buildRejoinButton(): HTMLButtonElement {
-	const btn = document.createElement('button')
-	btn.type = 'button'
-	btn.className = 'btn btn--primary'
-	btn.textContent = rejoining ? 'Rejoining…' : 'Rejoin room'
-	btn.disabled = rejoining || port === null
-	btn.addEventListener('click', onRejoinClicked)
-	return btn
-}
-
 function onLeaveClicked(): void {
 	if (!port || leaving || boundTabId === null) return
 	leaving = true
 	const env: PopupToBackground = { kind: 'leave_room', tabId: boundTabId }
-	port.postMessage(env)
-	if (lastSnapshot) render(lastSnapshot)
-}
-
-function onRejoinClicked(): void {
-	if (!port || rejoining || boundTabId === null) return
-	rejoining = true
-	const env: PopupToBackground = { kind: 'rejoin_room', tabId: boundTabId }
 	port.postMessage(env)
 	if (lastSnapshot) render(lastSnapshot)
 }

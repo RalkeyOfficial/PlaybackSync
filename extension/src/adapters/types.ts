@@ -101,7 +101,9 @@ export interface AdapterContext {
 	 * episode button) and is moving to a different `VideoRef`. The runtime
 	 * forwards the trigger to the background, which decides — based on the
 	 * room's current mode and playlist — whether to send a
-	 * `CURSOR_CHANGE_REQUEST`, drop it silently, or soft-leave the room.
+	 * `CURSOR_CHANGE_REQUEST` (default-in-playlist, freeform-any) or pull
+	 * the tab back to the room's cursor (default-not-in-playlist,
+	 * single-any).
 	 *
 	 * Adapters should call this passively (no `preventDefault`): the host
 	 * page's own routing handles the local navigation; we just piggyback

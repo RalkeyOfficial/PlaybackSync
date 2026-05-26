@@ -447,8 +447,8 @@ class MiruroAdapter implements Adapter {
    * cursor trigger. Listener is passive: it does NOT call
    * `preventDefault`, so miruro's own SPA routing handles the local nav
    * exactly as it always does. The background decides per current room
-   * mode whether to forward the trigger as a `CURSOR_CHANGE_REQUEST`,
-   * drop it, or soft-leave the room.
+   * mode whether to forward the trigger as a `CURSOR_CHANGE_REQUEST` or
+   * pull the tab back to the room's cursor.
    *
    * Delegation on the container (rather than per-button listeners + a
    * `WeakSet`) is robust against miruro re-rendering the list when the

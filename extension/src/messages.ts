@@ -65,9 +65,10 @@ export type ContentToBackground =
 		 * Full identity of the video the user clicked toward (e.g. an
 		 * episode button). The background looks the target up against the
 		 * current room's playlist + mode to decide whether to send a
-		 * `CURSOR_CHANGE_REQUEST`, drop the trigger, or soft-leave the
-		 * room. Adapters never preventDefault on the originating click —
-		 * the host page's own routing handles the local nav.
+		 * `CURSOR_CHANGE_REQUEST` (default-in-playlist, freeform-any) or
+		 * pull the tab back to the room's cursor (default-not-in-playlist,
+		 * single-any). Adapters never preventDefault on the originating
+		 * click — the host page's own routing handles the local nav.
 		 */
 		target: VideoRefWithMeta
 	}
@@ -95,10 +96,11 @@ export type BackgroundToContent =
  *   still `null`).
  * - `joined` — `ROOM_STATE` applied; `clientId` is set; the room is
  *   driving playback.
- * - `disconnected` — creds present but the WS runtime is torn down
- *   (reconnect-pending or terminal). Reconnect-pending shows the same
- *   tag because to the user "we're not connected right now" is the
- *   load-bearing distinction.
+ * - `disconnected` — creds present but the WS runtime is not currently
+ *   open (reconnect-pending after a transient drop). Terminal closes
+ *   wipe creds and flip the status to `no_credentials` instead, so the
+ *   user never sees a dead-end `disconnected` state. The popup shows
+ *   "Reconnecting…" copy and the Leave Room button.
  */
 export type PopupStatus =
 	| 'no_credentials'
@@ -153,16 +155,14 @@ export interface PopupSnapshot {
  * - `leave_room` — hard leave: wipe the named tab's stored creds and
  *   tear down its WS socket. The background broadcasts a fresh
  *   `no_credentials` snapshot for that tab afterwards; the popup
- *   re-renders to the no-creds view without closing.
- * - `rejoin_room` — re-establish the named tab's WS runtime using its
- *   still-stored creds after a soft-leave (auto-leave on out-of-
- *   playlist or single-mode click). The popup surfaces this only when
- *   `status === 'disconnected'`.
+ *   re-renders to the no-creds view without closing. This is the only
+ *   user-driven path that leaves a room — navigation off-list in
+ *   default or single mode is corrected by pulling the tab back, not
+ *   by leaving.
  */
 export type PopupToBackground =
 	| { kind: 'subscribe'; tabId: number }
 	| { kind: 'leave_room'; tabId: number }
-	| { kind: 'rejoin_room'; tabId: number }
 
 /**
  * Background → popup. Pushed over the same `'pbsync-popup'` port the

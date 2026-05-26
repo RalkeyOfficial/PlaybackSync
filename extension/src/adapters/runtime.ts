@@ -89,8 +89,8 @@ export interface RuntimeBridge {
 	 * Forward a user-initiated cursor trigger emitted by the adapter when
 	 * the user clicks an in-page navigation control (e.g. an episode
 	 * button). The background decides per current room mode whether to
-	 * issue a `CURSOR_CHANGE_REQUEST`, drop the trigger, or soft-leave the
-	 * room — the runtime stays mode-unaware.
+	 * issue a `CURSOR_CHANGE_REQUEST` or pull the tab back to the cursor —
+	 * the runtime stays mode-unaware.
 	 */
 	sendCursorTrigger(adapterId: string, target: VideoRefWithMeta): void
 }
