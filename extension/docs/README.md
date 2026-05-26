@@ -17,9 +17,9 @@ This directory is the source of truth for *how the extension is shaped and why*.
 
 | Page | What's in it |
 |------|--------------|
-| [`architecture.md`](architecture.md) | Three-layer split, message envelope, where state lives |
-| [`protocol-client.md`](protocol-client.md) | Connection lifecycle, reconnect, heartbeat, clock-sync, drift handling, suppression |
-| [`adapter-contract.md`](adapter-contract.md) | `Adapter` / `AdapterContext` / `LocalIntent` / `AuthoritativeCommand` / `ContentIdentity` / `VideoState` — how to write an adapter |
+| [`architecture.md`](architecture.md) | Three-layer split, message envelope, where state lives, anchored-room pull-back + navigation-guard |
+| [`protocol-client.md`](protocol-client.md) | Connection lifecycle, reconnect, heartbeat, clock-sync, drift handling, suppression, viewer-driven cursor changes + navigation-guard |
+| [`adapter-contract.md`](adapter-contract.md) | `Adapter` / `AdapterContext` / `LocalIntent` / `AuthoritativeCommand` / `ContentIdentity` / `VideoState`, `guardNavigation` + the `videoIdForUrl` matcher, autoplay-hold — how to write an adapter |
 | [`storage.md`](storage.md) | Per-tab `chrome.storage.local['pbsync.tab.<tabId>']` schema; cold-boot sentinel; dev-time creds workflow |
 | [`popup.md`](popup.md) | Toolbar popup: snapshot channel, `PopupStatus`, leave-room flow |
 | [`playlist-update.md`](playlist-update.md) | `sendPlaylistUpdate` background API for out-of-flow playlist contributions; freeform-chain rule; mode gating |

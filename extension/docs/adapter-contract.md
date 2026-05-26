@@ -9,6 +9,7 @@ This page is a working tutorial for writing one. The reference implementation is
 ```ts
 interface Adapter {
   id: string
+  guardNavigation?: boolean
   canHandlePage(url: URL): boolean
   init(ctx: AdapterContext): Promise<void>
   getState(): VideoState | null
@@ -20,9 +21,12 @@ interface Adapter {
 
 That's it. Every other type in [`src/adapters/types.ts`](../src/adapters/types.ts) is either a payload shape or the bridge object (`AdapterContext`) the runtime hands you in `init`.
 
+There is also one **separate, DOM-free module** an adapter that opts into the navigation-guard must ship alongside its class — a pure `videoIdForUrl(url)` matcher. It can't live on the class because the background service worker imports it without ever loading the DOM-bound adapter. See [Navigation-guard & the URL matcher](#navigation-guard--the-url-matcher) below.
+
 | Method | Lifetime | What it must do | What it must **not** do |
 |--------|----------|-----------------|--------------------------|
 | `id` | static | A stable string. Used in logs and command routing. | Match another adapter's id. |
+| `guardNavigation` (optional) | static | Opt into the background navigation-guard. Set `true` only when your site has a registered `videoIdForUrl` matcher and canonical, navigable `pageUrl`s. Defaults to `false` / absent. | Set `true` without registering the matcher (see below). |
 | `canHandlePage(url)` | called on every page load + SPA navigation | Pure URL predicate — return true if the adapter owns this page. | Touch the DOM. Reach for `chrome.*`. Have side effects. |
 | `init(ctx)` | once, after `canHandlePage` returns true | Find the video, attach listeners, register the command handler, call `ctx.setIdentity` once. | Throw silently. Fall back to a degraded mode. Open a WebSocket. |
 | `getState()` | every ~1 s while active | Read the current `currentPos` + `playerState` from the video. | Block. Cache aggressively (the runtime polls fresh). |
@@ -46,7 +50,7 @@ interface AdapterContext {
 ```
 
 - **`emitIntent(...)`** — call when the user does something to the video. The runtime forwards it to the background, which (after suppression filtering) sends a wire `EVENT`. Don't call this when *you* changed the playhead in response to a `command` — that would be a feedback loop.
-- **`emitCursorTrigger(target)`** — call when the user clicks an in-page navigation control (e.g. an episode button) and the page is about to move to a different `VideoRef`. Call passively — **do not `preventDefault`**; the host page's own routing handles the local nav, we just piggyback the announcement. The background decides per the current room's mode + playlist whether to send `CURSOR_CHANGE_REQUEST` (default-in-playlist, or freeform — freeform forwards unconditionally and the server auto-appends not-in-playlist targets) or soft-leave the room (single, or default-out-of-playlist). See [`protocol-client.md`](protocol-client.md#viewer-driven-cursor-changes). The adapter stays mode-unaware. Filter on `Event.isTrusted` so synthetic clicks dispatched by your own `cursor_change` command handler don't loop back.
+- **`emitCursorTrigger(target)`** — call when the user clicks an in-page navigation control (e.g. an episode button) and the page is about to move to a different `VideoRef`. Call passively — **do not `preventDefault`**; the host page's own routing handles the local nav, we just piggyback the announcement. The background decides per the current room's mode + playlist what to do with it: send `CURSOR_CHANGE_REQUEST` (default-in-playlist, or freeform — freeform forwards unconditionally and the server auto-appends not-in-playlist targets), or **pull the tab back** to the room's cursor (single-any, or default-out-of-playlist). A pull-back keeps the WS connected — it dispatches a synthetic `cursor_change` command back to your `onCommand` handler, which your receiver path replays as a navigation. Off-target clicks are corrected, never a leave; the only user-driven leave is the popup's Leave Room button. See [`protocol-client.md`](protocol-client.md#viewer-driven-cursor-changes). The adapter stays mode-unaware. Filter on `Event.isTrusted` so synthetic clicks dispatched by your own `cursor_change` command handler don't loop back.
 - **`onCommand(handler)`** — register exactly one handler. Calling it again replaces the previous handler. The handler must apply commands **verbatim** — no interpretation, no transformation. `play` means `video.play()`, full stop.
 - **`setIdentity(identity)`** — call once, after you've found the video and parsed the URL. See "Strict content identity" below.
 - **`fail(reason)`** — non-fatal-to-the-extension, but fatal-to-the-adapter. The runtime stops the activation, the page becomes silent, and the user sees nothing. Use this when the page looks supportable but actually isn't (video element missing, identity unparseable). Don't use it for "this URL isn't ours" — that's what `canHandlePage` is for.
@@ -128,7 +132,60 @@ The three `playerState` values map directly to the wire field:
 9. **Implement `getState`.** Mirror the template's shape: `paused → 'paused'`, `!paused && readyState < 3 → 'buffering'`, otherwise `'playing'`.
 10. **In `destroy`**: remove the listeners you added, null out the refs.
 11. **Add the factory to the registry** in `src/adapters/runtime.ts` — append it to `ADAPTERS`. Order matters; first match wins. Real-site adapters before `_template` (which only activates on the dev query param anyway).
-12. **Document it.** Add a short note under `extension/docs/adapter-<site>.md` (or a section on this page) describing how the site behaves, what URLs are supported, anything surprising about the DOM. Per the [documentation policy](README.md#documentation-policy), this is non-optional.
+12. **(Optional) Opt into the navigation-guard.** If your site's `pageUrl`s are canonical and identity-bearing, ship a pure `videoIdForUrl` matcher, register it in `url-matchers.ts`, and set `guardNavigation = true`. See [Navigation-guard & the URL matcher](#navigation-guard--the-url-matcher).
+13. **(If your player autoplays) hold autoplay** until the room's first command. See [Holding autoplay](#holding-autoplay-until-the-rooms-first-command).
+14. **Document it.** Add a short note under `extension/docs/adapter-<site>.md` (or a section on this page) describing how the site behaves, what URLs are supported, anything surprising about the DOM. Per the [documentation policy](README.md#documentation-policy), this is non-optional.
+
+## Navigation-guard & the URL matcher
+
+The `emitCursorTrigger` path only fires on the in-page controls your DOM listener watches (episode buttons). Every *other* way a tab can leave the room's content — the site's home link, a related-video thumbnail, the address bar, browser back/forward, a JS redirect, a full cross-site navigation — bypasses it. The **navigation-guard** is an opt-in background feature that covers those: a `chrome.tabs.onUpdated` listener that pulls an anchored-room tab (default/single mode) back to the cursor when it lands on a URL outside the room.
+
+The guard is **purely additive** — it never replaces your DOM click listener. On sites where the URL doesn't change between videos (or doesn't encode the video identity), the DOM listener is the *only* signal that the user switched off-playlist, so it stays the primary, all-sites-safe mechanism. Opt into the guard only when your URLs can carry the weight.
+
+### Opting in
+
+Two pieces, both required together:
+
+1. **A pure, DOM-free matcher module.** Create `src/adapters/<site>/url.ts` exporting `videoIdForUrl(url: URL): string | null`. It must resolve a live URL to the **same canonical `videoId`** your adapter reports in `ContentIdentity` / `scrapeCatalog`, or return `null` when the URL isn't a content page for your site (wrong host, home page, search page). It is **pure**: no DOM, no `chrome.*`, no globals — it takes a `URL` and returns a string or `null`. Read only the identity-bearing parts of the URL; ignore decorative slugs and stray query params (the credential-handoff `?sync_url=&sync_password=` the share-link flow leaves in the address bar must not change the answer).
+
+   Share whatever host/path patterns and id-format helper the adapter also uses by importing them from this same module — that's how the adapter and the guard are kept from drifting (miruro exports `HOST_RE` / `PATH_RE` / `makeVideoId` here and the class imports them).
+
+2. **Registration + the flag.** Register the matcher by adapter id in [`src/adapters/url-matchers.ts`](../src/adapters/url-matchers.ts), and set `readonly guardNavigation = true` on the class. The flag rides the `identity` content→background message; the background stores armed tabs and selects the right matcher by adapter id.
+
+```ts
+// src/adapters/<site>/url.ts
+export function videoIdForUrl(url: URL): string | null {
+  if (!HOST_RE.test(url.hostname)) return null
+  const id = PATH_RE.exec(url.pathname)?.[1]
+  if (!id) return null
+  // …read only identity-bearing parts; ignore slug + extra query params
+  return makeVideoId(id, /* … */)
+}
+
+// src/adapters/url-matchers.ts
+import { videoIdForUrl as mysite } from './mysite/url'
+const URL_MATCHERS = { miruro, mysite }
+```
+
+### Why identity, not string equality
+
+The background's `isRoomUrl` check resolves the live tab URL through *your* matcher and compares the resulting `videoId` against the cursor's and the playlist's `videoId`s — it never string-compares URLs. That's deliberate: every site has different URL→identity rules (optional human-readable slugs, query-based ids, hash routing), and a generic background guard must not hardcode any of them. Putting the rule in the adapter's `url` module is what absorbs those cases cleanly.
+
+### What the guard does on a pull-back (no socket close)
+
+When the guard decides a tab has wandered off, it `chrome.tabs.update`s the tab back to the cursor's `pageUrl` — a full page reload. It deliberately does **not** close the WebSocket: the socket lives in the background and survives the reload, and closing it would announce a spurious `client_left` / `client_joined` flap to the room. Instead the background re-runs the join grace period *in place* so the reloaded player's autoplay + resume-position seek don't leak to the room as wire events. Adapter authors don't need to do anything for this — but it's why holding autoplay (below) matters, and why the guard only acts after the join has converged and its settle window elapsed (it stays out of join-time steering, which is the server's job).
+
+## Holding autoplay until the room's first command
+
+If your player **autoplays** when the source loads, hold that autoplay until the room's first authoritative command arrives. Otherwise the auto-play (and any resume-position seek that rides with it) fires as a local intent and races the room's state — both at first join and after a guard reload.
+
+The pattern (see miruro for a working version):
+
+1. Early in `init`, before triggering the load, attach a `play` listener that **re-pauses** the video while a `held` flag is set.
+2. Release the hold — clear the flag, drop the listener — on the **first** `onCommand` invocation, *before* applying the command (so the room's own `play` isn't immediately re-paused).
+3. Arm a safety timeout (miruro uses `AUTOPLAY_HOLD_TIMEOUT_MS = 10 s`) that lifts the hold even if no command ever arrives — e.g. a brand-new room with no state yet — so the viewer is never stuck unable to start playback.
+
+This is adapter-side guidance, not a contract method: the background's pre-convergence + settle-window suppression already drops these phantom intents on the wire, but holding autoplay in the adapter keeps the *local* player from flashing play→pause and is the cleaner experience.
 
 ## Catalog reporting (`scrapeCatalog`)
 

@@ -571,8 +571,18 @@ async function recheckAndPullBack(tabId: number): Promise<void> {
 	const liveUrl = tab.url
 	if (!liveUrl || isRoomUrl(session, liveUrl, adapterId)) return
 
+	// Re-attach the share-URL credential params to the pull-back target.
+	// miruro strips arbitrary query params when the user navigates away
+	// (e.g. to its home page), and the cursor `pageUrl` is the canonical
+	// param-free form — so without this the tab lands back on the cursor
+	// with `sync_url` / `sync_password` gone. Restore them from the stored
+	// creds so the credentials stay in the address bar across a pull-back.
+	const cursorUrl = session.cursor.pageUrl
+	const creds = await loadCreds(tabId)
+	const target = creds !== null ? withCredentialParams(cursorUrl, creds) : cursorUrl
+
 	console.log('[playbacksync:bg] nav-guard pulling tab back to cursor', {
-		tabId, liveUrl, cursorUrl: session.cursor.pageUrl,
+		tabId, liveUrl, cursorUrl,
 	})
 	// `chrome.tabs.update` is a full page load, but the WS lives in the
 	// background and survives it — so we deliberately do NOT close the
@@ -594,7 +604,7 @@ async function recheckAndPullBack(tabId: number): Promise<void> {
 			markConverged(s)
 		}
 	}, GUARD_RELOAD_CONVERGE_FALLBACK_MS)
-	void chrome.tabs.update(tabId, { url: session.cursor.pageUrl }).catch(() => {
+	void chrome.tabs.update(tabId, { url: target }).catch(() => {
 		// Tab closed or navigation blocked; `onRemoved` will clean up.
 	})
 }
@@ -629,6 +639,29 @@ function isRoomUrl(session: SessionState, url: string, adapterId: string): boole
 	if (videoId === null) return false
 	if (session.cursor?.videoId === videoId) return true
 	return session.playlist.some((entry) => entry.videoId === videoId)
+}
+
+/**
+ * Return `pageUrl` with the share-URL credential params (`sync_url` /
+ * `sync_password`) set from the stored creds, so a pull-back keeps the
+ * credentials in the tab's address bar. The room cursor's `pageUrl` is the
+ * canonical param-free form and miruro strips arbitrary params on
+ * navigation, so the guard re-populates them on every hard-nav pull-back.
+ *
+ * @param pageUrl The navigation target (the cursor's canonical page URL).
+ * @param creds The tab's stored credentials.
+ * @returns The target URL carrying the credential params, or `pageUrl`
+ *   unchanged if it can't be parsed.
+ */
+function withCredentialParams(pageUrl: string, creds: { syncUrl: string; syncPassword: string }): string {
+	try {
+		const u = new URL(pageUrl)
+		u.searchParams.set('sync_url', creds.syncUrl)
+		u.searchParams.set('sync_password', creds.syncPassword)
+		return u.toString()
+	} catch {
+		return pageUrl
+	}
 }
 
 /**

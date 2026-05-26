@@ -43,6 +43,8 @@ There is **no first-write-wins guard**. Each tab gets its own slot. Pasting a sh
 
 The URL is left untouched after handoff — `sync_password` stays visible in the address bar. Hardening that path is a server-side concern (fragment handoff, server-set cookie) and out of scope for this slice.
 
+The credential params are also treated as **sticky**: when the navigation-guard pulls a tab back to the room cursor (see [architecture.md](architecture.md)), the hard-nav target is built with `sync_url` / `sync_password` re-attached from the stored creds (`withCredentialParams` in [`entrypoints/background.ts`](../entrypoints/background.ts)). The cursor's `pageUrl` is the canonical param-free form, and some sites (miruro) strip arbitrary query params when you navigate away — so without this the pull-back would land back on the cursor with the credentials gone. This is enforced **only at the guard's hard-nav pull-back**, not on in-playlist episode clicks or server-driven cursor changes (those route through the site's own SPA navigation, which the extension doesn't control for query params). Re-attaching the params is harmless: `credentials.content.ts` is first-write-wins, and the guard's URL matching ignores these params when deciding playlist membership, so it never loops.
+
 ## Dev workflow — seeding creds by hand
 
 Available as a manual fallback / debug tool when there's no convenient share link (e.g. testing against `occ playbacksync:ws-serve` without a real dashboard round-trip):

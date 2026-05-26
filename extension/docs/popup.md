@@ -17,7 +17,7 @@ The popup is scoped to a single tab: on connect it derives the active tab via `c
 | `no_credentials` | No creds in this tab's `pbsync.tab.<tabId>` slot | Header + grey "No room" pill + guidance copy ("Open a share link…") |
 | `connecting` | Creds present, socket opening or `ROOM_STATE` not yet received | Amber "Connecting" pill + "Connecting to `<host>`…" copy |
 | `joined` | `ROOM_STATE` applied; `clientId` is set | Green "Joined" pill + cursor block (provider · label, page URL link) + mode chip + Leave Room button |
-| `disconnected` | Creds present, socket dropped (reconnect-pending, terminal, or soft-left by background) | Red "Offline" pill + "Disconnected from the room. Press Rejoin to reconnect, or Leave room to discard the credentials." copy + **Rejoin Room** + Leave Room buttons |
+| `disconnected` | Creds present, socket dropped — **reconnect-pending only** (transient drop, backoff in progress) | Red "Offline" pill + "Reconnecting automatically…" copy + Leave Room button |
 
 The cursor block reads:
 
@@ -55,8 +55,7 @@ Two typed envelopes live in [`src/messages.ts`](../src/messages.ts):
 | kind | payload | when |
 |------|---------|------|
 | `subscribe` | `tabId: number` | First envelope after `connect()` — binds the port to a tab |
-| `leave_room` | `tabId: number` | User clicked Leave Room (hard leave — wipes creds) |
-| `rejoin_room` | `tabId: number` | User clicked Rejoin Room from the `disconnected` view — re-establishes the WS runtime using the still-stored creds |
+| `leave_room` | `tabId: number` | User clicked Leave Room (wipes creds) — the only user-driven leave |
 
 **Background → Popup** (`BackgroundToPopup`):
 
@@ -126,9 +125,11 @@ Frames that **don't** trigger a broadcast:
 ## Leave Room semantics
 
 The wire protocol has no LEAVE frame. "Leave" is a purely client-side
-operation, scoped to the popup's bound tab. Two variants exist:
-
-### Hard leave (user-driven, via Leave Room)
+operation, scoped to the popup's bound tab, and there is exactly one way
+to trigger it: the popup's **Leave Room** button. Navigation never leaves
+a room — an off-target click or off-list navigation in default/single
+mode pulls the tab back to the cursor instead (see
+[`protocol-client.md`](protocol-client.md#viewer-driven-cursor-changes)).
 
 1. Popup posts `{ kind: 'leave_room', tabId }` on the port.
 2. Background calls `disconnect(tabId)` — closes that tab's socket with
@@ -136,38 +137,20 @@ operation, scoped to the popup's bound tab. Two variants exist:
    pool entry.
 3. Background calls `tearDownTab(tabId)` — wipes that tab's
    `pbsync.tab.<tabId>` slot, drops its session from the sessions map,
-   calls `notifyPopupCredsCleared(tabId)` to push a fresh
-   `no_credentials` snapshot to any port still bound to that tab, and
-   greys the toolbar icon for that tab.
+   clears its navigation-guard arming, calls
+   `notifyPopupCredsCleared(tabId)` to push a fresh `no_credentials`
+   snapshot to any port still bound to that tab, and greys the toolbar
+   icon for that tab.
 
 The popup re-renders to the no-creds view; it does not close itself.
 Other tabs' runtimes are untouched.
 
-### Soft leave (background-driven, via cursor-trigger arbitration)
-
-When the user clicks an in-page navigation control (e.g. an episode
-button) and the background decides the click can't be honoured (default
-mode + target not in playlist, or single mode + any click — see
-[`protocol-client.md`](protocol-client.md#viewer-driven-cursor-changes)),
-the room is soft-left:
-
-1. Background tears down the WS runtime for that tab (close socket,
-   stop timers, drop pool entry — same as the hard path).
-2. The `pbsync.tab.<tabId>` storage slot is **left intact**.
-3. A fresh snapshot with `status: 'disconnected'` is pushed to any port
-   bound to that tab; the popup renders the disconnected view with both
-   the **Rejoin Room** and Leave Room buttons.
-4. The tab is added to a `softLeftTabs` gate that suppresses the
-   content runtime's 1 Hz status heartbeat from auto-reconnecting
-   through `ensureConnected`. Without this gate the heartbeat would
-   re-arm the WS runtime within a second of the soft-leave and the room
-   would churn through join/leave cycles.
-
-Clicking **Rejoin Room** posts `{ kind: 'rejoin_room', tabId }` on the
-port. The background reads the still-stored creds, clears the
-`softLeftTabs` entry, and re-runs the standard connect path —
-equivalent to opening a fresh share link except no credential prompt is
-involved.
+> The earlier "soft leave + Rejoin" mechanism (a background-driven
+> teardown that kept creds and offered a one-click Rejoin) is gone.
+> Cursor-trigger arbitration now pulls the tab back rather than tearing
+> the runtime down, so `softLeftTabs`, the `rejoin_room` envelope, and
+> the Rejoin Room button were all removed. The `disconnected` status
+> survives only for genuine reconnect-pending drops.
 
 ## Optimistic UI
 
@@ -177,11 +160,6 @@ arrive. The push (typically within a few ms) replaces the entire view
 with the real no-creds state. The optimistic transition exists so
 that if the user clicks twice it doesn't fire two `leave_room`
 messages.
-
-The Rejoin Room button follows the same pattern: clicking it disables
-the button and swaps the label to "Rejoining…" until the next snapshot
-push lands — typically the `connecting` snapshot that the background
-emits the moment it re-opens the WS.
 
 ## Cross-browser packaging
 

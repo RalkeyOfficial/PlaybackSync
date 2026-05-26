@@ -111,9 +111,9 @@ const AUTOPLAY_HOLD_TIMEOUT_MS = 10_000;
 class MiruroAdapter implements Adapter {
   readonly id = 'miruro';
 
-  // miruro's watch URLs are canonical `/watch/<show>?ep=<n>` and match the
-  // `pageUrl`s emitted into the playlist verbatim, so the background's
-  // string-equality navigation-guard is safe to enable here.
+  // miruro's watch URLs are canonical `/watch/<show>?ep=<n>` and resolve
+  // cleanly to a videoId via `videoIdForUrl` (see ./url), so the background's
+  // identity-based navigation-guard is safe to enable here.
   readonly guardNavigation = true;
 
   private ctx: AdapterContext | null = null;

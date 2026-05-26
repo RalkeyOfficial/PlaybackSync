@@ -137,6 +137,8 @@ Each `SessionState` carries a `converged: boolean` flag (one session per tab —
 
 The flag flips via `markConverged(session)`, called from `dispatchToOwner` immediately after the runtime hands the commands to its bound tab. Because each runtime owns exactly one tab, there is no "no active tab yet" branch to defer — `ROOM_STATE` / `STATE` / `SYNC_ADJUST` always dispatch directly to `r.tabId`.
 
+One exception holds convergence off deliberately: `SessionState.awaitingReload`. A navigation-guard pull-back reloads the tab in place without closing the socket (see [§The navigation-guard](#the-navigation-guard-non-click-departures)), so `markConverged` is suppressed while `awaitingReload` is set — a server frame landing mid-reload must not converge the tab early and let the reloaded player's autoplay / resume-seek leak. The flag clears, and convergence re-arms with a fresh settle window, only when the reloaded page reports the cursor's identity (or the `GUARD_RELOAD_CONVERGE_FALLBACK_MS` safety timer fires).
+
 ### 3. Post-convergence settle window
 
 The page's auto-resume logic can also fire *after* the adapter has applied the room's first command — sometimes a second or two later, well outside the 600 ms echo window. `JOIN_SETTLE_WINDOW_MS` (1000 ms) is armed by `markConverged`, which writes `settleUntil = Date.now() + JOIN_SETTLE_WINDOW_MS`; `inSettleWindow(session)` drops any intent from that tab while `Date.now() < settleUntil` (logged as `dropping settle-window intent`), then clears the field.
@@ -166,13 +168,28 @@ The content runtime polls `adapter.getState()` every 1 s and pushes a `status` m
 | Mode | Target in playlist? | Background action |
 |---|---|---|
 | `default` | yes | Send `CURSOR_CHANGE_REQUEST` (videoRef form) |
-| `default` | no | **Soft-leave** the room |
-| `single` | any | **Soft-leave** the room |
+| `default` | no | **Pull the tab back** to the cursor (stay connected) |
+| `single` | any | **Pull the tab back** to the cursor (stay connected) |
 | `freeform` | yes | Send `CURSOR_CHANGE_REQUEST` (videoRef form) |
 | `freeform` | no | Send `CURSOR_CHANGE_REQUEST`; the server auto-appends the target in the same transaction (`source: auto_appended`, pruned by `freeform_auto_append_cap`) |
 
-Soft-leave tears down the per-tab WS runtime but leaves the `pbsync.tab.<tabId>` creds slot intact so the popup can offer a one-click Rejoin alongside Leave Room (see [`popup.md`](popup.md)). A `softLeftTabs` gate suppresses the content runtime's status heartbeat from auto-reconnecting through `ensureConnected` while the tab is soft-left — otherwise the room would churn through join/leave cycles every second.
+The anchored modes (default, single) treat off-target navigation as something the room politely **corrects**, not as a signal that the user left. `pullTabBackToCursor` dispatches a synthetic `cursor_change` command — the exact shape an inbound `CURSOR_CHANGE` produces — back through the per-tab content channel; the adapter replays it as a navigation (synth-click, falling back to `location.href`), and the resulting synthetic click is filtered out of the sender path by `Event.isTrusted` so it can't bounce back as a fresh request. The WS runtime stays connected throughout; the popup stays `joined`. It's a no-op when the room has no cursor yet (empty playlist in default mode, pre-JOIN race) — there's nowhere to pull back to. The **only** user-driven way to leave a room is the popup's explicit Leave Room button.
+
+> Misclicks on related-video thumbnails are the single most common navigation event on these sites; making them destructive (eject → rejoin) would create constant friction for the *most* common action. Pull-back replaced the earlier "soft-leave + Rejoin" mechanism entirely — `softLeaveTab`, the `softLeftTabs` gate, `handleRejoinRoom`, the `rejoin_room` popup envelope, and the popup's Rejoin button are all gone.
 
 Freeform forwards every click unconditionally — "clicks are cursor changes, the playlist is a side effect" — so the extension never needs a separate `PLAYLIST_UPDATE` round-trip to follow a click. The server's auto-append-on-cursor-change branch in `CursorService::resolveAndApply` does the work in one transaction. See [`playlist-update.md`](playlist-update.md) for when the dormant `sendPlaylistUpdate` API would be called instead (out-of-flow contributions from a non-episode-list surface).
 
 On the receiver side, the incoming `CURSOR_CHANGE` is dispatched to the adapter as an `AuthoritativeCommand` of type `cursor_change`; per-adapter logic decides how to navigate (see the [adapter contract](adapter-contract.md) and [`adapter-miruro.md`](adapter-miruro.md) for the synthetic-click approach used on miruro). The runtime re-arms the join settle window on every `CURSOR_CHANGE` so the site's auto-resume seek on the new ep is dropped, mirroring the JOIN-time auto-resume handling.
+
+### The navigation-guard (non-click departures)
+
+The cursor-trigger path above only fires on the in-page controls the adapter's DOM listener watches. Departures it can't see — the home link, related-video thumbnails, the address bar, browser back/forward, JS redirects, cross-site navigation — are covered by the opt-in **navigation-guard**, a `chrome.tabs.onUpdated` listener in the background. It is armed per tab from the `identity` message's `guardNavigation` flag (echoing the active adapter's `Adapter.guardNavigation`), and only for adapters that ship a `videoIdForUrl` matcher.
+
+The guard:
+
+- **Only acts on armed tabs**, in default/single mode, with a cursor, **after** the join has converged and the settle window elapsed (it stays out of join-time steering, which the server owns via unicast `CURSOR_CHANGE`), and skips while a reload is already pending.
+- **Matches by video identity, not URL string.** `isRoomUrl` resolves the live URL through the active adapter's pure `videoIdForUrl` matcher (registered in `src/adapters/url-matchers.ts`) and compares the resulting `videoId` against the cursor + playlist. A `null` id (wrong site, home, search) counts as off-playlist. The background imports the matcher registry without pulling in the DOM-bound adapter class.
+- **Debounces (`NAV_GUARD_DEBOUNCE_MS` = 300 ms) then re-checks the live URL** via `chrome.tabs.get`. On an off-list episode *click* both paths fire (DOM synth-click + URL change); the live re-check lets the synth-click win the race — if the tab is already back on an in-playlist page the guard does nothing. Non-click departures have no synth-click, so the guard hard-navigates.
+- **Does not close the socket.** The pull-back is a `chrome.tabs.update` reload; the WS survives it. To stop the reloaded player's autoplay + resume-seek leaking, the guard re-runs the join grace period in place: `resetConvergence` un-converges, and `SessionState.awaitingReload` holds convergence off (suppressing `markConverged` even against server frames mid-reload) until the reloaded page reports the **cursor's** identity — at which point the `identity` route clears the flag and `markConverged`s, arming a fresh settle window. `GUARD_RELOAD_CONVERGE_FALLBACK_MS` (4 s) un-strands a tab whose reload never reports the cursor. Because no socket closes, the room sees no `client_left` / `client_joined` flap.
+
+See [`adapter-contract.md` §Navigation-guard & the URL matcher](adapter-contract.md#navigation-guard--the-url-matcher) for the adapter-author side (writing the matcher + opting in).

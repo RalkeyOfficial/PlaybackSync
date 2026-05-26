@@ -26,6 +26,17 @@ Both `showId` (the path segment after `/watch/`) and `ep` (the query parameter) 
 
 The same `showId` + `ep` on `.tv` and on `.to` must produce the same identity (workshop §7 — no hostname in `normalizedUrl`). The dropped slug is what makes that hold across locales.
 
+## URL matcher & the navigation-guard
+
+The adapter is split across two files:
+
+- [`src/adapters/miruro/index.ts`](../src/adapters/miruro/index.ts) — the DOM-bound `MiruroAdapter` class.
+- [`src/adapters/miruro/url.ts`](../src/adapters/miruro/url.ts) — pure, **DOM-free** URL helpers: `HOST_RE`, `PATH_RE`, `makeVideoId(showId, ep)`, and `videoIdForUrl(url): string | null`.
+
+The split exists so the background service worker can answer "is this URL one of the room's videos?" for the navigation-guard without importing the DOM-bound class. `url.ts` is registered by adapter id in [`src/adapters/url-matchers.ts`](../src/adapters/url-matchers.ts), and the class **shares** `HOST_RE` / `PATH_RE` / `makeVideoId` by importing them from `url.ts` — so the adapter's identity derivation and the guard's URL matching can't drift. `videoIdForUrl` reads only the identity-bearing parts: it ignores the optional slug and any extra query params, including the `?sync_url=&sync_password=` the credential-handoff leaves in the address bar after a join.
+
+miruro sets **`guardNavigation = true`**: its `/watch/<show>?ep=<n>` URLs are canonical, navigable, and resolve cleanly to identity, so the background's navigation-guard pulls the tab back when it lands on a URL outside the room's playlist by any means the in-page click listener can't observe (home link, related-video thumbnails, address bar, back/forward, cross-site). See [`protocol-client.md` §The navigation-guard](protocol-client.md#the-navigation-guard-non-click-departures) and [`adapter-contract.md` §Navigation-guard & the URL matcher](adapter-contract.md#navigation-guard--the-url-matcher).
+
 ## DOM quirks
 
 ### Two `<video>` elements
@@ -58,7 +69,13 @@ Two timing quirks sit around the dispatch:
 1. **Button appears after the `<video>`.** Vidstack's layout overlay lands a few frames after the `<video>` itself, so a synchronous lookup right after `waitForVideo` resolves is racy. `waitForLoadButton` re-observes `document.body` for up to `LOAD_BUTTON_WAIT_TIMEOUT_MS` (5 s), and short-circuits via the video's `loadstart` event so a page that loads its source on its own (refresh, second activation, server-side hydration) doesn't wait the full timeout. Returns `null` on timeout, in which case the adapter logs and lets the user start playback manually.
 2. **Click handler wires up after the button mounts.** Vidstack inserts the button into the DOM *before* its click handler is fully attached — the responsive-layout pass + capability detection settle a few hundred ms later. Dispatching immediately reaches a no-op handler, so the adapter waits `LOAD_BUTTON_SETTLE_MS` (300 ms, verified empirically) after the button appears before firing the synthesized keys.
 
-After `loadedmetadata` arrives (5 s timeout), the adapter immediately `video.pause()`s. Vidstack auto-plays on load; pausing pre-empts that so the room's first authoritative command wins without a race. If the source is already populated (refresh, second activation), the trigger is a no-op.
+### Holding the one-shot autoplay
+
+Vidstack auto-plays exactly once when the source loads, and rides a delayed resume-position seek with it. Both would leak to the room as phantom intents — at first join, and again after a navigation-guard reload. The adapter holds the autoplay rather than letting it fire and relying solely on the background's suppression (see [`adapter-contract.md` §Holding autoplay](adapter-contract.md#holding-autoplay-until-the-rooms-first-command) for the general pattern):
+
+1. A `play` listener (`holdAutoplay`) is attached **before** `ensureLoaded`, so it catches the auto-play whichever path the load takes (warm revisit with a source already present, or cold manual-load). While `autoplayHeld` is set it re-`pause()`s the video on every `play`.
+2. The hold is released on the **first** `onCommand` invocation, *before* the command is applied — so a room `play` command isn't immediately re-paused by the guard. `releaseAutoplayHold` is idempotent and also runs from `destroy`.
+3. `AUTOPLAY_HOLD_TIMEOUT_MS` (10 s) lifts the hold even if no command ever arrives (e.g. a brand-new room with no state), so the viewer is never stuck unable to start playback. The happy path lifts it far sooner.
 
 ## Catalog scraping
 
