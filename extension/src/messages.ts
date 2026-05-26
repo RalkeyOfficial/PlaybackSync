@@ -43,6 +43,13 @@ export type ContentToBackground =
 		 * `VideoRef` without knowing the page's location.
 		 */
 		pageUrl: string
+		/**
+		 * The active adapter's `Adapter.guardNavigation` opt-in flag. When
+		 * `true`, the background arms its navigation-guard for this tab:
+		 * subsequent navigations to a URL not in the room's playlist pull
+		 * the tab back to the cursor. See {@link Adapter.guardNavigation}.
+		 */
+		guardNavigation: boolean
 	}
 	| { kind: 'status'; adapterId: string; state: VideoState }
 	| { kind: 'fail'; adapterId: string; reason: string }

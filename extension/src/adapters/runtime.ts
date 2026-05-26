@@ -69,8 +69,12 @@ const ADAPTERS: AdapterFactory[] = [
 export interface RuntimeBridge {
 	/** Forward an observed user action (play/pause/seek) to the background. */
 	sendIntent(adapterId: string, intent: LocalIntent): void
-	/** Forward the page's content identity (once per adapter lifetime). */
-	sendIdentity(adapterId: string, identity: ContentIdentity): void
+	/**
+	 * Forward the page's content identity (once per adapter activation).
+	 * `guardNavigation` echoes the active adapter's opt-in flag so the
+	 * background knows whether to arm its navigation-guard for this tab.
+	 */
+	sendIdentity(adapterId: string, identity: ContentIdentity, guardNavigation: boolean): void
 	/**
 	 * Forward a periodic state snapshot. The runtime drives the cadence
 	 * via {@link STATUS_POLL_MS}; the background caches the latest value
@@ -237,7 +241,7 @@ async function evaluate(): Promise<void> {
 		state = { kind: 'idle' }
 		return
 	}
-	const ctx = buildContext(adapter.id)
+	const ctx = buildContext(adapter.id, adapter.guardNavigation ?? false)
 	try {
 		await adapter.init(ctx)
 		if ((state as RuntimeState).kind === 'failed') {
@@ -259,7 +263,7 @@ async function evaluate(): Promise<void> {
 
 let pendingHandler: ((cmd: AuthoritativeCommand) => void) | null = null
 
-function buildContext(adapterId: string): AdapterContext {
+function buildContext(adapterId: string, guardNavigation: boolean): AdapterContext {
 	pendingHandler = null
 	return {
 		emitIntent(intent) {
@@ -275,7 +279,7 @@ function buildContext(adapterId: string): AdapterContext {
 			}
 		},
 		setIdentity(identity) {
-			bridge?.sendIdentity(adapterId, identity)
+			bridge?.sendIdentity(adapterId, identity, guardNavigation)
 		},
 		fail(reason) {
 			log('error', adapterId, 'adapter failed', { reason })

@@ -55,6 +55,55 @@ import {
 const sessions = new Map<number, SessionState>()
 
 /**
+ * Tabs whose active adapter opted into the navigation-guard (via
+ * `Adapter.guardNavigation`, echoed on the `identity` message). The
+ * `chrome.tabs.onUpdated` guard only acts for tabs in this set, so it
+ * never fires for adapters that didn't opt in or sites structured
+ * differently. Populated/cleared from the `identity` handler and the
+ * teardown paths ({@link tearDownTab}, adapter `fail`, tab removal).
+ * Kept independent of {@link sessions} because the `identity` message
+ * can arrive before the WS session exists.
+ */
+const navGuardedTabs = new Set<number>()
+
+/**
+ * How long the navigation-guard waits before acting on an off-playlist
+ * URL. The window lets the DOM-driven pull-back (`pullTabBackToCursor`
+ * synth-click, fired from the same user click) land first; the guard
+ * then re-reads the live URL and only hard-navigates if the tab is
+ * still off-playlist. Non-click departures (home link, address bar,
+ * cross-site) have no synth-click, so the guard acts after this delay.
+ */
+const NAV_GUARD_DEBOUNCE_MS = 300
+
+/** Pending navigation-guard re-check timers, keyed by tab. */
+const navGuardTimers = new Map<number, ReturnType<typeof setTimeout>>()
+
+/**
+ * Tabs the navigation-guard has torn the socket down for and hard-
+ * navigated back to the cursor, now waiting for the reloaded page to
+ * re-JOIN. A guard pull-back is `chrome.tabs.update` — a full page load
+ * — and the WS would otherwise survive it *converged*, so the reloaded
+ * player's autoplay + resume-position seek would leak as wire EVENTs and
+ * the room's playback state would never be re-applied. Disconnecting and
+ * letting the reloaded page re-JOIN from scratch re-runs the entire join
+ * grace period (the un-converged gate drops those events until ROOM_STATE
+ * re-applies room state) — the same path a first load takes. This set
+ * holds the reconnect off until the reload reports the *cursor's*
+ * identity, so a lingering frame from the pre-reload page can't reconnect
+ * early and converge against the wrong page.
+ */
+const guardReloadPending = new Set<number>()
+
+/**
+ * Safety net: if a guard reload never reports the cursor's identity (a
+ * stale/redirecting cursor URL, an adapter that won't init), reconnect
+ * anyway so the tab can't get stranded socket-less. Generous because the
+ * happy path reconnects far sooner, off the reloaded `identity` message.
+ */
+const GUARD_RELOAD_RECONNECT_FALLBACK_MS = 4_000
+
+/**
  * Build the WS callback set for a given tab. The runtime closes over
  * `tabId` so `dispatchCommand` and `onLifecycleChange` don't need to
  * carry it.
@@ -90,8 +139,26 @@ function makeCallbacks(tabId: number): WsCallbacks {
 async function tearDownTab(tabId: number): Promise<void> {
 	await clearCreds(tabId)
 	sessions.delete(tabId)
+	clearNavGuard(tabId)
 	notifyPopupCredsCleared(tabId)
 	setColored(tabId, false)
+}
+
+/**
+ * Disarm the navigation-guard for a tab: drop it from
+ * {@link navGuardedTabs} and cancel any pending re-check timer. Called
+ * from every path that ends a tab's session.
+ *
+ * @param tabId The tab to disarm.
+ */
+function clearNavGuard(tabId: number): void {
+	navGuardedTabs.delete(tabId)
+	guardReloadPending.delete(tabId)
+	const timer = navGuardTimers.get(tabId)
+	if (timer !== undefined) {
+		clearTimeout(timer)
+		navGuardTimers.delete(tabId)
+	}
 }
 
 /**
@@ -147,6 +214,17 @@ export default defineBackground(() => {
 		void clearCreds(tabId)
 		forgetTab(tabId)
 		sessions.delete(tabId)
+		clearNavGuard(tabId)
+	})
+
+	// Navigation-guard: pull an anchored-room tab back to the cursor when it
+	// navigates to a URL outside the playlist by any means the in-page DOM
+	// click listener can't see (home link, address bar, back/forward,
+	// cross-site). Only acts for tabs whose adapter opted in via
+	// `Adapter.guardNavigation`. See `handleTabNavigation`.
+	chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+		if (changeInfo.url === undefined) return
+		handleTabNavigation(tabId, changeInfo.url)
 	})
 })
 
@@ -256,7 +334,11 @@ async function routeMessage(tabId: number | undefined, msg: ContentToBackground)
 		}
 		case 'status': {
 			recordStatus(tabId, msg.adapterId, msg.state)
-			void ensureConnected(tabId)
+			// While a guard reload is pending, hold off the status-driven
+			// reconnect: it's the reloaded cursor `identity` that reconnects,
+			// so a status from the pre-reload page (or a too-early one) can't
+			// re-JOIN against the wrong page.
+			if (!guardReloadPending.has(tabId)) void ensureConnected(tabId)
 			const session = sessions.get(tabId)
 			if (session) {
 				const prev = session.lastPlayerState
@@ -271,8 +353,27 @@ async function routeMessage(tabId: number | undefined, msg: ContentToBackground)
 			}
 			return
 		}
-		case 'identity':
+		case 'identity': {
 			recordIdentity(tabId, msg.adapterId, msg.identity)
+			// Arm/disarm the navigation-guard per the active adapter's opt-in.
+			if (msg.guardNavigation) navGuardedTabs.add(tabId)
+			else clearNavGuard(tabId)
+			// If a guard pull-back tore the socket down and this identity is
+			// the reload landing back on the cursor, re-JOIN now so the full
+			// join grace period re-runs and ROOM_STATE re-applies the room's
+			// playback state. Reconnect *before* `reportIdentity` so the fresh
+			// runtime catches this identity for its first JOIN. Match on the
+			// cursor so a lingering identity from the pre-reload page can't
+			// reconnect early.
+			if (guardReloadPending.has(tabId)) {
+				const cursor = sessions.get(tabId)?.cursor
+				if (cursor
+					&& cursor.providerId === msg.identity.providerId
+					&& cursor.videoId === msg.identity.videoId) {
+					guardReloadPending.delete(tabId)
+					await ensureConnected(tabId)
+				}
+			}
 			// The WS runtime's first-JOIN deferral is gated on identity +
 			// catalog; feed it the wire-shape `VideoRef` built from the
 			// adapter's identity plus the entrypoint-captured `pageUrl`.
@@ -282,6 +383,7 @@ async function routeMessage(tabId: number | undefined, msg: ContentToBackground)
 				pageUrl: msg.pageUrl,
 			})
 			return
+		}
 		case 'catalog':
 			reportCatalog(tabId, msg.catalog)
 			return
@@ -296,6 +398,7 @@ async function routeMessage(tabId: number | undefined, msg: ContentToBackground)
 			await clearCreds(tabId)
 			forgetTab(tabId)
 			sessions.delete(tabId)
+			clearNavGuard(tabId)
 			forgetIconForTab(tabId)
 			return
 	}
@@ -407,6 +510,139 @@ async function handleCursorTrigger(tabId: number, target: VideoRefWithMeta): Pro
 function pullTabBackToCursor(tabId: number, session: SessionState): void {
 	if (!session.cursor) return
 	dispatchCommand(tabId, { type: 'cursor_change', pageUrl: session.cursor.pageUrl })
+}
+
+/**
+ * Navigation-guard entry point: a guarded tab's URL changed. Decides
+ * whether the tab wandered off the room's content and, if so, pulls it
+ * back to the cursor. This complements the in-page DOM click listener —
+ * it catches departures the adapter can't observe (home link, address
+ * bar, back/forward, cross-site) — and is the only pull-back path that
+ * works once the tab has left the adapter's host entirely.
+ *
+ * The decision is deferred by {@link NAV_GUARD_DEBOUNCE_MS} and then made
+ * against the tab's *live* URL, not the URL that triggered this call. That
+ * re-check is what coordinates the guard with the DOM pull-back: when an
+ * off-list episode click fires both paths, the DOM synth-click lands
+ * inside the debounce window and the live URL is already back on the
+ * cursor, so the guard does nothing. Non-click departures have no
+ * synth-click, so the live URL is still off-playlist and the guard
+ * hard-navigates. The re-check also makes the guard self-cancelling
+ * against its own correction (the cursor URL is in the playlist).
+ *
+ * @param tabId The tab whose URL changed.
+ * @param url The new URL reported by `chrome.tabs.onUpdated`.
+ */
+function handleTabNavigation(tabId: number, url: string): void {
+	if (!navGuardedTabs.has(tabId)) return
+	// A pull-back is already in flight for this tab (socket down, reload
+	// under way); don't stack another on the intermediate URL changes.
+	if (guardReloadPending.has(tabId)) return
+	const session = sessions.get(tabId)
+	if (!session || session.mode === 'freeform' || !session.cursor) return
+	// Join-time mismatch is the server's job: it steers a joiner to the
+	// cursor via a unicast CURSOR_CHANGE → in-page synth-click. The guard
+	// must stay out of that window or it races the steering with a
+	// redundant hard navigation (two refreshes on join) and trips the
+	// join-settle seek suppression. Only guard once the tab has converged
+	// on the room and the settle window has elapsed — i.e. genuine
+	// mid-session departures.
+	if (!hasConverged(session) || inSettleWindow(session)) return
+	if (isRoomUrl(session, url)) return
+
+	const existing = navGuardTimers.get(tabId)
+	if (existing !== undefined) clearTimeout(existing)
+	navGuardTimers.set(tabId, setTimeout(() => {
+		navGuardTimers.delete(tabId)
+		void recheckAndPullBack(tabId)
+	}, NAV_GUARD_DEBOUNCE_MS))
+}
+
+/**
+ * After the debounce, re-read the tab's live URL and hard-navigate back
+ * to the cursor only if it's still off the room's content. Reading the
+ * live URL (rather than trusting the URL that armed the timer) is what
+ * lets a DOM synth-click that already corrected the tab win the race.
+ *
+ * @param tabId The tab to re-check.
+ */
+async function recheckAndPullBack(tabId: number): Promise<void> {
+	if (!navGuardedTabs.has(tabId)) return
+	const session = sessions.get(tabId)
+	if (!session || session.mode === 'freeform' || !session.cursor) return
+
+	let tab: chrome.tabs.Tab
+	try {
+		tab = await chrome.tabs.get(tabId)
+	} catch {
+		// Tab closed between arming and firing; nothing to do.
+		return
+	}
+	const liveUrl = tab.url
+	if (!liveUrl || isRoomUrl(session, liveUrl)) return
+
+	console.log('[playbacksync:bg] nav-guard pulling tab back to cursor', {
+		tabId, liveUrl, cursorUrl: session.cursor.pageUrl,
+	})
+	// Tear the socket down before the hard nav so the reloaded page re-JOINs
+	// from scratch and the join grace period re-runs — otherwise the WS
+	// survives converged and the reloaded player's autoplay/resume seek leak
+	// to the room while its position is never re-synced. The reconnect is
+	// deferred to the reloaded cursor `identity` (see the `identity` route)
+	// so a lingering frame from the old page can't reconnect early; the
+	// fallback timer only un-strands a tab whose reload never reports the
+	// cursor.
+	const cursorUrl = session.cursor.pageUrl
+	guardReloadPending.add(tabId)
+	setTimeout(() => {
+		if (guardReloadPending.delete(tabId)) {
+			console.warn('[playbacksync:bg] nav-guard reload reconnect fallback', { tabId })
+			void ensureConnected(tabId)
+		}
+	}, GUARD_RELOAD_RECONNECT_FALLBACK_MS)
+	disconnect(tabId)
+	void chrome.tabs.update(tabId, { url: cursorUrl }).catch(() => {
+		// Tab closed or navigation blocked; `onRemoved` will clean up.
+	})
+}
+
+/**
+ * Whether `url` is a page the room considers valid to sit on: the current
+ * cursor, or any entry already in the playlist. The cursor check is also
+ * the guard's loop-stop — after a pull-back the tab lands on the cursor
+ * URL, which matches here so the guard doesn't re-fire.
+ *
+ * @param session The tab's session.
+ * @param url The URL to test.
+ */
+function isRoomUrl(session: SessionState, url: string): boolean {
+	const normalized = stripHandoffParams(url)
+	if (session.cursor && stripHandoffParams(session.cursor.pageUrl) === normalized) return true
+	return session.playlist.some((entry) => stripHandoffParams(entry.pageUrl) === normalized)
+}
+
+/**
+ * Strip the share-URL credential params (`sync_url` / `sync_password`)
+ * from a URL before comparison. The credentials content script
+ * deliberately leaves them in the address bar after handoff
+ * (`credentials.content.ts`), so a freshly-joined tab's live URL carries
+ * them while the playlist entries do not. Without this, the guard would
+ * misread a perfectly valid in-playlist page as off-playlist and yank
+ * the tab to the cursor's clean URL — dropping the params in the process.
+ *
+ * @param raw The URL to normalize.
+ * @returns The URL with the handoff params removed, or the input
+ *   unchanged if it can't be parsed.
+ */
+function stripHandoffParams(raw: string): string {
+	try {
+		const u = new URL(raw)
+		u.searchParams.delete('sync_url')
+		u.searchParams.delete('sync_password')
+		return u.toString()
+	} catch {
+		return raw
+	}
 }
 
 /**

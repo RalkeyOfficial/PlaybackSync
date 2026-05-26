@@ -13,6 +13,20 @@ export interface Adapter {
 	id: string
 
 	/**
+	 * Opt into the background navigation-guard: when the tab navigates to a
+	 * URL that isn't in the room's playlist (home link, address bar,
+	 * back/forward, cross-site), the background pulls it back to the room's
+	 * cursor. The guard compares live tab URLs against playlist entry
+	 * `pageUrl`s by string equality, so set this `true` **only** when this
+	 * adapter's `pageUrl`s are canonical, navigable, and 1:1 with the URLs
+	 * the browser actually shows (miruro's `?ep=` URLs qualify). Adapters on
+	 * sites where the URL doesn't encode the video identity must omit it —
+	 * their DOM click listener (`emitCursorTrigger`) remains the pull-back
+	 * signal, which the guard does not replace. Defaults to `false`.
+	 */
+	readonly guardNavigation?: boolean
+
+	/**
 	 * Pure predicate: does this adapter own the given page? The runtime calls
 	 * this on every page load and SPA navigation. No side effects, no DOM
 	 * reads — just URL inspection.

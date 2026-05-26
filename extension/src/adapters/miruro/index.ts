@@ -110,6 +110,11 @@ const EPISODE_LIST_WAIT_TIMEOUT_MS = 1_500;
 class MiruroAdapter implements Adapter {
   readonly id = 'miruro';
 
+  // miruro's watch URLs are canonical `/watch/<show>?ep=<n>` and match the
+  // `pageUrl`s emitted into the playlist verbatim, so the background's
+  // string-equality navigation-guard is safe to enable here.
+  readonly guardNavigation = true;
+
   private ctx: AdapterContext | null = null;
   private video: HTMLVideoElement | null = null;
   private listeners: Array<[keyof HTMLMediaElementEventMap, () => void]> = [];
