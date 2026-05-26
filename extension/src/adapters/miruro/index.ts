@@ -1,20 +1,9 @@
 import type { Adapter, AdapterContext, AdapterFactory, LocalIntent, VideoState } from '../types';
 import type { VideoRefWithMeta } from '../../background/protocol';
-
-/**
- * Hosts the adapter recognises. miruro rotates TLDs; the enumerated list is
- * preferred over a `miruro\.[a-z]+` wildcard so a hostile actor registering
- * `miruro.<somewhere>` can't trigger the adapter. Adding a new TLD is a code
- * change + release.
- */
-const HOST_RE = /^(www\.)?miruro\.(tv|to|bz|ru)$/;
-
-/**
- * Watch-page path shape: `/watch/<showId>` or `/watch/<showId>/<slug>` with
- * an optional trailing slash. The slug is discarded in identity derivation
- * because it's locale-dependent.
- */
-const PATH_RE = /^\/watch\/([^/]+)(?:\/[^/]+)?\/?$/;
+// Host/path patterns and the video-id format live in the pure `url` module
+// so the background's navigation guard can share them (see that file and
+// `src/adapters/url-matchers.ts`).
+import { HOST_RE, PATH_RE, makeVideoId } from './url';
 
 /**
  * Scoped selector for the *player's* video element. miruro can render a
@@ -92,6 +81,15 @@ const EPISODE_TITLE_RE = /^EP\s+(\d+)\b/i;
 const EPISODE_LIST_WAIT_TIMEOUT_MS = 1_500;
 
 /**
+ * Safety release for the autoplay hold. miruro auto-plays exactly once at
+ * load; the hold pauses that and waits for the room's first authoritative
+ * command to take over. If no command ever arrives (e.g. a brand-new room
+ * with no state yet) the hold lifts after this window so the viewer is
+ * never left unable to start playback. The happy path lifts it far sooner.
+ */
+const AUTOPLAY_HOLD_TIMEOUT_MS = 10_000;
+
+/**
  * Adapter for the miruro family of streaming sites (`miruro.tv` / `.to` /
  * `.bz` / `.ru`). Handles three quirks of the live site:
  *
@@ -103,9 +101,12 @@ const EPISODE_LIST_WAIT_TIMEOUT_MS = 1_500;
  * 3. **Manual-load cold start** — on a freshly-loaded page the `<video>`
  *    has no source until a "click to load" button is activated. The
  *    button only responds to a synthesized `Space` keydown/keyup pair,
- *    not a `click()`. The adapter dispatches that sequence at init and
- *    pauses immediately after the source loads, so the room's
- *    authoritative state takes over without a flash of auto-play.
+ *    not a `click()`. The adapter dispatches that sequence at init.
+ * 4. **One-shot auto-play** — miruro auto-plays once when the source
+ *    loads. The adapter holds the video paused (re-pausing on any `play`)
+ *    until the room's first authoritative command arrives, so playback
+ *    starts paused and the room state decides play/pause without a flash
+ *    of auto-play. See {@link AUTOPLAY_HOLD_TIMEOUT_MS}.
  */
 class MiruroAdapter implements Adapter {
   readonly id = 'miruro';
@@ -125,6 +126,14 @@ class MiruroAdapter implements Adapter {
   private cursorTriggerContainer: Element | null = null;
   private cursorTriggerHandler: ((ev: Event) => void) | null = null;
   private destroyed = false;
+
+  // While held, miruro's one-shot load auto-play is immediately re-paused
+  // so the video sits paused until the room's first authoritative command
+  // takes over (see {@link AUTOPLAY_HOLD_TIMEOUT_MS}). Released in the
+  // `onCommand` handler — the room is then in control of play/pause.
+  private autoplayHeld = true;
+  private autoplayHoldHandler: (() => void) | null = null;
+  private autoplayHoldTimer: ReturnType<typeof setTimeout> | null = null;
 
   canHandlePage(url: URL): boolean {
     if (!HOST_RE.test(url.hostname)) return false;
@@ -155,6 +164,22 @@ class MiruroAdapter implements Adapter {
     if (this.destroyed) return;
     this.video = video;
 
+    // Hold miruro's one-shot load auto-play: re-pause on any `play` until
+    // the room's first authoritative command arrives. Attached *before*
+    // `ensureLoaded` so it catches the auto-play whichever path the load
+    // takes (warm revisit with a source already present, or cold manual-
+    // load), and on whatever event it fires. Released in `onCommand`.
+    const holdAutoplay = () => {
+      if (this.autoplayHeld && this.video && !this.video.paused) {
+        this.video.pause();
+      }
+    };
+    this.autoplayHoldHandler = holdAutoplay;
+    video.addEventListener('play', holdAutoplay);
+    this.autoplayHoldTimer = setTimeout(() => {
+      this.autoplayHeld = false;
+    }, AUTOPLAY_HOLD_TIMEOUT_MS);
+
     // Re-read ep *after* the video wait: miruro often appends `?ep=` only
     // after the player initialises, so reading at adapter entry is racy.
     const ep = new URL(location.href).searchParams.get('ep');
@@ -179,6 +204,10 @@ class MiruroAdapter implements Adapter {
     }
 
     ctx.onCommand(cmd => {
+      // The room is now authoritative over playback: lift the auto-play
+      // hold before applying, so a room `play` command isn't re-paused by
+      // the hold guard.
+      this.releaseAutoplayHold();
       switch (cmd.type) {
         case 'play':
           void video.play();
@@ -202,7 +231,7 @@ class MiruroAdapter implements Adapter {
 
     ctx.setIdentity({
       providerId: 'miruro',
-      videoId: `${showId}-ep${ep}`,
+      videoId: makeVideoId(showId, ep),
       normalizedUrl: `/watch/${showId}?ep=${ep}`,
     });
   }
@@ -251,10 +280,37 @@ class MiruroAdapter implements Adapter {
       for (const [evt, fn] of this.listeners) {
         this.video.removeEventListener(evt, fn);
       }
+      if (this.autoplayHoldHandler) {
+        this.video.removeEventListener('play', this.autoplayHoldHandler);
+      }
     }
+    if (this.autoplayHoldTimer !== null) {
+      clearTimeout(this.autoplayHoldTimer);
+      this.autoplayHoldTimer = null;
+    }
+    this.autoplayHoldHandler = null;
     this.listeners = [];
     this.video = null;
     this.ctx = null;
+  }
+
+  /**
+   * Lift the auto-play hold installed in {@link init}: stop re-pausing on
+   * `play`, drop the hold listener, and cancel the safety timer. Idempotent
+   * — called on the room's first authoritative command and again on
+   * {@link destroy} via the cleanup there.
+   */
+  private releaseAutoplayHold(): void {
+    if (!this.autoplayHeld) return;
+    this.autoplayHeld = false;
+    if (this.autoplayHoldTimer !== null) {
+      clearTimeout(this.autoplayHoldTimer);
+      this.autoplayHoldTimer = null;
+    }
+    if (this.video && this.autoplayHoldHandler) {
+      this.video.removeEventListener('play', this.autoplayHoldHandler);
+      this.autoplayHoldHandler = null;
+    }
   }
 
   /**
@@ -481,7 +537,7 @@ class MiruroAdapter implements Adapter {
       if (ep === null) return;
       this.ctx?.emitCursorTrigger({
         providerId: 'miruro',
-        videoId: `${showId}-ep${ep}`,
+        videoId: makeVideoId(showId, ep),
         pageUrl: `${location.origin}/watch/${showId}?ep=${ep}`,
         episodeNumber: ep,
         label: button.title.trim() || null,
@@ -512,7 +568,7 @@ class MiruroAdapter implements Adapter {
     for (const node of container.querySelectorAll<HTMLButtonElement>(EPISODE_LIST_ENTRY_SELECTOR)) {
       const ep = this.extractEpisodeNumber(node);
       if (ep === null) continue;
-      const key = `${showId}-ep${ep}`;
+      const key = makeVideoId(showId, ep);
       if (seen.has(key)) continue;
       seen.add(key);
       entries.push({

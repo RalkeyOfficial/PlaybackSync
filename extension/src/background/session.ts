@@ -100,6 +100,17 @@ export interface SessionState {
 	 * never armed. See {@link JOIN_SETTLE_WINDOW_MS}.
 	 */
 	settleUntil: number | null
+	/**
+	 * Whether this tab is mid-reload from a navigation-guard pull-back. The
+	 * guard hard-navigates the tab back to the cursor without closing the
+	 * WS, so the surviving session must be re-converged manually: pull-back
+	 * sets this (after {@link resetConvergence}) and the reloaded page's
+	 * cursor `identity` clears it and re-`markConverged`s. While set,
+	 * {@link markConverged} is suppressed so a server frame landing during
+	 * the reload can't converge the tab early and let the reloaded player's
+	 * autoplay / resume-position events leak.
+	 */
+	awaitingReload: boolean
 }
 
 /** Build a fresh session with everything cleared. */
@@ -117,6 +128,7 @@ export function createSession(): SessionState {
 		lastPlayerState: null,
 		converged: false,
 		settleUntil: null,
+		awaitingReload: false,
 	}
 }
 
@@ -124,12 +136,14 @@ export function createSession(): SessionState {
  * Stamp the tab as having received its first authoritative command on the
  * current connection. Arms the settle window on the *first* convergence
  * only; subsequent STATE-driven re-dispatches must not keep re-locking
- * the user out of their own intents.
+ * the user out of their own intents. Suppressed entirely while
+ * {@link SessionState.awaitingReload} is set, so a server frame arriving
+ * mid-reload can't converge the tab before the reloaded page is ready.
  *
  * @param s The session to update.
  */
 export function markConverged(s: SessionState): void {
-	if (s.converged) return
+	if (s.converged || s.awaitingReload) return
 	s.converged = true
 	s.settleUntil = Date.now() + JOIN_SETTLE_WINDOW_MS
 }
@@ -182,14 +196,18 @@ export function applyRoomState(s: SessionState, frame: RoomStateFrame): Authorit
 	s.playlistVersion = frame.playlistVersion
 	s.mode = frame.singleMode ? 'single' : frame.freeformMode ? 'freeform' : 'default'
 
-	const cmds: AuthoritativeCommand[] = []
-	// Apply the room's authoritative playback state to the active tab.
+	// Seek first, then play/pause — the play/pause must be the *last* action
+	// applied so it's authoritative. Some players (Vidstack on miruro)
+	// resume playback as a side effect of a seek, so a trailing seek would
+	// silently undo a leading `pause` and leave the tab playing against a
+	// paused room. Keeping play/pause last makes "apply room state" land the
+	// playerState the caller asked for.
+	const cmds: AuthoritativeCommand[] = [{ type: 'seek', time: frame.videoPos }]
 	if (frame.playerState === 'paused') {
 		cmds.push({ type: 'pause' })
 	} else if (frame.playerState === 'playing') {
 		cmds.push({ type: 'play' })
 	}
-	cmds.push({ type: 'seek', time: frame.videoPos })
 	return cmds
 }
 
@@ -202,8 +220,11 @@ export function applyRoomState(s: SessionState, frame: RoomStateFrame): Authorit
  */
 export function applyState(s: SessionState, frame: StateFrame): AuthoritativeCommand[] {
 	s.lastEventId = Math.max(s.lastEventId, frame.eventId)
-	if (frame.playerState === 'paused') return [{ type: 'pause' }, { type: 'seek', time: frame.videoPos }]
-	if (frame.playerState === 'playing') return [{ type: 'play' }, { type: 'seek', time: frame.videoPos }]
+	// Seek first, then play/pause — see {@link applyRoomState}: a trailing
+	// seek can resume playback (Vidstack) and undo a leading `pause`, so the
+	// play/pause must land last to be authoritative.
+	if (frame.playerState === 'paused') return [{ type: 'seek', time: frame.videoPos }, { type: 'pause' }]
+	if (frame.playerState === 'playing') return [{ type: 'seek', time: frame.videoPos }, { type: 'play' }]
 	// 'buffering' is a transient state we don't drive client-side.
 	return []
 }
