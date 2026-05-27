@@ -19,6 +19,7 @@ import type { AuthoritativeCommand, LocalIntent } from '@/src/adapters/types'
 import type {
 	CursorRef,
 	CursorChangeFrame,
+	PlayerState,
 	PlaylistEntry,
 	PlaylistUpdateInFrame,
 	RoomStateFrame,
@@ -52,6 +53,20 @@ export const JOIN_SETTLE_WINDOW_MS = 1_000
 interface RecentCommand {
 	kind: LocalIntent['type'] | 'cursor_change'
 	at: number
+}
+
+/**
+ * Snapshot of the room's last authoritative playback, cached so a tab can
+ * be resynced without a fresh server frame. See
+ * {@link SessionState.lastRoomPlayback} and {@link buildResyncCommands}.
+ */
+export interface RoomPlayback {
+	/** Playhead position (seconds) the room reported at {@link serverTs}. */
+	videoPos: number
+	/** Room playback state at {@link serverTs}. */
+	playerState: PlayerState
+	/** Server-clock timestamp (ms) of the frame this snapshot came from. */
+	serverTs: number
 }
 
 /**
@@ -111,6 +126,15 @@ export interface SessionState {
 	 * autoplay / resume-position events leak.
 	 */
 	awaitingReload: boolean
+	/**
+	 * The room's last authoritative playback snapshot (from `ROOM_STATE` /
+	 * `STATE`, position-refreshed by `SYNC_ADJUST`), or `null` before the
+	 * first such frame. A guard reload keeps the socket open, so the daemon
+	 * sends no fresh `ROOM_STATE`; this cache lets the reloaded tab resync
+	 * immediately from the cursor `identity` rather than waiting for the
+	 * next periodic frame. See {@link buildResyncCommands}.
+	 */
+	lastRoomPlayback: RoomPlayback | null
 }
 
 /** Build a fresh session with everything cleared. */
@@ -129,6 +153,7 @@ export function createSession(): SessionState {
 		converged: false,
 		settleUntil: null,
 		awaitingReload: false,
+		lastRoomPlayback: null,
 	}
 }
 
@@ -195,6 +220,7 @@ export function applyRoomState(s: SessionState, frame: RoomStateFrame): Authorit
 	s.cursor = frame.cursor
 	s.playlistVersion = frame.playlistVersion
 	s.mode = frame.singleMode ? 'single' : frame.freeformMode ? 'freeform' : 'default'
+	s.lastRoomPlayback = { videoPos: frame.videoPos, playerState: frame.playerState, serverTs: frame.serverTs }
 
 	// Seek first, then play/pause — the play/pause must be the *last* action
 	// applied so it's authoritative. Some players (Vidstack on miruro)
@@ -220,6 +246,7 @@ export function applyRoomState(s: SessionState, frame: RoomStateFrame): Authorit
  */
 export function applyState(s: SessionState, frame: StateFrame): AuthoritativeCommand[] {
 	s.lastEventId = Math.max(s.lastEventId, frame.eventId)
+	s.lastRoomPlayback = { videoPos: frame.videoPos, playerState: frame.playerState, serverTs: frame.serverTs }
 	// Seek first, then play/pause — see {@link applyRoomState}: a trailing
 	// seek can resume playback (Vidstack) and undo a leading `pause`, so the
 	// play/pause must land last to be authoritative.
@@ -259,12 +286,52 @@ export function applyPlaylistUpdate(s: SessionState, frame: PlaylistUpdateInFram
  * window so playback converges without an audible jump. The rate math
  * and restore timer live in [`runtime.ts`](../adapters/runtime.ts); this
  * fold just selects the strategy.
+ *
+ * Also refreshes the cached {@link SessionState.lastRoomPlayback} position
+ * (keeping the last-known `playerState`, which `SYNC_ADJUST` doesn't carry)
+ * so a guard-reload resync seeds from the freshest position available.
  */
-export function applySyncAdjust(_s: SessionState, frame: SyncAdjustFrame): AuthoritativeCommand[] {
+export function applySyncAdjust(s: SessionState, frame: SyncAdjustFrame): AuthoritativeCommand[] {
+	if (s.lastRoomPlayback) {
+		s.lastRoomPlayback = {
+			...s.lastRoomPlayback,
+			videoPos: frame.targetPos,
+			serverTs: frame.serverTime,
+		}
+	}
 	if (frame.mode === 'seek') {
 		return [{ type: 'seek', time: frame.targetPos }]
 	}
 	return [{ type: 'nudge_rate', targetPos: frame.targetPos }]
+}
+
+/**
+ * Build the commands that bring a freshly-(re)loaded video to the room's
+ * last known playback state, for the navigation-guard reload path to
+ * resync immediately instead of waiting for the next periodic server
+ * frame. Mirrors {@link applyRoomState}'s seek-then-play/pause ordering.
+ *
+ * When the room is playing, the cached position is advanced by the time
+ * elapsed since the snapshot (via the clock offset) so the video lands
+ * roughly in sync; a following `SYNC_ADJUST` fine-tunes any residual
+ * drift. Returns `[]` when no room playback has been observed yet, or when
+ * the room is buffering (a transient state not driven client-side).
+ *
+ * @param s The session holding the cached snapshot.
+ * @returns Seek + play/pause commands, or `[]` if there's nothing to apply.
+ */
+export function buildResyncCommands(s: SessionState): AuthoritativeCommand[] {
+	const snap = s.lastRoomPlayback
+	if (!snap) return []
+	let pos = snap.videoPos
+	if (snap.playerState === 'playing') {
+		const serverNow = Date.now() + s.serverClockOffsetMs
+		pos += Math.max(0, (serverNow - snap.serverTs) / 1000)
+	}
+	const cmds: AuthoritativeCommand[] = [{ type: 'seek', time: pos }]
+	if (snap.playerState === 'paused') cmds.push({ type: 'pause' })
+	else if (snap.playerState === 'playing') cmds.push({ type: 'play' })
+	return cmds
 }
 
 // ─── Suppression windows ──────────────────────────────────────────────

@@ -17,6 +17,7 @@ import type {
 import type { VideoRefWithMeta } from '@/src/background/protocol'
 import {
 	type SessionState,
+	buildResyncCommands,
 	createSession,
 	hasConverged,
 	inSettleWindow,
@@ -105,6 +106,16 @@ const navReloadTimers = new Map<number, ReturnType<typeof setTimeout>>()
  * re-converges anyway so the tab can't get stuck dropping every intent.
  */
 const GUARD_RELOAD_CONVERGE_FALLBACK_MS = 4_000
+
+/**
+ * How long after the reloaded page reports the cursor `identity` the guard
+ * waits before re-applying the room's cached playback (see
+ * {@link scheduleGuardResync}). The `identity` message already implies the
+ * adapter found a loaded `<video>` (it's reported after the adapter's
+ * source wait), so this is a short settle for the player to finish wiring
+ * up `currentTime` / `play()` — not a wait for readiness.
+ */
+const GUARD_RESYNC_SETTLE_MS = 300
 
 /**
  * Build the WS callback set for a given tab. The runtime closes over
@@ -379,7 +390,9 @@ async function routeMessage(tabId: number | undefined, msg: ContentToBackground)
 			// arms a fresh settle window so the reloaded player's delayed
 			// resume-position seek is dropped, and clearing `awaitingReload`
 			// lets normal intents flow again. Match on the cursor so a lingering
-			// identity from the pre-reload page can't end it early.
+			// identity from the pre-reload page can't end it early. Then resync
+			// the freshly-loaded video to the room's cached playback so it
+			// doesn't sit wrong until the next periodic server frame.
 			{
 				const session = sessions.get(tabId)
 				if (session?.awaitingReload
@@ -389,6 +402,7 @@ async function routeMessage(tabId: number | undefined, msg: ContentToBackground)
 					session.awaitingReload = false
 					clearNavReloadTimer(tabId)
 					markConverged(session)
+					scheduleGuardResync(tabId)
 				}
 			}
 			// The WS runtime's first-JOIN deferral is gated on identity +
@@ -641,6 +655,34 @@ async function recheckAndPullBack(tabId: number): Promise<void> {
 	void chrome.tabs.update(tabId, { url: target }).catch(() => {
 		// Tab closed or navigation blocked; `onRemoved` will clean up.
 	})
+}
+
+/**
+ * After a guard reload lands back on the cursor, re-apply the room's
+ * cached playback to the freshly-loaded video. The guard keeps the socket
+ * open across the reload, so the daemon sends no fresh `ROOM_STATE` — left
+ * alone, the reloaded player would sit at the wrong position / play-state
+ * until the next periodic frame (`SYNC_ADJUST`, seconds later), which the
+ * user sees as a sluggish snap-back. Instead we replay
+ * {@link buildResyncCommands} after a short settle.
+ *
+ * Guarded against a re-armed pull-back: if another navigation un-converged
+ * the tab again within the settle, `awaitingReload` is back on and we skip,
+ * leaving that reload's own `identity` to drive the next resync.
+ *
+ * @param tabId The reloaded tab to resync.
+ */
+function scheduleGuardResync(tabId: number): void {
+	setTimeout(() => {
+		const session = sessions.get(tabId)
+		if (!session || session.awaitingReload) return
+		const cmds = buildResyncCommands(session)
+		if (cmds.length === 0) return
+		console.log('[playbacksync:bg] nav-guard resyncing reloaded tab to room playback', {
+			tabId, playerState: session.lastRoomPlayback?.playerState,
+		})
+		for (const cmd of cmds) dispatchCommand(tabId, cmd)
+	}, GUARD_RESYNC_SETTLE_MS)
 }
 
 /**
