@@ -51,7 +51,7 @@ export const JOIN_SETTLE_WINDOW_MS = 1_000
 
 /** Recorded outbound command timing; used by {@link shouldSuppress}. */
 interface RecentCommand {
-	kind: LocalIntent['type'] | 'cursor_change'
+	kind: LocalIntent['type']
 	at: number
 }
 
