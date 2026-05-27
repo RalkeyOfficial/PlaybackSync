@@ -14,7 +14,7 @@ import type {
 	ContentToBackground,
 	PopupToBackground,
 } from '@/src/messages'
-import type { VideoRefWithMeta } from '@/src/background/protocol'
+import type { CursorRef, VideoRefWithMeta } from '@/src/background/protocol'
 import {
 	type SessionState,
 	buildResyncCommands,
@@ -544,6 +544,29 @@ function pullTabBackToCursor(tabId: number, session: SessionState): void {
 }
 
 /**
+ * Resolve the navigation-guard context for a tab, or `null` when the guard
+ * must not act: the tab isn't armed, has no session, is in freeform mode
+ * (which never pulls back), or has no cursor to pull back to. Shared by
+ * {@link handleTabNavigation} and {@link recheckAndPullBack} so the two
+ * can't drift on which tabs the guard may act on; each keeps the extra
+ * checks that are uniquely its own (arm-side convergence gating vs.
+ * post-debounce live URL re-read).
+ *
+ * @param tabId The tab to resolve.
+ * @returns The armed adapter id, its session, and the non-null cursor, or
+ *   `null` when the guard must not act.
+ */
+function guardContext(
+	tabId: number,
+): { adapterId: string; session: SessionState; cursor: CursorRef } | null {
+	const adapterId = navGuardedTabs.get(tabId)
+	if (adapterId === undefined) return null
+	const session = sessions.get(tabId)
+	if (!session || session.mode === 'freeform' || !session.cursor) return null
+	return { adapterId, session, cursor: session.cursor }
+}
+
+/**
  * Navigation-guard entry point: a guarded tab's URL changed. Decides
  * whether the tab wandered off the room's content and, if so, pulls it
  * back to the cursor. This complements the in-page DOM click listener —
@@ -565,10 +588,9 @@ function pullTabBackToCursor(tabId: number, session: SessionState): void {
  * @param url The new URL reported by `chrome.tabs.onUpdated`.
  */
 function handleTabNavigation(tabId: number, url: string): void {
-	const adapterId = navGuardedTabs.get(tabId)
-	if (adapterId === undefined) return
-	const session = sessions.get(tabId)
-	if (!session || session.mode === 'freeform' || !session.cursor) return
+	const ctx = guardContext(tabId)
+	if (!ctx) return
+	const { adapterId, session } = ctx
 	// A pull-back is already in flight for this tab (reload under way);
 	// don't stack another on the intermediate URL changes.
 	if (session.awaitingReload) return
@@ -599,10 +621,9 @@ function handleTabNavigation(tabId: number, url: string): void {
  * @param tabId The tab to re-check.
  */
 async function recheckAndPullBack(tabId: number): Promise<void> {
-	const adapterId = navGuardedTabs.get(tabId)
-	if (adapterId === undefined) return
-	const session = sessions.get(tabId)
-	if (!session || session.mode === 'freeform' || !session.cursor) return
+	const ctx = guardContext(tabId)
+	if (!ctx) return
+	const { adapterId, session, cursor } = ctx
 
 	let tab: chrome.tabs.Tab
 	try {
@@ -622,7 +643,7 @@ async function recheckAndPullBack(tabId: number): Promise<void> {
 	// params (the `sync_url` / `sync_password` handoff) in that redirect; an
 	// already-slugged URL is served as-is, so the credential params survive.
 	// Falls back to the raw `pageUrl` for adapters with no builder registered.
-	const cursorUrl = navigableUrlForCursor(adapterId, session.cursor) ?? session.cursor.pageUrl
+	const cursorUrl = navigableUrlForCursor(adapterId, cursor) ?? cursor.pageUrl
 	// Re-attach the share-URL credential params so they stay in the address
 	// bar across the pull-back's full page load.
 	const creds = await loadCreds(tabId)
