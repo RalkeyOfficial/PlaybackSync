@@ -26,10 +26,19 @@
 	</commands>
 
 	<repair-steps>
+		<!--
+			Both steps are idempotent and must run on a fresh install *and* on
+			upgrades, so they're listed under both phases: the fresh-install
+			path only runs <install> steps (post-migration is skipped when there
+			is no previous version), while existing installs only hit
+			<post-migration> on upgrade.
+		-->
 		<install>
 			<step>OCA\PlaybackSync\Migration\EnsureDefaultSettings</step>
+			<step>OCA\PlaybackSync\Migration\EnsureAdminSecret</step>
 		</install>
 		<post-migration>
+			<step>OCA\PlaybackSync\Migration\EnsureDefaultSettings</step>
 			<step>OCA\PlaybackSync\Migration\EnsureAdminSecret</step>
 		</post-migration>
 	</repair-steps>
