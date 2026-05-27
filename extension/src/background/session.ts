@@ -230,10 +230,14 @@ export function applyState(s: SessionState, frame: StateFrame): AuthoritativeCom
 }
 
 /**
- * Fold a `CURSOR_CHANGE` frame and return the navigate command. Receiver
- * pauses + seeks to 0 per protocol; we encode that as the
- * adapter-friendly `cursor_change` command (adapter currently no-ops on
- * it — navigation lands in a follow-up spec).
+ * Fold a `CURSOR_CHANGE` frame and return the navigate command only. The
+ * protocol's reset-to-paused-at-0 is deliberately *not* encoded here: the
+ * server resets the room's playback on a cursor change, and that reset
+ * reaches the tab through the normal convergence path — `applyRoomState`
+ * on a full-reload re-JOIN, or a follow-up `STATE` frame via `applyState`
+ * on the surviving-socket SPA path — both of which already emit `seek 0` +
+ * `pause`. Encoding the reset here too would double it, and the commands
+ * would race (or be discarded by) the navigation this command triggers.
  */
 export function applyCursorChange(s: SessionState, frame: CursorChangeFrame): AuthoritativeCommand[] {
 	s.cursor = frame.cursor

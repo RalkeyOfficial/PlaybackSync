@@ -86,6 +86,17 @@ const NAV_GUARD_DEBOUNCE_MS = 300
 const navGuardTimers = new Map<number, ReturnType<typeof setTimeout>>()
 
 /**
+ * Pending reload-convergence fallback timers, keyed by tab. Armed in
+ * {@link recheckAndPullBack} when a guard pull-back un-converges a tab,
+ * and cancelled once the reload ends — early (the reloaded page reports
+ * the cursor identity), on supersession (a fresh pull-back), or on
+ * session teardown ({@link clearNavGuard}). Tracked like
+ * {@link navGuardTimers} so the timer can never outlive the reload it
+ * protects.
+ */
+const navReloadTimers = new Map<number, ReturnType<typeof setTimeout>>()
+
+/**
  * Safety net for the navigation-guard's re-convergence. A guard pull-back
  * un-converges the session and waits for the reloaded page to report the
  * cursor's `identity` before re-converging (see {@link recheckAndPullBack}
@@ -149,6 +160,23 @@ function clearNavGuard(tabId: number): void {
 	if (timer !== undefined) {
 		clearTimeout(timer)
 		navGuardTimers.delete(tabId)
+	}
+	clearNavReloadTimer(tabId)
+}
+
+/**
+ * Cancel a tab's pending reload-convergence fallback timer, if any. Called
+ * when the reload finishes early (the cursor identity arrives), when a
+ * fresh pull-back supersedes it, and from {@link clearNavGuard} on every
+ * session-teardown path.
+ *
+ * @param tabId The tab whose fallback timer to cancel.
+ */
+function clearNavReloadTimer(tabId: number): void {
+	const timer = navReloadTimers.get(tabId)
+	if (timer !== undefined) {
+		clearTimeout(timer)
+		navReloadTimers.delete(tabId)
 	}
 }
 
@@ -359,6 +387,7 @@ async function routeMessage(tabId: number | undefined, msg: ContentToBackground)
 					&& session.cursor.providerId === msg.identity.providerId
 					&& session.cursor.videoId === msg.identity.videoId) {
 					session.awaitingReload = false
+					clearNavReloadTimer(tabId)
 					markConverged(session)
 				}
 			}
@@ -596,14 +625,19 @@ async function recheckAndPullBack(tabId: number): Promise<void> {
 	// comes, so the tab can't get stuck dropping every intent.
 	resetConvergence(session)
 	session.awaitingReload = true
-	setTimeout(() => {
+	// Supersede any prior fallback (a pull-back already in flight) so only
+	// one timer is ever live per tab; it's cancelled when the reload ends
+	// early (the `identity` route) or the session is torn down.
+	clearNavReloadTimer(tabId)
+	navReloadTimers.set(tabId, setTimeout(() => {
+		navReloadTimers.delete(tabId)
 		const s = sessions.get(tabId)
 		if (s?.awaitingReload) {
 			console.warn('[playbacksync:bg] nav-guard reload converge fallback', { tabId })
 			s.awaitingReload = false
 			markConverged(s)
 		}
-	}, GUARD_RELOAD_CONVERGE_FALLBACK_MS)
+	}, GUARD_RELOAD_CONVERGE_FALLBACK_MS))
 	void chrome.tabs.update(tabId, { url: target }).catch(() => {
 		// Tab closed or navigation blocked; `onRemoved` will clean up.
 	})
