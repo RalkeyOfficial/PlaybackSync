@@ -3,7 +3,7 @@ import type { VideoRefWithMeta } from '../../background/protocol';
 // Host/path patterns and the video-id format live in the pure `url` module
 // so the background's navigation guard can share them (see that file and
 // `src/adapters/url-matchers.ts`).
-import { HOST_RE, PATH_RE, makeVideoId } from './url';
+import { HOST_RE, PATH_RE, makeVideoId, makeWatchUrl } from './url';
 
 /**
  * Scoped selector for the *player's* video element. miruro can render a
@@ -258,12 +258,16 @@ class MiruroAdapter implements Adapter {
     const pathMatch = PATH_RE.exec(location.pathname);
     const showId = pathMatch?.[1];
     if (!showId) return null;
+    // The slug is the same for every episode of this show; capture it once
+    // here and thread it into the emitted pageUrls so navigation targets are
+    // the canonical, redirect-free (and thus credential-param-preserving) form.
+    const slug = pathMatch?.[2] ?? null;
 
     const container = await this.waitForEpisodeList();
     if (this.destroyed || !container) return null;
 
-    this.attachEpisodeListClickHandler(container, showId);
-    const entries = this.collectEpisodeEntries(container, showId);
+    this.attachEpisodeListClickHandler(container, showId, slug);
+    const entries = this.collectEpisodeEntries(container, showId, slug);
     return entries.length > 0 ? entries : null;
   }
 
@@ -518,10 +522,12 @@ class MiruroAdapter implements Adapter {
    *
    * @param container The `#episodes-list-container` element returned by
    *   {@link waitForEpisodeList}.
-   * @param showId The slug extracted from `/watch/<showId>` in
-   *   {@link init}.
+   * @param showId The show id extracted from `/watch/<showId>` in
+   *   {@link scrapeCatalog}.
+   * @param slug The optional human-readable show slug from the path, kept in
+   *   the emitted `pageUrl` so the navigation target is the canonical form.
    */
-  private attachEpisodeListClickHandler(container: Element, showId: string): void {
+  private attachEpisodeListClickHandler(container: Element, showId: string, slug: string | null): void {
     if (this.cursorTriggerHandler) return;
     const handler = (ev: Event) => {
       // Skip the synthetic clicks {@link applyCursorChange} dispatches to
@@ -538,7 +544,7 @@ class MiruroAdapter implements Adapter {
       this.ctx?.emitCursorTrigger({
         providerId: 'miruro',
         videoId: makeVideoId(showId, ep),
-        pageUrl: `${location.origin}/watch/${showId}?ep=${ep}`,
+        pageUrl: makeWatchUrl(location.origin, showId, ep, slug),
         episodeNumber: ep,
         label: button.title.trim() || null,
       });
@@ -560,9 +566,12 @@ class MiruroAdapter implements Adapter {
    *
    * @param container The `#episodes-list-container` element returned
    *   by {@link waitForEpisodeList}.
-   * @param showId The slug extracted from `/watch/<showId>` in {@link init}.
+   * @param showId The show id extracted from `/watch/<showId>` in
+   *   {@link scrapeCatalog}.
+   * @param slug The optional human-readable show slug from the path, kept in
+   *   each entry's `pageUrl` so the navigation target is the canonical form.
    */
-  private collectEpisodeEntries(container: Element, showId: string): VideoRefWithMeta[] {
+  private collectEpisodeEntries(container: Element, showId: string, slug: string | null): VideoRefWithMeta[] {
     const seen = new Set<string>();
     const entries: VideoRefWithMeta[] = [];
     for (const node of container.querySelectorAll<HTMLButtonElement>(EPISODE_LIST_ENTRY_SELECTOR)) {
@@ -574,7 +583,7 @@ class MiruroAdapter implements Adapter {
       entries.push({
         providerId: 'miruro',
         videoId: key,
-        pageUrl: `${location.origin}/watch/${showId}?ep=${ep}`,
+        pageUrl: makeWatchUrl(location.origin, showId, ep, slug),
         episodeNumber: ep,
         label: node.title.trim() || null,
       });

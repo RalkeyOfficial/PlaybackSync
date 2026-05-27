@@ -7,11 +7,26 @@
  * adding a site means adding its matcher here.
  */
 
-import { videoIdForUrl as miruro } from './miruro/url'
+import {
+	navigableUrlForCursor as miruroNavigableUrlForCursor,
+	videoIdForUrl as miruroVideoIdForUrl,
+} from './miruro/url'
 
 /** Adapter id → pure `(url) => canonical videoId | null`. */
 const URL_MATCHERS: Record<string, (url: URL) => string | null> = {
-	miruro,
+	miruro: miruroVideoIdForUrl,
+}
+
+/**
+ * Adapter id → pure `(cursor) => navigable URL | null`. Lets the background
+ * build a pull-back target whose site-specific identity params (e.g.
+ * miruro's `?ep=`) are reconstructed from the cursor's canonical `videoId`
+ * rather than trusted from its `pageUrl`. Adapters whose sites need no such
+ * reconstruction simply omit an entry (callers fall back to the raw
+ * `pageUrl`).
+ */
+const NAVIGABLE_URL_BUILDERS: Record<string, (cursor: { videoId: string; pageUrl: string }) => string | null> = {
+	miruro: miruroNavigableUrlForCursor,
 }
 
 /**
@@ -25,4 +40,19 @@ const URL_MATCHERS: Record<string, (url: URL) => string | null> = {
  */
 export function videoIdForUrl(adapterId: string, url: URL): string | null {
 	return URL_MATCHERS[adapterId]?.(url) ?? null
+}
+
+/**
+ * Build a canonical navigable URL for a room cursor under the named adapter,
+ * with site-specific identity params reconstructed from the cursor's
+ * `videoId`. Returns `null` when no builder is registered for the adapter or
+ * the cursor can't be resolved — callers should fall back to the cursor's
+ * raw `pageUrl`.
+ *
+ * @param adapterId The active adapter on the tab.
+ * @param cursor The room cursor's canonical id + last-known page URL.
+ * @returns A navigable URL, or `null` to signal "use the raw pageUrl".
+ */
+export function navigableUrlForCursor(adapterId: string, cursor: { videoId: string; pageUrl: string }): string | null {
+	return NAVIGABLE_URL_BUILDERS[adapterId]?.(cursor) ?? null
 }

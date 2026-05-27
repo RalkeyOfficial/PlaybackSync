@@ -53,7 +53,7 @@ import {
 	sendEvent,
 	type WsCallbacks,
 } from '@/src/background/ws'
-import { videoIdForUrl } from '@/src/adapters/url-matchers'
+import { navigableUrlForCursor, videoIdForUrl } from '@/src/adapters/url-matchers'
 
 /** Per-tab session state. One entry per pooled WS runtime. */
 const sessions = new Map<number, SessionState>()
@@ -614,18 +614,22 @@ async function recheckAndPullBack(tabId: number): Promise<void> {
 	const liveUrl = tab.url
 	if (!liveUrl || isRoomUrl(session, liveUrl, adapterId)) return
 
-	// Re-attach the share-URL credential params to the pull-back target.
-	// miruro strips arbitrary query params when the user navigates away
-	// (e.g. to its home page), and the cursor `pageUrl` is the canonical
-	// param-free form — so without this the tab lands back on the cursor
-	// with `sync_url` / `sync_password` gone. Restore them from the stored
-	// creds so the credentials stay in the address bar across a pull-back.
-	const cursorUrl = session.cursor.pageUrl
+	// Build the pull-back target from the cursor's canonical identity, not its
+	// raw `pageUrl`: the adapter (`navigableUrlForCursor`) reconstructs the
+	// `?ep=` from the cursor's `videoId` and preserves the show slug from the
+	// cursor's path. The slug matters because miruro server-redirects a
+	// slug-less watch URL to its canonical slugged form and drops unknown query
+	// params (the `sync_url` / `sync_password` handoff) in that redirect; an
+	// already-slugged URL is served as-is, so the credential params survive.
+	// Falls back to the raw `pageUrl` for adapters with no builder registered.
+	const cursorUrl = navigableUrlForCursor(adapterId, session.cursor) ?? session.cursor.pageUrl
+	// Re-attach the share-URL credential params so they stay in the address
+	// bar across the pull-back's full page load.
 	const creds = await loadCreds(tabId)
 	const target = creds !== null ? withCredentialParams(cursorUrl, creds) : cursorUrl
 
 	console.log('[playbacksync:bg] nav-guard pulling tab back to cursor', {
-		tabId, liveUrl, cursorUrl,
+		tabId, liveUrl, target: redactForLog(target),
 	})
 	// `chrome.tabs.update` is a full page load, but the WS lives in the
 	// background and survives it — so we deliberately do NOT close the
@@ -737,6 +741,26 @@ function withCredentialParams(pageUrl: string, creds: { syncUrl: string; syncPas
 		return u.toString()
 	} catch {
 		return pageUrl
+	}
+}
+
+/**
+ * Redact the `sync_password` value in a URL for logging — keeps the path and
+ * every other param (`ep`, `sync_url`, …) visible while never printing the
+ * plaintext password. Used by the pull-back log, whose target carries the
+ * re-attached credential params.
+ *
+ * @param url The URL to sanitise.
+ * @returns The URL with `sync_password` replaced, or the input unchanged if
+ *   it can't be parsed.
+ */
+function redactForLog(url: string): string {
+	try {
+		const u = new URL(url)
+		if (u.searchParams.has('sync_password')) u.searchParams.set('sync_password', '<redacted>')
+		return u.toString()
+	} catch {
+		return url
 	}
 }
 
