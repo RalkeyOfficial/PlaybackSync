@@ -63,12 +63,15 @@ class Version0002Date20260514170000 extends SimpleMigrationStep {
 			'notnull' => true,
 			'length' => 255,
 		]);
+		// Nextcloud's schema check rejects NOT NULL boolean columns (a DBAL
+		// portability guard), so these are nullable; the service layer always
+		// writes an explicit true/false, and the default covers omitted inserts.
 		$table->addColumn('single_mode', Types::BOOLEAN, [
-			'notnull' => true,
+			'notnull' => false,
 			'default' => false,
 		]);
 		$table->addColumn('freeform_mode', Types::BOOLEAN, [
-			'notnull' => true,
+			'notnull' => false,
 			'default' => false,
 		]);
 		$table->addColumn('playlist', Types::TEXT, [
