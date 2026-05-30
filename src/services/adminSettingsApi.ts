@@ -48,3 +48,13 @@ export async function regenerateAdminSecret(): Promise<AdminSecretInfo> {
 	const { data } = await axios.post<{ secret: AdminSecretInfo }>(apiUrl('/secret'))
 	return data.secret
 }
+
+/**
+ * Ask the WebSocket daemon to exit so its supervisor restarts it. A resolved
+ * promise only means the exit request was accepted by the daemon — it does not
+ * confirm the daemon came back up. Callers verify recovery by polling the WS
+ * status endpoint. Rejects (502) when the daemon is unreachable.
+ */
+export async function restartDaemon(): Promise<void> {
+	await axios.post(generateUrl('/apps/playbacksync/api/v1/admin/ws/restart'))
+}

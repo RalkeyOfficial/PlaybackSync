@@ -7,7 +7,9 @@ namespace OCA\PlaybackSync\Controller;
 use OCA\PlaybackSync\AppInfo\Application;
 use OCA\PlaybackSync\Http\SseStreamResponse;
 use OCA\PlaybackSync\Service\AdminEventClient;
+use OCA\PlaybackSync\Service\AdminRestartClient;
 use OCA\PlaybackSync\Service\AdminSecretService;
+use OCA\PlaybackSync\Service\Exceptions\DaemonRestartFailedException;
 use OCA\PlaybackSync\Settings\SettingsDefaults;
 use OCP\AppFramework\Controller;
 use OCP\AppFramework\Http;
@@ -56,6 +58,7 @@ class AdminSettingsController extends Controller {
 		private readonly IAppConfig $appConfig,
 		private readonly AdminSecretService $secrets,
 		private readonly AdminEventClient $eventClient,
+		private readonly AdminRestartClient $restartClient,
 	) {
 		parent::__construct($appName, $request);
 	}
@@ -150,6 +153,23 @@ class AdminSettingsController extends Controller {
 			[],
 		);
 		return new DataResponse(['secret' => $secret]);
+	}
+
+	/**
+	 * Ask the WebSocket daemon to exit so its supervisor restarts it. A `200`
+	 * here only confirms the exit request was accepted — the daemon comes back
+	 * only if it runs under a supervisor, which the frontend verifies by polling
+	 * the WS status endpoint. We intentionally do *not* record an event: the
+	 * daemon's event log is in-memory and the restart wipes it, so the entry
+	 * would vanish the moment it's written.
+	 */
+	public function restartDaemon(): DataResponse {
+		try {
+			$this->restartClient->restart();
+		} catch (DaemonRestartFailedException $e) {
+			return new DataResponse(['error' => $e->getMessage()], Http::STATUS_BAD_GATEWAY);
+		}
+		return new DataResponse(['status' => 'restart_initiated']);
 	}
 
 	/**

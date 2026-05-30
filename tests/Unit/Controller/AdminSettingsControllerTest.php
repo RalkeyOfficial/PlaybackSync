@@ -7,7 +7,9 @@ namespace OCA\PlaybackSync\Tests\Unit\Controller;
 use OCA\PlaybackSync\AppInfo\Application;
 use OCA\PlaybackSync\Controller\AdminSettingsController;
 use OCA\PlaybackSync\Service\AdminEventClient;
+use OCA\PlaybackSync\Service\AdminRestartClient;
 use OCA\PlaybackSync\Service\AdminSecretService;
+use OCA\PlaybackSync\Service\Exceptions\DaemonRestartFailedException;
 use OCA\PlaybackSync\Settings\SettingsDefaults;
 use OCP\AppFramework\Http;
 use OCP\IAppConfig;
@@ -21,6 +23,7 @@ class AdminSettingsControllerTest extends TestCase {
 	private IAppConfig&MockObject $appConfig;
 	private AdminSecretService&MockObject $secrets;
 	private AdminEventClient&MockObject $eventClient;
+	private AdminRestartClient&MockObject $restartClient;
 	private AdminSettingsController $controller;
 
 	/**
@@ -38,6 +41,7 @@ class AdminSettingsControllerTest extends TestCase {
 		$this->appConfig = $this->createMock(IAppConfig::class);
 		$this->secrets = $this->createMock(AdminSecretService::class);
 		$this->eventClient = $this->createMock(AdminEventClient::class);
+		$this->restartClient = $this->createMock(AdminRestartClient::class);
 
 		$this->secrets->method('peekMasked')->willReturn([
 			'configured' => true,
@@ -52,6 +56,7 @@ class AdminSettingsControllerTest extends TestCase {
 			$this->appConfig,
 			$this->secrets,
 			$this->eventClient,
+			$this->restartClient,
 		);
 	}
 
@@ -173,6 +178,25 @@ class AdminSettingsControllerTest extends TestCase {
 
 		$this->assertSame(Http::STATUS_OK, $response->getStatus());
 		$this->assertSame(9100, $response->getData()['daemon']['ws_port']);
+	}
+
+	public function testRestartDaemonReturnsInitiatedWhenAccepted(): void {
+		$this->restartClient->expects($this->once())->method('restart');
+
+		$response = $this->controller->restartDaemon();
+
+		$this->assertSame(Http::STATUS_OK, $response->getStatus());
+		$this->assertSame(['status' => 'restart_initiated'], $response->getData());
+	}
+
+	public function testRestartDaemonMapsFailureToBadGateway(): void {
+		$this->restartClient->method('restart')
+			->willThrowException(new DaemonRestartFailedException('WebSocket daemon unreachable.'));
+
+		$response = $this->controller->restartDaemon();
+
+		$this->assertSame(Http::STATUS_BAD_GATEWAY, $response->getStatus());
+		$this->assertArrayHasKey('error', $response->getData());
 	}
 
 	/**

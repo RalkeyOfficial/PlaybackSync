@@ -194,6 +194,18 @@ docker exec <nextcloud-container> curl -s http://127.0.0.1:8766/healthz | jq
 
 Expected: `status: "ok"` plus aggregate counts. See [Healthcheck (`GET /healthz`)](#healthcheck-get-healthz) below for the full schema.
 
+### Restarting from the admin UI
+
+Once the daemon is supervised you rarely need a terminal to restart it. PlaybackSync's **admin settings** (Administration settings → PlaybackSync) has a **Daemon control** section with a **Restart daemon** button:
+
+1. The button asks the daemon to exit gracefully (the `POST /admin/restart` admin route).
+2. The supervisor starts a fresh process.
+3. The page polls `/api/v1/ws/status` and confirms the daemon is back, usually within a second or two. Connected viewers reconnect automatically.
+
+This is the same graceful exit as a `SIGTERM`, so it picks up **code changes** on the new process (a config-only change doesn't even need it — most `IAppConfig` values are re-read per request, and the daemon re-reads its own on the next boot). It is also what you use after rotating the admin secret or changing the daemon host/port (the binding section offers the restart automatically once you save).
+
+**It only works when the daemon is supervised.** With a bare foreground or `docker exec -d` daemon there is nothing to start a new process, so the button stops the daemon and the readiness poll reports that it did not come back. Set up supervision first (the [Docker Compose](#docker-compose) sidecar, or the systemd unit above).
+
 ## Reverse-proxy snippets
 
 The daemon does not terminate TLS or speak HTTP/HTTPS. The existing Nextcloud reverse proxy handles both, then upgrades just `/apps/playbacksync/ws/` to a WebSocket and forwards it.
@@ -265,13 +277,14 @@ Daemon-level options (`--host`, `--port`) override the corresponding app-config 
 
 ### Admin HTTP setup
 
-The PHP-side rooms API talks to the daemon over a small HMAC-signed HTTP endpoint co-located with the WebSocket server. Five routes today:
+The PHP-side rooms API talks to the daemon over a small HMAC-signed HTTP endpoint co-located with the WebSocket server. Six routes today:
 
 - `GET  /healthz` — daemon liveness + light stats. **Unauthenticated**: loopback-only, no sensitive data in the response. Single-path carve-out before HMAC verification, audited with an explicit `if` rather than a general allowlist.
 - `GET  /admin/rooms/presence?uuids=<csv>` — point-in-time presence map for the rooms list / detail view.
 - `POST /admin/rooms/{uuid}/clients/{clientId}/disconnect` — owner-initiated kick. Sends the targeted client a final `{type:"ERROR", code:"KICKED"}` frame, closes the socket, and records a per-room reconnect block of `ws_kick_block_ms`.
 - `POST /admin/rooms/{uuid}/playback` — owner-initiated playback command. JSON body `{action: "play"|"pause"|"seek"|"reset", videoPos?: number}`. The daemon drives the same `PlaybackState::applyPlay/applyPause/applySeek` calls as a peer client's `EVENT` frame, appends to the event log so reconnecting clients replay the change, and broadcasts a `STATE` frame to every connection in the room. Returns 404 if no client has joined the room yet (no in-memory runtime to mutate), which the PHP controller maps to a 409 the dashboard renders as "no clients are connected".
 - `POST /admin/rooms/{uuid}/destroy` — owner-initiated room delete. Fired after `RoomService::deleteOwnedRoom` removes the DB row; mirrors the `Tick` `ROOM_EXPIRED` close path — final `{type:"ERROR", code:"ROOM_DELETED"}` frame per client, socket close, runtime drop. Fire-and-forget on the PHP side: transport failures and the 404 ("no live runtime") are both swallowed because the DB is the source of truth and `Tick`'s TTL sweep eventually catches any orphan.
+- `POST /admin/restart` — graceful self-exit. Responds `200 {"result":"restarting"}`, then stops the event loop a moment later so `occ playbacksync:ws-serve` exits `0`. The supervisor (`restart: unless-stopped`, systemd) then starts a fresh process. This backs the **Restart daemon** button in admin settings (see [Restarting from the admin UI](#restarting-from-the-admin-ui)). With no supervisor the daemon simply stops — so the button's caller verifies recovery by polling `/healthz` and reports a failure if it never comes back.
 
 The shared secret (`ws_admin_secret`) is **seeded automatically** by a repair step on `occ app:enable` and on every `occ upgrade`, so operators don't normally need to touch it.
 
@@ -289,6 +302,8 @@ docker exec -u www-data <nextcloud-container> php /var/www/html/occ maintenance:
 docker exec <nextcloud-container> pkill -f playbacksync:ws-serve
 docker exec -u www-data -d <nextcloud-container> php /var/www/html/occ playbacksync:ws-serve --host=0.0.0.0 --port=8765
 ```
+
+The final restart step assumes the *old* secret — once it's deleted and re-seeded, the daemon must be restarted to pick up the new value. If the daemon is supervised you can skip the manual restart line and use the **Restart daemon** button in admin settings ([Restarting from the admin UI](#restarting-from-the-admin-ui)) instead.
 
 If `ws_admin_secret` is somehow unset the rooms API still works — every room just renders with `live: null` (presence/playback fields hidden in the UI). The admin port stays bound to `127.0.0.1` by default and **must never** be added to the reverse proxy: it has no public-facing surface, only the loopback API path. See [`ws-protocol.md`](ws-protocol.md) for the request/response shape.
 

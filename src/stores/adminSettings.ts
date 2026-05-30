@@ -15,10 +15,32 @@ import { defineStore } from 'pinia'
 import {
 	fetchAdminSettings,
 	regenerateAdminSecret,
+	restartDaemon as restartDaemonRequest,
 	updateAdminSettings,
 } from '../services/adminSettingsApi.ts'
+import { fetchWsStatus } from '../services/wsStatusApi.ts'
+import { useWsStatusStore } from './wsStatus.ts'
 
 const logger = getLoggerBuilder().setApp('playbacksync').detectUser().build()
+
+// After accepting the restart the daemon exits ~0.25s later; wait past that so
+// we poll the fresh process, not the one on its way out. Then poll the status
+// endpoint until the supervisor has the new daemon up (or give up).
+const RESTART_GRACE_MS = 2_000
+const RESTART_POLL_INTERVAL_MS = 1_000
+const RESTART_POLL_ATTEMPTS = 20
+
+/**
+ * Resolve after the given delay. Used to space out the restart-readiness poll.
+ *
+ * @param ms milliseconds to wait
+ * @return a promise that resolves once the delay elapses
+ */
+function delay(ms: number): Promise<void> {
+	return new Promise((resolve) => {
+		window.setTimeout(resolve, ms)
+	})
+}
 
 interface AdminSettingsState {
 	wsTuning: WsTuningSettings | null
@@ -29,6 +51,7 @@ interface AdminSettingsState {
 	loading: boolean
 	saving: AdminSettingsSection | null
 	regenerating: boolean
+	restarting: boolean
 }
 
 export const useAdminSettingsStore = defineStore('adminSettings', {
@@ -41,6 +64,7 @@ export const useAdminSettingsStore = defineStore('adminSettings', {
 		loading: false,
 		saving: null,
 		regenerating: false,
+		restarting: false,
 	}),
 
 	actions: {
@@ -91,6 +115,57 @@ export const useAdminSettingsStore = defineStore('adminSettings', {
 				return false
 			} finally {
 				this.regenerating = false
+			}
+		},
+
+		/**
+		 * Ask the daemon to restart, then wait for it to come back.
+		 *
+		 * The POST only triggers a graceful exit; the daemon returns only if an
+		 * external supervisor restarts it. So after a grace delay (long enough
+		 * for the old process to be gone) we poll the WS status endpoint until it
+		 * reports available again, refresh the shared status store so the badge
+		 * updates, and surface success. A timeout means there is almost certainly
+		 * no supervisor — say so.
+		 *
+		 * @return true once the daemon is confirmed back up; false on a transport
+		 *         failure or if it never came back within the poll window
+		 */
+		async restartDaemon(): Promise<boolean> {
+			this.restarting = true
+			try {
+				try {
+					await restartDaemonRequest()
+				} catch (error) {
+					logger.error('Failed to request daemon restart', { error })
+					const message = extractErrorMessage(error) ?? t('playbacksync', 'Could not restart the WebSocket daemon.')
+					showError(message)
+					return false
+				}
+
+				await delay(RESTART_GRACE_MS)
+
+				const wsStatus = useWsStatusStore()
+				for (let attempt = 0; attempt < RESTART_POLL_ATTEMPTS; attempt++) {
+					try {
+						const status = await fetchWsStatus()
+						if (status.available) {
+							await wsStatus.load()
+							showSuccess(t('playbacksync', 'WebSocket daemon restarted'))
+							return true
+						}
+					} catch (error) {
+						// Expected while the daemon is down between processes — keep polling.
+						logger.debug('WS status poll failed during restart', { error })
+					}
+					await delay(RESTART_POLL_INTERVAL_MS)
+				}
+
+				await wsStatus.load()
+				showError(t('playbacksync', 'The daemon did not come back online. It only restarts automatically when run under a supervisor (Docker Compose with restart: unless-stopped, systemd, etc.). See the operator guide.'))
+				return false
+			} finally {
+				this.restarting = false
 			}
 		},
 

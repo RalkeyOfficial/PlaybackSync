@@ -10,6 +10,7 @@ use Psr\Http\Message\RequestInterface;
 use Psr\Log\LoggerInterface;
 use Ratchet\ConnectionInterface;
 use Ratchet\Http\HttpServerInterface;
+use React\EventLoop\Loop;
 use Throwable;
 
 /**
@@ -22,6 +23,7 @@ use Throwable;
  *   - `GET  /admin/rooms/presence?uuids=<csv>` — point-in-time presence map.
  *   - `POST /admin/rooms/{uuid}/clients/{clientId}/disconnect` — owner kick.
  *   - `POST /admin/rooms/{uuid}/playback` — owner-driven play/pause/seek/reset.
+ *   - `POST /admin/restart` — graceful self-exit so the supervisor restarts us.
  *
  * Every other path returns 404. Authentication runs first (except for
  * `/healthz`) and a missing/invalid HMAC closes the connection with 401 — no
@@ -37,6 +39,7 @@ class PresenceHttpServer implements HttpServerInterface {
 	public const HEALTH_ROUTE = '/healthz';
 	public const GLOBAL_EVENTS_STREAM_ROUTE = '/admin/events/stream';
 	public const EVENTS_INGEST_ROUTE = '/admin/events';
+	public const RESTART_ROUTE = '/admin/restart';
 
 	private const KICK_PATTERN = '#^/admin/rooms/(?P<uuid>[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/clients/(?P<clientId>[0-9a-f]{1,64})/disconnect$#';
 	private const PLAYBACK_PATTERN = '#^/admin/rooms/(?P<uuid>[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/playback$#';
@@ -100,6 +103,19 @@ class PresenceHttpServer implements HttpServerInterface {
 
 			if (!$this->auth->verify($request, $nowMs)) {
 				$this->respond($conn, 401, ['error' => 'unauthorized']);
+				return;
+			}
+
+			if ($method === 'POST' && $path === self::RESTART_ROUTE) {
+				$this->respond($conn, 200, ['result' => 'restarting']);
+				// Stop the loop on the next tick so the 200 flushes first. WsServe
+				// then returns from $server->run() and exits 0 on its own — which
+				// is *not* a docker stop/kill, so an external supervisor
+				// (restart: unless-stopped, systemd) starts a fresh process. Same
+				// graceful path as the SIGTERM handler. With no supervisor the
+				// daemon simply stops; the caller's status poll surfaces that.
+				$this->logger->info('PlaybackSync admin restart requested — stopping event loop');
+				Loop::get()->addTimer(0.25, static fn () => Loop::get()->stop());
 				return;
 			}
 

@@ -92,6 +92,25 @@
 			</NcSettingsSection>
 
 			<NcSettingsSection
+				:name="t('playbacksync', 'Daemon control')"
+				:description="t('playbacksync', 'Restart the WebSocket daemon without opening a terminal. It exits gracefully and its supervisor starts a fresh process; connected viewers reconnect automatically within a second or two.')">
+				<div class="playbacksync-admin__daemon-control">
+					<NcButton
+						variant="primary"
+						wide
+						:disabled="store.restarting"
+						class="playbacksync-admin__restart-button"
+						@click="restartConfirmOpen = true">
+						<template #icon>
+							<NcLoadingIcon v-if="store.restarting" :size="24" />
+							<IconRestart v-else :size="24" />
+						</template>
+						{{ t('playbacksync', 'Restart daemon') }}
+					</NcButton>
+				</div>
+			</NcSettingsSection>
+
+			<NcSettingsSection
 				:name="t('playbacksync', 'Room defaults')"
 				:description="t('playbacksync', 'Defaults applied when rooms are created, plus the upper bounds the API enforces.')">
 				<NcCheckboxRadioSwitch
@@ -225,6 +244,28 @@
 					</NcButton>
 				</template>
 			</NcDialog>
+
+			<NcDialog
+				:name="t('playbacksync', 'Restart WebSocket daemon?')"
+				:open="restartConfirmOpen"
+				size="normal"
+				@update:open="onRestartConfirmOpenChange">
+				<p class="playbacksync-admin__confirm">
+					{{ t('playbacksync', 'This stops the running daemon and relies on its supervisor (Docker Compose, systemd) to start a fresh one. Connected viewers reconnect within a second or two. If the daemon is not supervised it will not come back automatically.') }}
+				</p>
+				<template #actions>
+					<NcButton variant="tertiary" :disabled="store.restarting" @click="restartConfirmOpen = false">
+						{{ t('playbacksync', 'Cancel') }}
+					</NcButton>
+					<NcButton variant="primary" :disabled="store.restarting" @click="confirmRestart">
+						<template #icon>
+							<NcLoadingIcon v-if="store.restarting" :size="20" />
+							<IconRestart v-else :size="20" />
+						</template>
+						{{ t('playbacksync', 'Restart daemon') }}
+					</NcButton>
+				</template>
+			</NcDialog>
 		</template>
 	</div>
 </template>
@@ -246,6 +287,7 @@ import NcTextField from '@nextcloud/vue/components/NcTextField'
 import IconContentCopy from 'vue-material-design-icons/ContentCopy.vue'
 import IconContentSave from 'vue-material-design-icons/ContentSave.vue'
 import IconRefresh from 'vue-material-design-icons/Refresh.vue'
+import IconRestart from 'vue-material-design-icons/Restart.vue'
 import RoomEventLog from '../components/RoomEventLog.vue'
 import { useEventSource } from '../composables/useEventSource.ts'
 import { buildAdminEventStreamUrl } from '../services/adminEventsApi.ts'
@@ -262,6 +304,7 @@ interface WsTuningField {
 
 const store = useAdminSettingsStore()
 const confirmOpen = ref(false)
+const restartConfirmOpen = ref(false)
 
 // Placeholder values displayed in empty inputs. These mirror
 // `SettingsDefaults` in PHP and only surface when the admin has manually
@@ -403,7 +446,12 @@ watch(eventLogEvents, (events) => {
  * @param section the settings section the user clicked Save on
  */
 async function save(section: AdminSettingsSection) {
-	await store.saveSection(section)
+	const ok = await store.saveSection(section)
+	// Daemon host/port changes only take effect after a restart, so offer one
+	// straight away once the binding section saves cleanly.
+	if (ok && section === 'daemon') {
+		restartConfirmOpen.value = true
+	}
 }
 
 /**
@@ -446,6 +494,31 @@ function onConfirmOpenChange(value: boolean) {
 		return
 	}
 	confirmOpen.value = value
+}
+
+/**
+ * Honour the restart confirm dialog: trigger the daemon restart only on the
+ * explicit click, and dismiss once it has come back up. On failure (e.g. no
+ * supervisor) the dialog stays open so the admin can retry or cancel.
+ */
+async function confirmRestart() {
+	const ok = await store.restartDaemon()
+	if (ok) {
+		restartConfirmOpen.value = false
+	}
+}
+
+/**
+ * Forward the restart dialog's open-state change, suppressing dismissal while a
+ * restart is in flight so the spinner can't be cancelled mid-request.
+ *
+ * @param value the new open state requested by NcDialog
+ */
+function onRestartConfirmOpenChange(value: boolean) {
+	if (!value && store.restarting) {
+		return
+	}
+	restartConfirmOpen.value = value
 }
 
 /**
@@ -564,7 +637,20 @@ function parseStringInput(value: string | number): string | null {
 .playbacksync-admin__actions {
 	display: flex;
 	justify-content: flex-end;
+	gap: 8px;
 	margin-top: 20px;
+}
+
+.playbacksync-admin__daemon-control {
+	margin-top: 12px;
+	max-width: 360px;
+}
+
+/* Give the restart action real presence — this is a deliberate operational
+   action, not a routine Save. */
+.playbacksync-admin__restart-button :deep(.button-vue) {
+	min-height: 52px;
+	font-size: 1.1em;
 }
 
 .playbacksync-admin__secret {

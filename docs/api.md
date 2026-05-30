@@ -689,7 +689,7 @@ When `available` is `false`, `reason` distinguishes *why*, so the UI can branch 
 | `reason`         | Meaning                                                                                                | Suggested UI               |
 |------------------|--------------------------------------------------------------------------------------------------------|----------------------------|
 | `not_installed`  | Composer deps are missing, or `ws_host` / `ws_port` are unset — the admin has not finished setup.      | Link to install instructions. |
-| `not_running`    | The app is installed and configured, but the daemon's `/healthz` probe failed (unreachable, timed out, or replied with non-`ok` status). | Tell the user a sysadmin needs to start the daemon (e.g. `systemctl start playbacksync-ws` or `occ playbacksync:ws-server`). |
+| `not_running`    | The app is installed and configured, but the daemon's `/healthz` probe failed (unreachable, timed out, or replied with non-`ok` status). | Tell the user a sysadmin needs to start the daemon. An admin can restart a supervised daemon from PlaybackSync admin settings (**Daemon control → Restart daemon**); otherwise it's started from the host (`systemctl start playbacksync-ws` or `occ playbacksync:ws-serve`). |
 
 When `available` is `true`, `reason` is always `null`.
 
