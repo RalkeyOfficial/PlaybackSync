@@ -78,30 +78,54 @@
 					inputmode="numeric" />
 			</div>
 
+			<NcNoteCard v-if="showFreeformSuggestion" type="info">
+				<p class="room-create-form__suggestion-text">
+					{{ t('playbacksync', 'This looks like a standalone video. Freeform mode lets whoever’s picking lead — a good fit for movie nights.') }}
+				</p>
+				<div class="room-create-form__suggestion-actions">
+					<NcButton variant="secondary" @click="applyFreeformSuggestion">
+						{{ t('playbacksync', 'Use freeform mode') }}
+					</NcButton>
+					<NcButton variant="tertiary" @click="dismissSuggestion">
+						{{ t('playbacksync', 'Dismiss') }}
+					</NcButton>
+				</div>
+			</NcNoteCard>
+
 			<fieldset class="room-create-form__modes">
 				<legend>{{ t('playbacksync', 'Playlist behaviour') }}</legend>
 				<NcCheckboxRadioSwitch
-					:modelValue="singleMode"
-					:disabled="freeformMode"
-					type="switch"
-					@update:checked="onSingleModeChange">
+					:modelValue="mode"
+					value="default"
+					name="room-create-mode"
+					type="radio"
+					@update:modelValue="onModeChange">
+					{{ t('playbacksync', 'Default mode') }}
+				</NcCheckboxRadioSwitch>
+				<p class="room-create-form__mode-hint">
+					{{ t('playbacksync', 'Follow a planned playlist. Latecomers are pulled to whatever the room is currently watching.') }}
+				</p>
+				<NcCheckboxRadioSwitch
+					:modelValue="mode"
+					value="single"
+					name="room-create-mode"
+					type="radio"
+					@update:modelValue="onModeChange">
 					{{ t('playbacksync', 'Single mode') }}
 				</NcCheckboxRadioSwitch>
 				<p class="room-create-form__mode-hint">
 					{{ t('playbacksync', 'Lock the playlist to one video. Use for a single shared clip.') }}
 				</p>
 				<NcCheckboxRadioSwitch
-					:modelValue="freeformMode"
-					:disabled="singleMode"
-					type="switch"
-					@update:checked="onFreeformModeChange">
+					:modelValue="mode"
+					value="freeform"
+					name="room-create-mode"
+					type="radio"
+					@update:modelValue="onModeChange">
 					{{ t('playbacksync', 'Freeform mode') }}
 				</NcCheckboxRadioSwitch>
 				<p class="room-create-form__mode-hint">
 					{{ t('playbacksync', 'Follow whoever switches video, append on the fly. Use for movie nights.') }}
-				</p>
-				<p v-if="singleMode || freeformMode" class="room-create-form__mode-hint room-create-form__mode-hint--exclusive">
-					{{ t('playbacksync', 'Single and freeform are mutually exclusive — only one can be on.') }}
 				</p>
 			</fieldset>
 		</form>
@@ -131,11 +155,13 @@ import NcButton from '@nextcloud/vue/components/NcButton'
 import NcCheckboxRadioSwitch from '@nextcloud/vue/components/NcCheckboxRadioSwitch'
 import NcDialog from '@nextcloud/vue/components/NcDialog'
 import NcLoadingIcon from '@nextcloud/vue/components/NcLoadingIcon'
+import NcNoteCard from '@nextcloud/vue/components/NcNoteCard'
 import NcSelect from '@nextcloud/vue/components/NcSelect'
 import NcTextField from '@nextcloud/vue/components/NcTextField'
 import IconPlus from 'vue-material-design-icons/Plus.vue'
 import { lookupMetadata } from '../services/metadataApi.ts'
 import { useRoomsStore } from '../stores/rooms.ts'
+import { suggestMode } from '../util/suggestMode.ts'
 
 const props = defineProps<{
 	open: boolean
@@ -146,6 +172,8 @@ const emit = defineEmits<{
 }>()
 
 const roomsStore = useRoomsStore()
+
+type ModeChoice = 'default' | 'single' | 'freeform'
 
 const CUSTOM_TTL = -1
 const FALLBACK_MAX_TTL_SECONDS = 86400
@@ -158,8 +186,15 @@ const name = ref('')
 const bootstrapUrl = ref('')
 const customHours = ref(1)
 const customMinutes = ref(0)
-const singleMode = ref(false)
-const freeformMode = ref(false)
+// The playlist behaviour is a single radio choice. The two boolean toggles the
+// API expects are derived from it (`singleMode`/`freeformMode` below), so the
+// rest of the dialog keeps working against the same flags it always did.
+const mode = ref<ModeChoice>('default')
+const singleMode = computed(() => mode.value === 'single')
+const freeformMode = computed(() => mode.value === 'freeform')
+// Set once the owner acts on (or waves off) the mode suggestion note, so it
+// stays hidden until the bootstrap URL changes again.
+const suggestionDismissed = ref(false)
 const label = ref('')
 // Tracks whether the owner has typed in the label field. While false, the
 // debounced lookup is free to overwrite the label with the fetched title.
@@ -247,6 +282,25 @@ const bootstrapUrlHelper = computed(() => {
 	return t('playbacksync', 'The page participants will be redirected to.')
 })
 
+// Classify the bootstrap URL by shape so we can nudge toward a fitting mode.
+// Only computed for valid URLs; an invalid URL surfaces its own error instead.
+const modeSuggestion = computed(() => {
+	if (bootstrapUrlError.value !== null) {
+		return null
+	}
+	return suggestMode(bootstrapUrl.value.trim())
+})
+
+// We only nudge toward freeform, and only while the form is still on the
+// default behaviour — once the owner has picked any mode (or dismissed the
+// hint), we stay out of the way. List/catalog URLs classify as 'default' and
+// deliberately surface nothing.
+const showFreeformSuggestion = computed(() => {
+	return modeSuggestion.value === 'freeform'
+		&& mode.value === 'default'
+		&& !suggestionDismissed.value
+})
+
 const customTtlSeconds = computed(() => {
 	const hours = Number.isFinite(customHours.value) ? Math.trunc(customHours.value) : 0
 	const minutes = Number.isFinite(customMinutes.value) ? Math.trunc(customMinutes.value) : 0
@@ -292,8 +346,8 @@ watch(() => props.open, (isOpen) => {
 		ttlPreset.value = defaultTtlPreset.value
 		customHours.value = Math.min(1, maxCustomHours.value)
 		customMinutes.value = 0
-		singleMode.value = false
-		freeformMode.value = false
+		mode.value = 'default'
+		suggestionDismissed.value = false
 		resetSeedState()
 	}
 })
@@ -302,29 +356,43 @@ watch([bootstrapUrl, singleMode], () => {
 	scheduleLookup()
 })
 
+// A fresh URL gets a fresh chance to nudge — re-arm the dismissed hint so the
+// owner sees the suggestion for whatever they just pasted.
+watch(bootstrapUrl, () => {
+	suggestionDismissed.value = false
+})
+
 /**
- * Apply a single-mode change. Mutual exclusion with freeform mode is
- * enforced at the toggle level (`:disabled` on the inactive switch), so
- * this handler only fires when the toggle is reachable. Toggling single
- * mode off clears the seed-entry state so a later flip back doesn't
- * surface a stale lookup result.
+ * Apply a playlist-behaviour change from the radio group. Leaving single mode
+ * clears the seed-entry state so a later switch back doesn't surface a stale
+ * lookup result; the `[bootstrapUrl, singleMode]` watcher re-arms the lookup
+ * when single mode is (re-)selected.
  *
- * @param value new switch state from NcCheckboxRadioSwitch
+ * @param value the newly selected mode from NcCheckboxRadioSwitch
  */
-function onSingleModeChange(value: boolean) {
-	singleMode.value = value
-	if (!value) {
+function onModeChange(value: ModeChoice) {
+	mode.value = value
+	if (value !== 'single') {
 		resetSeedState()
 	}
 }
 
 /**
- * Apply a freeform-mode change. Same gating story as `onSingleModeChange`.
- *
- * @param value new switch state from NcCheckboxRadioSwitch
+ * Accept the freeform suggestion: select freeform mode. Mark the hint dismissed
+ * too — once the owner has acted on it, switching modes again shouldn't
+ * resurrect the note; only a fresh bootstrap URL re-offers it.
  */
-function onFreeformModeChange(value: boolean) {
-	freeformMode.value = value
+function applyFreeformSuggestion() {
+	mode.value = 'freeform'
+	suggestionDismissed.value = true
+}
+
+/**
+ * Wave off the mode suggestion without changing the chosen mode. Stays hidden
+ * until the bootstrap URL changes again.
+ */
+function dismissSuggestion() {
+	suggestionDismissed.value = true
 }
 
 /**
@@ -512,6 +580,16 @@ function formatTtlLimit(seconds: number): string {
 	align-items: start;
 }
 
+.room-create-form__suggestion-text {
+	margin: 0 0 8px;
+}
+
+.room-create-form__suggestion-actions {
+	display: flex;
+	gap: 8px;
+	flex-wrap: wrap;
+}
+
 .room-create-form__modes {
 	display: flex;
 	flex-direction: column;
@@ -527,14 +605,11 @@ function formatTtlLimit(seconds: number): string {
 }
 
 .room-create-form__mode-hint {
-	margin: 0 0 8px 36px;
+	margin: 0 0 8px;
+	/* Align under the radio's label text, past the control + its gap. */
+	margin-inline-start: 28px;
 	color: var(--color-text-maxcontrast);
 	font-size: 0.85rem;
-}
-
-.room-create-form__mode-hint--exclusive {
-	margin-inline-start: 0;
-	font-style: italic;
 }
 
 .room-create-form__seed {
