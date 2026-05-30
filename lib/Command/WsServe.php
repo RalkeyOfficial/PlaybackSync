@@ -88,6 +88,20 @@ class WsServe extends Command {
 
 		$this->maybeStartAdminServer($loop, $output);
 
+		// Graceful shutdown: under a supervisor (docker compose, systemd) a stop
+		// arrives as SIGTERM; SIGINT covers Ctrl-C in the foreground. Stopping the
+		// loop lets $server->run() return so we exit 0 instead of being SIGKILLed.
+		// Tick has no stop() of its own — halting the loop cancels its periodic
+		// timer, so $loop->stop() is all that's needed.
+		$shutdown = function (int $signal) use ($loop, $output): void {
+			$name = $signal === SIGINT ? 'SIGINT' : 'SIGTERM';
+			$output->writeln(sprintf('<info>Received %s, shutting down WS daemon...</info>', $name));
+			$this->logger->info('[playbacksync ws] received ' . $name . ', stopping event loop');
+			$loop->stop();
+		};
+		$loop->addSignal(SIGTERM, $shutdown);
+		$loop->addSignal(SIGINT, $shutdown);
+
 		$server->run();
 
 		return Command::SUCCESS;

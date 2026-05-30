@@ -1,1 +1,26 @@
-docker exec -u www-data master-nextcloud-1 php /var/www/html/occ playbacksync:ws-serve
+#!/bin/sh
+# Dev launcher for the PlaybackSync WebSocket daemon.
+#
+# Runs the daemon as a supervised sidecar (docker-compose.ws.yml) so it survives
+# crashes and container restarts via restart: unless-stopped. Binding (host/port)
+# comes from the PlaybackSync admin "Daemon binding" settings, not from flags.
+set -e
+
+cd "$(dirname "$0")"
+
+# Migration / safety: the sidecar shares master-nextcloud-1's network namespace,
+# so a leftover `docker exec -d` daemon would already hold the WS/admin ports and
+# the sidecar's bind would fail. Kill any old in-container daemon first (no-op if
+# none is running).
+docker exec master-nextcloud-1 pkill -f 'playbacksync:ws-serve' 2>/dev/null || true
+
+docker compose -f docker-compose.ws.yml up -d
+
+echo "PlaybackSync WS daemon started (sidecar 'playbacksync-ws')."
+echo "Logs:  docker compose -f docker-compose.ws.yml logs -f ws"
+echo "Stop:  docker compose -f docker-compose.ws.yml stop   # graceful SIGTERM, stays stopped"
+
+# --- Foreground smoke test (run manually; NOT while the sidecar is up — both
+#     would try to bind the same port) ---
+# docker exec -u www-data -it master-nextcloud-1 \
+#   php /var/www/html/occ playbacksync:ws-serve   # reads ws_host/ws_port from admin settings

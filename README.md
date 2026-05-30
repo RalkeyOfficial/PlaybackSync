@@ -63,6 +63,8 @@ It auto-detects the Nextcloud container, the reverse-proxy container, the compos
 
 If detection finds multiple candidates it prompts; pass `--container NAME` / `--proxy-container NAME` to skip the prompts. If your stack is unrecognisable, the script prints the snippet and tells you exactly where to put it.
 
+If you manage your stack with Docker Compose and prefer to wire the daemon in yourself, copy the supervised sidecar service from **[docker-compose.ws.example.yml](docker-compose.ws.example.yml)** into your compose project (it reuses your Nextcloud image + volumes, like Nextcloud's own `cron` sidecar) — see [docs/ws-sync-server.md](docs/ws-sync-server.md#docker-compose) for the topology and binding notes.
+
 **Common flags:**
 
 ```bash
@@ -102,9 +104,14 @@ npm run watch        # rebuild on change
 # Backend (PHP)
 composer install
 npm run test:php     # PHPUnit, runs inside the Nextcloud Docker container
+
+# WebSocket daemon (supervised sidecar; survives crashes + container restarts)
+./start-ws-server                                  # docker compose up -d the daemon
+docker compose -f docker-compose.ws.yml logs -f ws # follow its log
+docker compose -f docker-compose.ws.yml stop       # graceful SIGTERM stop
 ```
 
-The repo is set up to work inside the [`nextcloud-docker-dev`](https://github.com/juliusknorr/nextcloud-docker-dev) workspace; the `test:php` script execs into the container directly.
+The repo is set up to work inside the [`nextcloud-docker-dev`](https://github.com/juliusknorr/nextcloud-docker-dev) workspace; the `test:php` script execs into the container directly. `start-ws-server` assumes the default `master` compose project (container `master-nextcloud-1`) — see the comments in [docker-compose.ws.yml](docker-compose.ws.yml) if yours differs.
 
 | Document | Best for… |
 |---|---|

@@ -1,0 +1,57 @@
+# PlaybackSync WS daemon — PRODUCTION compose service template.
+#
+# This is a COPY/ADAPT template, not a drop-in: the placeholders marked `<--`
+# are deployment-specific. Copy the `playbacksync-ws` service into your existing
+# Nextcloud compose project, or run it alongside yours:
+#
+#   docker compose -f your-nextcloud-compose.yml -f docker-compose.ws.example.yml up -d
+#
+# Why a sidecar and not a standalone image: `playbacksync:ws-serve` is an `occ`
+# command. It boots through Nextcloud's DI container and reads its config from the
+# Nextcloud database, so it needs the SAME Nextcloud codebase + config.php (DB
+# creds) as your app — exactly like Nextcloud's own `cron` sidecar. Reuse your
+# app service's image and volumes.
+#
+# Binding: do NOT pass --host/--port here. Set them in PlaybackSync admin
+# settings ("Daemon binding"):
+#   - ws_port       (default 8765)  — the WebSocket port your reverse proxy forwards to
+#   - ws_admin_port (default 8766)  — loopback admin/healthcheck port; NEVER proxy it
+#   - ws_host:
+#       * reverse proxy INSIDE the Nextcloud app container  -> 127.0.0.1
+#       * SEPARATE reverse-proxy container                  -> 0.0.0.0
+#         (so the daemon is reachable on the app container's network IP as
+#          <nc-app-service>:8765)
+services:
+  playbacksync-ws:
+    image: ${NEXTCLOUD_IMAGE:-nextcloud:stable}   # <-- the SAME image your Nextcloud app service runs
+    restart: unless-stopped
+    # Bypass the base image's entrypoint (php-fpm/apache bootstrap); run only the daemon.
+    entrypoint: ["php", "/var/www/html/occ"]
+    command: ["playbacksync:ws-serve"]            # binding comes from admin settings, not flags
+    # Share the Nextcloud app/php-fpm container's network namespace. This is what
+    # keeps the loopback admin bridge working (the PHP request layer reaches the
+    # daemon at 127.0.0.1:8766) AND lets the proxy reach the daemon:
+    #   - in-app proxy:    127.0.0.1:8765
+    #   - separate proxy:  <nc-app-service>:8765   (once ws_host = 0.0.0.0)
+    # A standalone service on its own network would break the admin bridge unless
+    # you exposed 8766, which the security guidance forbids.
+    network_mode: "service:app"                   # <-- your Nextcloud app/php-fpm service name
+    volumes:
+      - nextcloud:/var/www/html                   # <-- the SAME html volume(s) your app service mounts
+    stop_signal: SIGTERM
+    stop_grace_period: 10s
+    healthcheck:
+      # 8766 = ws_admin_port default; update if you change it in admin settings.
+      test: ["CMD", "php", "-r", "exit(@file_get_contents('http://127.0.0.1:8766/healthz')!==false?0:1);"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+      # Note: Docker's restart policy does NOT act on `unhealthy`. This healthcheck
+      # is for operators and orchestrators (k8s liveness, compose
+      # `depends_on: condition: service_healthy`). restart: unless-stopped above
+      # handles process crashes and reboots.
+
+volumes:
+  nextcloud:
+    external: true                                # <-- your existing Nextcloud html volume

@@ -39,18 +39,7 @@
 						{{ t('playbacksync', 'The sync service is installed, but the daemon process is not currently running. Rooms still appear in the list, but joining one will not synchronise playback until the daemon is back up.') }}
 					</p>
 					<p>
-						{{ t('playbacksync', 'An administrator can restart the daemon with the following command on the Nextcloud host:') }}
-					</p>
-					<pre class="ws-status-help__cmd">sudo systemctl restart playbacksync-ws.service</pre>
-					<p>
-						<!-- The translation contains a `{cmd}` placeholder so translators
-							can position the inline code element wherever the target
-							language's word order needs it, instead of being locked
-							into the English split. -->
-						<template v-for="(segment, i) in manualCmdSegments" :key="i">
-							<code v-if="segment.kind === 'cmd'" class="ws-status-help__inline-cmd">{{ segment.text }}</code>
-							<template v-else>{{ segment.text }}</template>
-						</template>
+						{{ t('playbacksync', 'An administrator needs to restart the sync daemon using whatever supervises it on this server — systemd, a Docker Compose service, or a manual run. The operator guide has the exact command for each.') }}
 					</p>
 					<p>
 						<a
@@ -145,47 +134,6 @@ const dialogTitle = computed(() => {
 	return t('playbacksync', 'Sync server not set up')
 })
 
-interface CmdSegment {
-	kind: 'text' | 'cmd'
-	text: string
-}
-
-/**
- * Split a translated string carrying a `{cmd}` placeholder into renderable
- * segments. Returns alternating `text`/`cmd` parts so the template can wrap
- * just the cmd in a `<code>` element while keeping the surrounding words as
- * plain text. The placeholder position is the translator's choice — works
- * for any word order, including languages where the command lands at the
- * start or end of the sentence.
- *
- * @param key the source-English translation key, must contain `{cmd}`
- * @param cmd the literal command to render in place of the placeholder
- * @return alternating text/cmd segments in display order
- */
-function tWithCmd(key: string, cmd: string): CmdSegment[] {
-	// Sentinel any reasonable translation will never contain. Using a
-	// private-use-area code point keeps it out of normal text and out of
-	// HTML-significant ranges.
-	const sentinel = ''
-	const rendered = t('playbacksync', key, { cmd: sentinel })
-	const parts = rendered.split(sentinel)
-	if (parts.length < 2) {
-		// Translator omitted the placeholder. Fall back to appending the
-		// command at the end so the UI still tells the operator what to run.
-		return [
-			{ kind: 'text', text: rendered },
-			{ kind: 'cmd', text: cmd },
-		]
-	}
-	const segments: CmdSegment[] = [{ kind: 'text', text: parts[0] }]
-	for (let i = 1; i < parts.length; i++) {
-		segments.push({ kind: 'cmd', text: cmd })
-		segments.push({ kind: 'text', text: parts[i] })
-	}
-	return segments
-}
-
-const manualCmdSegments = computed<CmdSegment[]>(() => tWithCmd('If the service is run manually instead of under systemd, run {cmd} again.', 'occ playbacksync:ws-serve'))
 </script>
 
 <style scoped>
@@ -223,23 +171,5 @@ const manualCmdSegments = computed<CmdSegment[]>(() => tWithCmd('If the service 
 .ws-status-help a:hover,
 .ws-status-help a:focus-visible {
 	text-decoration: none;
-}
-
-.ws-status-help__cmd {
-	margin: 0 0 12px 0;
-	padding: 8px 12px;
-	border-radius: 6px;
-	background-color: var(--color-background-dark, #ededed);
-	font-family: var(--font-face-mono, monospace);
-	font-size: 12px;
-	overflow-x: auto;
-}
-
-.ws-status-help__inline-cmd {
-	padding: 1px 6px;
-	border-radius: 4px;
-	background-color: var(--color-background-dark, #ededed);
-	font-family: var(--font-face-mono, monospace);
-	font-size: 0.9em;
 }
 </style>

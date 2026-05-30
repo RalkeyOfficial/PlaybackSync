@@ -41,7 +41,7 @@
 				:name="t('playbacksync', 'Daemon binding')"
 				:description="t('playbacksync', 'Network endpoints the WebSocket daemon binds to and the admin control channel PHP uses to talk to it.')">
 				<NcNoteCard type="warning">
-					{{ t('playbacksync', 'Changing the daemon host or port requires restarting the WebSocket daemon (occ playbacksync:ws-serve) before it takes effect.') }}
+					{{ t('playbacksync', 'Changing the daemon host or port requires restarting the WebSocket daemon before it takes effect — however it is supervised on this server (systemd, Docker Compose, or a manual run).') }}
 				</NcNoteCard>
 				<div class="playbacksync-admin__grid">
 					<NcTextField
@@ -150,7 +150,7 @@
 				:name="t('playbacksync', 'Security')"
 				:description="t('playbacksync', 'The shared secret PHP uses to authenticate against the daemon admin channel. Rotation is destructive — see the warning below before regenerating.')">
 				<NcNoteCard type="warning">
-					{{ t('playbacksync', 'Regenerating the admin secret invalidates the value the running WebSocket daemon currently holds. Until the daemon is restarted (occ playbacksync:ws-serve), every admin call from PHP — kicks, presence reads — will fail. Rotate during a maintenance window or be ready to restart the daemon immediately afterwards.') }}
+					{{ t('playbacksync', 'Regenerating the admin secret invalidates the value the running WebSocket daemon currently holds. Until the daemon is restarted, every admin call from PHP — kicks, presence reads — will fail. Rotate during a maintenance window or be ready to restart the daemon immediately afterwards.') }}
 				</NcNoteCard>
 				<div class="playbacksync-admin__secret">
 					<NcTextField

@@ -1,0 +1,55 @@
+# PlaybackSync WS daemon — DEV supervision sidecar.
+#
+# Runs the daemon as a supervised container so it survives crashes and
+# container restarts (restart: unless-stopped). Driven by ./start-ws-server.
+#
+# Assumes the nextcloud-docker-dev compose project is named "master"
+# (container master-nextcloud-1; volumes master_config / master_data). If your
+# project name differs, change the container name in network_mode AND both
+# external volume names together. The image tag (php84) must match the running
+# NC container's PHP version (.env PHP_VERSION) so occ + ext-pcntl behave the
+# same as inside that container.
+#
+# For production, see docker-compose.ws.example.yml + docs/ws-sync-server.md.
+services:
+  ws:
+    image: ghcr.io/juliusknorr/nextcloud-dev-php84:latest
+    container_name: playbacksync-ws
+    # Share the NC container's network namespace so the daemon's loopback is the
+    # same one Apache's mod_proxy_wstunnel rule targets, and so occ reaches
+    # database-mysql / redis exactly like the NC container does. Consequence:
+    # no `ports:` and no `networks:` may be declared here.
+    network_mode: "container:master-nextcloud-1"
+    # Bypass the image's bootstrap.sh entrypoint — it rewrites Apache config,
+    # chowns the shared volumes, and can trigger the auto-install flow, all of
+    # which would clobber the live NC container. Run only the daemon.
+    entrypoint: ["php", "/var/www/html/occ"]
+    # No --host/--port: the daemon reads ws_host / ws_port from the PlaybackSync
+    # admin "Daemon binding" settings (seeded to 127.0.0.1 / 8765). Passing flags
+    # here would shadow that admin setting.
+    command: ["playbacksync:ws-serve"]
+    user: "www-data"
+    working_dir: /var/www/html
+    restart: unless-stopped
+    stop_signal: SIGTERM
+    stop_grace_period: 10s
+    healthcheck:
+      # Hits the admin port's unauthenticated /healthz. 8766 is the ws_admin_port
+      # default — update this if you change ws_admin_port in admin settings.
+      test: ["CMD", "php", "-r", "exit(@file_get_contents('http://127.0.0.1:8766/healthz')!==false?0:1);"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    volumes:
+      # server repo == /var/www/html (gives the daemon the code + occ + the
+      # config/ mount point); ../.. resolves to REPO_PATH_SERVER from this file.
+      - ../..:/var/www/html
+      - master_config:/var/www/html/config
+      - master_data:/var/www/html/data
+
+volumes:
+  master_config:
+    external: true
+  master_data:
+    external: true

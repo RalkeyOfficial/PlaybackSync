@@ -130,6 +130,8 @@ sudo systemctl restart playbacksync-ws.service
 
 ### Docker
 
+> **Working in `nextcloud-docker-dev`?** Don't use the bare `docker exec` form below. Run the supervised sidecar instead — from the app root, `./start-ws-server` (which does `docker compose -f docker-compose.ws.yml up -d`). It survives crashes and container restarts (`restart: unless-stopped`), and `docker compose -f docker-compose.ws.yml stop` shuts it down gracefully (SIGTERM → clean exit; it is *not* auto-restarted while deliberately stopped). For a real Docker deployment, see [Docker Compose](#docker-compose) below.
+
 The standard `nextcloud:*` image runs PHP-FPM under `s6-overlay` and intentionally does **not** include `systemd` or `systemctl`. To keep the daemon alive in a single-container deployment, run it detached with `docker exec` and re-run on container restart:
 
 ```bash
@@ -153,9 +155,30 @@ docker exec -u www-data -d <nextcloud-container> \
 
 A `docker exec -d` daemon dies when the Nextcloud container restarts and is **not** automatically restarted — you'll need to re-run the start command. For a long-haul deployment, prefer one of:
 
-- **Docker Compose**: add a second service that runs `occ playbacksync:ws-serve` as its `command`, with `restart: unless-stopped` and `network_mode: "service:nextcloud"` (or its own service in the same network). Compose then owns the lifecycle.
+- **[Docker Compose](#docker-compose)** (recommended) — a supervised sidecar service. See the dedicated section below.
 - **Kubernetes**: a separate Deployment running the same `occ` command. The kubelet handles restarts; readiness/liveness probes can hit `GET /healthz` on the admin port.
 - **`supervisord` sidecar**: drop a `supervisord` config into the container that supervises `occ playbacksync:ws-serve`. Most heavyweight option, only worth it if you can't change the deployment topology.
+
+### Docker Compose
+
+The supervised, idiomatic way to run the daemon in Docker. The repo ships a ready-to-adapt template — **[`docker-compose.ws.example.yml`](../docker-compose.ws.example.yml)** — that you copy into your own Nextcloud compose project:
+
+```bash
+docker compose -f your-nextcloud-compose.yml -f docker-compose.ws.example.yml up -d
+```
+
+Three things make it work, all baked into the template:
+
+1. **Reuse your Nextcloud image + volumes.** `playbacksync:ws-serve` is an `occ` command — it boots through Nextcloud's DI container and reads its config from the database, so it needs the same codebase + `config.php` as your app. This is structurally identical to Nextcloud's own `cron` sidecar: same `image:`, same html volume(s), different `command:`. Point `${NEXTCLOUD_IMAGE}` and the volume at whatever your `app` service uses.
+
+2. **Share the app container's network namespace** (`network_mode: "service:<your-nc-app-service>"`). The PHP request layer talks to the daemon's admin HTTP over loopback (`ws_admin_host:ws_admin_port`, default `127.0.0.1:8766`), and that port must **never** be exposed on the network. Sharing the netns keeps that loopback bridge working — and it lets your reverse proxy reach the daemon too (an in-app proxy hits `127.0.0.1:8765`; a separate proxy container reaches `<nc-app-service>:8765`). A standalone daemon on its own network would break the admin bridge unless you exposed `8766`, which you must not do.
+
+3. **Configure the binding in admin settings, not the compose file.** The template's `command:` is just `playbacksync:ws-serve` — no `--host`/`--port`. Set them under PlaybackSync admin settings → **Daemon binding**:
+   - `ws_port` (default `8765`) — the port your proxy forwards to.
+   - `ws_admin_port` (default `8766`) — the loopback admin/healthcheck port; never proxy it.
+   - `ws_host` — `127.0.0.1` when the reverse proxy lives *inside* the Nextcloud container; `0.0.0.0` when it's a **separate** proxy container (so the daemon is reachable on the app container's network IP). If you change `ws_admin_port`, update the healthcheck `test:` in the compose file to match.
+
+`restart: unless-stopped` gives crash recovery and reboot survival. The `/healthz` healthcheck is informational for operators and orchestrators (Docker's restart policy does not act on `unhealthy` by itself; Kubernetes liveness probes and compose `depends_on: condition: service_healthy` do). A `docker compose … stop` is a graceful SIGTERM the daemon handles cleanly.
 
 ### Verifying the daemon is up
 
