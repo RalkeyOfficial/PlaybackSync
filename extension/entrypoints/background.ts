@@ -8,7 +8,7 @@
  * thin glue that owns `chrome.*` APIs and forwards.
  */
 
-import type { AuthoritativeCommand } from '@/src/adapters/types'
+import type { AuthoritativeCommand, ContentIdentity } from '@/src/adapters/types'
 import type {
 	BackgroundToContent,
 	ContentToBackground,
@@ -385,26 +385,7 @@ async function routeMessage(tabId: number | undefined, msg: ContentToBackground)
 			// recording the adapter id so the guard can resolve URLs through it.
 			if (msg.guardNavigation) navGuardedTabs.set(tabId, msg.adapterId)
 			else clearNavGuard(tabId)
-			// If a guard pull-back is in flight and this identity is the reload
-			// landing back on the cursor, end the re-convergence: re-`markConverged`
-			// arms a fresh settle window so the reloaded player's delayed
-			// resume-position seek is dropped, and clearing `awaitingReload`
-			// lets normal intents flow again. Match on the cursor so a lingering
-			// identity from the pre-reload page can't end it early. Then resync
-			// the freshly-loaded video to the room's cached playback so it
-			// doesn't sit wrong until the next periodic server frame.
-			{
-				const session = sessions.get(tabId)
-				if (session?.awaitingReload
-					&& session.cursor
-					&& session.cursor.providerId === msg.identity.providerId
-					&& session.cursor.videoId === msg.identity.videoId) {
-					session.awaitingReload = false
-					clearNavReloadTimer(tabId)
-					markConverged(session)
-					scheduleGuardResync(tabId)
-				}
-			}
+			maybeEndGuardReload(tabId, msg.identity)
 			// The WS runtime's first-JOIN deferral is gated on identity +
 			// catalog; feed it the wire-shape `VideoRef` built from the
 			// adapter's identity plus the entrypoint-captured `pageUrl`.
@@ -708,6 +689,32 @@ function scheduleGuardResync(tabId: number): void {
 		})
 		for (const cmd of cmds) dispatchCommand(tabId, cmd)
 	}, GUARD_RESYNC_SETTLE_MS)
+}
+
+/**
+ * Land the guard pull-back's reload when the reloaded page reports its
+ * identity. If the tab is mid-reload from a {@link recheckAndPullBack}
+ * hard-nav and this identity matches the cursor, clear the awaiting-reload
+ * state, cancel the convergence-fallback, re-`markConverged` so a fresh
+ * settle window drops the reloaded player's delayed resume-position seek,
+ * and schedule a resync to the room's cached playback. Matching on the
+ * cursor (not just any identity) prevents a lingering identity from the
+ * pre-reload page ending the grace early. No-op when no reload is in
+ * flight.
+ *
+ * @param tabId The tab whose identity just arrived.
+ * @param identity The active adapter's reported identity for the page.
+ */
+function maybeEndGuardReload(tabId: number, identity: ContentIdentity): void {
+	const session = sessions.get(tabId)
+	if (!session?.awaitingReload) return
+	if (!session.cursor) return
+	if (session.cursor.providerId !== identity.providerId) return
+	if (session.cursor.videoId !== identity.videoId) return
+	session.awaitingReload = false
+	clearNavReloadTimer(tabId)
+	markConverged(session)
+	scheduleGuardResync(tabId)
 }
 
 /**
