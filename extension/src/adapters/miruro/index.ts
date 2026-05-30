@@ -206,13 +206,14 @@ class MiruroAdapter implements Adapter {
     ctx.onCommand(cmd => {
       // The room is now authoritative over playback: lift the auto-play
       // hold before applying, so a room `play` command isn't re-paused by
-      // the hold guard.
-      this.releaseAutoplayHold();
+      // the hold guard by running `this.releaseAutoplayHold()`.
       switch (cmd.type) {
         case 'play':
+          this.releaseAutoplayHold();
           void video.play();
           return;
         case 'pause':
+          this.releaseAutoplayHold();
           video.pause();
           return;
         case 'seek':
