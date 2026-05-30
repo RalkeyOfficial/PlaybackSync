@@ -54,6 +54,10 @@ jobs:
           name: playbacksync-extension-zips
           path: extension/.output/*.zip
           if-no-files-found: error
+          # WXT outputs to .output/ — a dot-prefixed (hidden) directory. Since
+          # v4, upload-artifact skips hidden paths by default, which would drop
+          # every zip and fail with "No files were found". Opt them back in.
+          include-hidden-files: true
 
       - name: Attach zips to the release
         # Only on a real release; skipped on manual runs.
