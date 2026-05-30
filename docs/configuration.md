@@ -24,12 +24,16 @@ Disabling does *not* delete the rooms table or any of its rows. The data is stil
 
 ## Admin configuration keys
 
-The app exposes three settings via Nextcloud's `IAppConfig` mechanism. There is no admin settings UI for them yet (that's deliberately deferred from the MVP), so today they are managed exclusively through `occ config:app:*` commands.
+The app's behaviour is tuned through Nextcloud's `IAppConfig` mechanism. Every value is editable two ways: from the **Administration settings → PlaybackSync** page (WebSocket tuning, daemon binding, room defaults, and the admin secret), or from the CLI with `occ config:app:*`. The daemon-binding and drift / rate-limit / tuning keys are documented in the operator guide's [Configuration keys](ws-sync-server.md#configuration-keys-iappconfig) table; this section covers the **room-behaviour** keys in depth.
 
-| Key                        | Type     | Default if unset                          | Effect                                                                                                |
+Most keys are seeded on install by the `EnsureDefaultSettings` repair step, so a fresh install already has them present at their defaults (the "Default" column below). `freeform_auto_append_cap` is the exception — it isn't seeded; its default is applied at read time.
+
+| Key                        | Type     | Default                                   | Effect                                                                                                |
 |----------------------------|----------|-------------------------------------------|-------------------------------------------------------------------------------------------------------|
 | `restrict_to_admins`       | boolean  | `false`                                   | If `true`, only users in the `admin` group can call `POST /rooms`. Existing rooms are not affected.   |
-| `default_ttl_seconds`      | integer  | `86400` (24 hours)                        | Default TTL applied when a `POST /rooms` request omits `ttl`. Out-of-range values silently fall back. |
+| `default_ttl_seconds`      | integer  | `86400` (24 hours)                        | Default TTL applied when a `POST /rooms` request omits `ttl`. Clamped to `[1, max_ttl_seconds]`; out-of-range values silently fall back. |
+| `max_ttl_seconds`          | integer  | `86400` (24 hours)                        | Upper bound a client may request via the `ttl` field on `POST /rooms`. A value `< 1` falls back to the `86400` service constant. |
+| `max_clients_per_room`     | integer  | `50`                                      | Caps how many connected clients are listed in the daemon's admin **presence** payload for a room. Not a `JOIN` limit — it doesn't reject participants. |
 | `freeform_auto_append_cap` | integer  | `100`                                     | Per-room maximum for the freeform auto-prune policy. See [`freeform_auto_append_cap`](#freeform_auto_append_cap) below. Clamped to `[1, 1000]`. |
 
 ### `restrict_to_admins`
@@ -58,9 +62,21 @@ This integer sets the default TTL applied when a `POST /rooms` request omits the
 docker exec -u www-data master-nextcloud-1 php /var/www/html/occ config:app:set playbacksync default_ttl_seconds --value 3600
 ```
 
-The service guards against nonsensical values (zero, negative, longer than `MAX_TTL_SECONDS = 86400`) by silently falling back to the hard-coded default. So if an admin accidentally sets `default_ttl_seconds` to `0` or to `99999999`, the create endpoint still produces sensible 24-hour rooms; the misconfiguration is logged but doesn't break anything.
+The service guards against nonsensical values (zero, negative, or longer than the effective `max_ttl_seconds`) by silently falling back to the hard-coded default. So if an admin accidentally sets `default_ttl_seconds` to `0` or above the maximum, the create endpoint still produces sensible 24-hour rooms (or the maximum, whichever is smaller); the misconfiguration is logged but doesn't break anything.
 
-The maximum TTL — the upper bound on what an end user can request via the `ttl` field on the create endpoint — is *not* admin-configurable in the MVP. It is fixed at 24 hours (86400 seconds) in the service. If we ever want to raise that ceiling, it'll need to be a service-level constant change rather than an `IAppConfig` key.
+### `max_ttl_seconds`
+
+This integer is the upper bound on what an end user can request via the `ttl` field on the create endpoint. It defaults to 24 hours (86400 seconds) — the `RoomService::MAX_TTL_SECONDS` constant, which is also the value seeded on install and the fallback used if the key is set to something `< 1`. Raise it for longer-lived rooms:
+
+```bash
+docker exec -u www-data master-nextcloud-1 php /var/www/html/occ config:app:set playbacksync max_ttl_seconds --value 604800
+```
+
+`default_ttl_seconds` is always clamped to this ceiling, so lowering `max_ttl_seconds` below the current default pulls the default down with it.
+
+### `max_clients_per_room`
+
+Despite the name, this does **not** cap room membership — the daemon does not currently reject a `JOIN` when a room is "full". It bounds how many connected clients the daemon includes in the per-room **presence** payload (the admin rooms list / detail view); `connectedCount` in that payload still reports the true total, so this only keeps the per-client array from growing unwieldy for a very large room. Defaults to `50`, seeded on install; the daemon reads it at boot via `WsConfig`, so a change takes effect after the next restart.
 
 ### `freeform_auto_append_cap`
 
@@ -194,4 +210,4 @@ The bundle artifacts under `js/` and `css/` need to be committed to the reposito
 
 The `info.xml` file's version field needs to be bumped on every release that includes a migration, so that `occ upgrade` actually runs the new migration. Bumping the version on releases that don't add migrations is fine but optional.
 
-The `restrict_to_admins` and `default_ttl_seconds` admin settings are the only configuration knobs an operator should need to touch. Anything beyond that — the password length, the maximum TTL, the prune interval — is a code-level change that requires a release.
+Operators configure the app from the **Administration settings → PlaybackSync** page (or `occ config:app:set`): room behaviour (`restrict_to_admins`, the TTL bounds, `max_clients_per_room`, `freeform_auto_append_cap`), WebSocket tuning, and daemon binding. A few things remain code-level constants and need a release to change — notably the password length and the prune-job interval.
