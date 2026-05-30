@@ -8,6 +8,7 @@ use OCA\PlaybackSync\AppInfo\Application;
 use OCA\PlaybackSync\WebSocket\Admin\EventStreamController;
 use OCA\PlaybackSync\WebSocket\Admin\HealthController;
 use OCA\PlaybackSync\WebSocket\Admin\PresenceHttpServer;
+use OCA\PlaybackSync\WebSocket\Admin\ReloadController;
 use OCA\PlaybackSync\WebSocket\MessageRouter;
 use OCA\PlaybackSync\WebSocket\RoomRegistry;
 use OCA\PlaybackSync\WebSocket\Tick;
@@ -40,6 +41,7 @@ class WsServe extends Command {
 		private readonly RoomRegistry $registry,
 		private readonly IAppManager $appManager,
 		private readonly EventStreamController $eventStreamController,
+		private readonly ReloadController $reloadController,
 	) {
 		parent::__construct();
 	}
@@ -101,6 +103,13 @@ class WsServe extends Command {
 		};
 		$loop->addSignal(SIGTERM, $shutdown);
 		$loop->addSignal(SIGINT, $shutdown);
+
+		// SIGHUP re-reads the tunables from IAppConfig in place — no socket
+		// teardown, no reconnect. Binding keys still need a full restart.
+		$loop->addSignal(SIGHUP, function () use ($output): void {
+			$output->writeln('<info>Received SIGHUP, reloading config...</info>');
+			$this->reloadController->reload();
+		});
 
 		$server->run();
 

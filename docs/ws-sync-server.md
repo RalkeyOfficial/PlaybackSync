@@ -107,6 +107,9 @@ User=www-data
 Group=www-data
 WorkingDirectory=/var/www/nextcloud
 ExecStart=/usr/bin/php /var/www/nextcloud/occ playbacksync:ws-serve
+# `systemctl reload playbacksync-ws` re-reads the tunables in place (SIGHUP),
+# no reconnect — see "Reloading config without a restart" below.
+ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 RestartSec=5
 # Recommended: a weekly graceful restart to release any accumulated memory.
@@ -202,9 +205,35 @@ Once the daemon is supervised you rarely need a terminal to restart it. Playback
 2. The supervisor starts a fresh process.
 3. The page polls `/api/v1/ws/status` and confirms the daemon is back, usually within a second or two. Connected viewers reconnect automatically.
 
-This is the same graceful exit as a `SIGTERM`, so it picks up **code changes** on the new process (a config-only change doesn't even need it — most `IAppConfig` values are re-read per request, and the daemon re-reads its own on the next boot). It is also what you use after rotating the admin secret or changing the daemon host/port (the binding section offers the restart automatically once you save).
+This is the same graceful exit as a `SIGTERM`, so it picks up **code changes** on the new process. A config-only change usually doesn't need a restart at all — see [Reloading config without a restart](#reloading-config-without-a-restart). Use the restart button after rotating the admin secret or changing the daemon host/port (the binding section offers the restart automatically once you save).
 
 **It only works when the daemon is supervised.** With a bare foreground or `docker exec -d` daemon there is nothing to start a new process, so the button stops the daemon and the readiness poll reports that it did not come back. Set up supervision first (the [Docker Compose](#docker-compose) sidecar, or the systemd unit above).
+
+### Reloading config without a restart
+
+Changing a **tunable** (drift thresholds, join/idle/tombstone timeouts, kick block, rate limits, `max_clients_per_room`) doesn't need a restart: the daemon can re-read its config from `IAppConfig` in place, with no socket teardown and no client reconnect.
+
+- **From the admin UI:** saving the *WebSocket sync tuning* or *Room defaults* section applies the change to the running daemon automatically (a toast confirms "Applied to the running daemon"). If the daemon is unreachable, the save still succeeds and a notice says the change lands on the next restart.
+- **From a shell / supervisor:** send `SIGHUP`.
+
+  ```bash
+  # systemd
+  sudo systemctl reload playbacksync-ws.service     # needs the ExecReload line above
+
+  # Docker Compose sidecar (PID 1 is the daemon)
+  docker kill --signal=HUP playbacksync-ws
+
+  # bare process
+  kill -HUP <pid>
+  ```
+
+The daemon logs `config reloaded (changed: …)` and keeps running — `/healthz` `uptime_seconds` keeps climbing, proving it reloaded rather than restarted.
+
+**What a reload does *not* apply** (these still need a full restart):
+
+- **Binding** — `ws_host` / `ws_port` / `ws_admin_host` / `ws_admin_port`, and `ws_admin_secret`. A live socket can't be rebound; the binding section offers a restart on save.
+- **`ws_event_log_size`** — baked into each room's ring buffer when the room is first seen, so a change only affects rooms created after a restart.
+- **Rate limits** — `ws_rate_limit_events_per_sec` / `ws_rate_limit_playlist_per_sec` are captured per client at `JOIN`, so a reload applies them to **new** connections only; existing clients keep their limits until they reconnect.
 
 ## Reverse-proxy snippets
 
@@ -277,7 +306,7 @@ Daemon-level options (`--host`, `--port`) override the corresponding app-config 
 
 ### Admin HTTP setup
 
-The PHP-side rooms API talks to the daemon over a small HMAC-signed HTTP endpoint co-located with the WebSocket server. Six routes today:
+The PHP-side rooms API talks to the daemon over a small HMAC-signed HTTP endpoint co-located with the WebSocket server. Seven routes today:
 
 - `GET  /healthz` — daemon liveness + light stats. **Unauthenticated**: loopback-only, no sensitive data in the response. Single-path carve-out before HMAC verification, audited with an explicit `if` rather than a general allowlist.
 - `GET  /admin/rooms/presence?uuids=<csv>` — point-in-time presence map for the rooms list / detail view.
@@ -285,6 +314,7 @@ The PHP-side rooms API talks to the daemon over a small HMAC-signed HTTP endpoin
 - `POST /admin/rooms/{uuid}/playback` — owner-initiated playback command. JSON body `{action: "play"|"pause"|"seek"|"reset", videoPos?: number}`. The daemon drives the same `PlaybackState::applyPlay/applyPause/applySeek` calls as a peer client's `EVENT` frame, appends to the event log so reconnecting clients replay the change, and broadcasts a `STATE` frame to every connection in the room. Returns 404 if no client has joined the room yet (no in-memory runtime to mutate), which the PHP controller maps to a 409 the dashboard renders as "no clients are connected".
 - `POST /admin/rooms/{uuid}/destroy` — owner-initiated room delete. Fired after `RoomService::deleteOwnedRoom` removes the DB row; mirrors the `Tick` `ROOM_EXPIRED` close path — final `{type:"ERROR", code:"ROOM_DELETED"}` frame per client, socket close, runtime drop. Fire-and-forget on the PHP side: transport failures and the 404 ("no live runtime") are both swallowed because the DB is the source of truth and `Tick`'s TTL sweep eventually catches any orphan.
 - `POST /admin/restart` — graceful self-exit. Responds `200 {"result":"restarting"}`, then stops the event loop a moment later so `occ playbacksync:ws-serve` exits `0`. The supervisor (`restart: unless-stopped`, systemd) then starts a fresh process. This backs the **Restart daemon** button in admin settings (see [Restarting from the admin UI](#restarting-from-the-admin-ui)). With no supervisor the daemon simply stops — so the button's caller verifies recovery by polling `/healthz` and reports a failure if it never comes back.
+- `POST /admin/reload` — re-read the tunables from `IAppConfig` **in place**, no restart. Responds `200 {"result":"reloaded","changed":{…}}` (the changed values keyed by name). Backs apply-on-save in admin settings and the `SIGHUP` path (see [Reloading config without a restart](#reloading-config-without-a-restart)). Binding keys and `ws_admin_secret` are intentionally **not** reloaded — those need a restart.
 
 The shared secret (`ws_admin_secret`) is **seeded automatically** by a repair step on `occ app:enable` and on every `occ upgrade`, so operators don't normally need to touch it.
 

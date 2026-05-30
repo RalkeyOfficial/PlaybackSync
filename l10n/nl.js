@@ -146,6 +146,8 @@ OC.L10N.register(
 		"Admin port": "Beheerpoort",
 		"Changing the daemon host or port requires restarting the WebSocket daemon before it takes effect — however it is supervised on this server (systemd, Docker Compose, or a manual run).": "Het wijzigen van de host of poort vereist een herstart van de WebSocket-daemon voordat het van kracht wordt — op welke manier die op deze server ook wordt beheerd (systemd, Docker Compose of een handmatige start).",
 		"Restart daemon": "Daemon herstarten",
+		"Applied to the running daemon": "Toegepast op de actieve daemon",
+		"Saved, but the daemon could not be reached to apply it live — the change takes effect on the next restart.": "Opgeslagen, maar de daemon was niet bereikbaar om het live toe te passen — de wijziging wordt van kracht bij de volgende herstart.",
 		"Daemon control": "Daemonbeheer",
 		"Restart the WebSocket daemon without opening a terminal. It exits gracefully and its supervisor starts a fresh process; connected viewers reconnect automatically within a second or two.": "Herstart de WebSocket-daemon zonder een terminal te openen. Hij stopt netjes en zijn supervisor start een nieuw proces; verbonden kijkers maken binnen een seconde of twee automatisch opnieuw verbinding.",
 		"Restart WebSocket daemon?": "WebSocket-daemon herstarten?",

@@ -8,13 +8,14 @@ import type {
 	WsTuningSettings,
 } from '../types/adminSettings.ts'
 
-import { showError, showSuccess } from '@nextcloud/dialogs'
+import { showError, showSuccess, showWarning } from '@nextcloud/dialogs'
 import { translate as t } from '@nextcloud/l10n'
 import { getLoggerBuilder } from '@nextcloud/logger'
 import { defineStore } from 'pinia'
 import {
 	fetchAdminSettings,
 	regenerateAdminSecret,
+	reloadDaemon as reloadDaemonRequest,
 	restartDaemon as restartDaemonRequest,
 	updateAdminSettings,
 } from '../services/adminSettingsApi.ts'
@@ -100,6 +101,26 @@ export const useAdminSettingsStore = defineStore('adminSettings', {
 				return false
 			} finally {
 				this.saving = null
+			}
+		},
+
+		/**
+		 * Best-effort: ask the running daemon to re-read its tunables in place so
+		 * a just-saved change takes effect without a restart. Never throws and
+		 * never blocks the save — if the daemon is unreachable we just warn that
+		 * the change will land on the next restart. Only toasts success when the
+		 * daemon actually reported a changed value (avoids noise after saving
+		 * settings the daemon doesn't read).
+		 */
+		async reloadDaemon(): Promise<void> {
+			try {
+				const changed = await reloadDaemonRequest()
+				if (Object.keys(changed).length > 0) {
+					showSuccess(t('playbacksync', 'Applied to the running daemon'))
+				}
+			} catch (error) {
+				logger.error('Failed to reload daemon config', { error })
+				showWarning(t('playbacksync', 'Saved, but the daemon could not be reached to apply it live — the change takes effect on the next restart.'))
 			}
 		},
 

@@ -7,8 +7,10 @@ namespace OCA\PlaybackSync\Controller;
 use OCA\PlaybackSync\AppInfo\Application;
 use OCA\PlaybackSync\Http\SseStreamResponse;
 use OCA\PlaybackSync\Service\AdminEventClient;
+use OCA\PlaybackSync\Service\AdminReloadClient;
 use OCA\PlaybackSync\Service\AdminRestartClient;
 use OCA\PlaybackSync\Service\AdminSecretService;
+use OCA\PlaybackSync\Service\Exceptions\DaemonReloadFailedException;
 use OCA\PlaybackSync\Service\Exceptions\DaemonRestartFailedException;
 use OCA\PlaybackSync\Settings\SettingsDefaults;
 use OCP\AppFramework\Controller;
@@ -59,6 +61,7 @@ class AdminSettingsController extends Controller {
 		private readonly AdminSecretService $secrets,
 		private readonly AdminEventClient $eventClient,
 		private readonly AdminRestartClient $restartClient,
+		private readonly AdminReloadClient $reloadClient,
 	) {
 		parent::__construct($appName, $request);
 	}
@@ -170,6 +173,29 @@ class AdminSettingsController extends Controller {
 			return new DataResponse(['error' => $e->getMessage()], Http::STATUS_BAD_GATEWAY);
 		}
 		return new DataResponse(['status' => 'restart_initiated']);
+	}
+
+	/**
+	 * Ask the running daemon to re-read its tunables from `IAppConfig` in place
+	 * (no restart, no reconnect). Unlike a restart this does *not* wipe the
+	 * daemon's in-memory event log, so recording the action is meaningful.
+	 * Binding changes aren't applied by a reload — those still need a restart.
+	 */
+	public function reloadDaemon(): DataResponse {
+		try {
+			$changed = $this->reloadClient->reload();
+		} catch (DaemonReloadFailedException $e) {
+			return new DataResponse(['error' => $e->getMessage()], Http::STATUS_BAD_GATEWAY);
+		}
+		$this->eventClient->record(
+			'daemon_config_reloaded',
+			'admin',
+			'admin',
+			$this->userId,
+			null,
+			['changed' => array_keys($changed)],
+		);
+		return new DataResponse(['status' => 'reloaded', 'changed' => $changed]);
 	}
 
 	/**

@@ -28,6 +28,8 @@ The app's behaviour is tuned through Nextcloud's `IAppConfig` mechanism. Every v
 
 Most keys are seeded on install by the `EnsureDefaultSettings` repair step, so a fresh install already has them present at their defaults (the "Default" column below). `freeform_auto_append_cap` is the exception — it isn't seeded; its default is applied at read time.
 
+**When changes take effect.** Room-behaviour keys on the HTTP path (`restrict_to_admins`, the TTL bounds, `freeform_auto_append_cap`) are re-read per request, so they apply immediately. Daemon **tunables** (the `ws_*` timeouts / drift / rate limits, and `max_clients_per_room`) can be applied to the running daemon without a restart — saving them in admin settings triggers a reload, or send `SIGHUP` — see [Reloading config without a restart](ws-sync-server.md#reloading-config-without-a-restart). The binding keys (`ws_host`/`ws_port`/`ws_admin_*`), `ws_admin_secret`, and `ws_event_log_size` are the exceptions that need a full daemon restart.
+
 | Key                        | Type     | Default                                   | Effect                                                                                                |
 |----------------------------|----------|-------------------------------------------|-------------------------------------------------------------------------------------------------------|
 | `restrict_to_admins`       | boolean  | `false`                                   | If `true`, only users in the `admin` group can call `POST /rooms`. Existing rooms are not affected.   |
@@ -76,7 +78,7 @@ docker exec -u www-data master-nextcloud-1 php /var/www/html/occ config:app:set 
 
 ### `max_clients_per_room`
 
-Despite the name, this does **not** cap room membership — the daemon does not currently reject a `JOIN` when a room is "full". It bounds how many connected clients the daemon includes in the per-room **presence** payload (the admin rooms list / detail view); `connectedCount` in that payload still reports the true total, so this only keeps the per-client array from growing unwieldy for a very large room. Defaults to `50`, seeded on install; the daemon reads it at boot via `WsConfig`, so a change takes effect after the next restart.
+Despite the name, this does **not** cap room membership — the daemon does not currently reject a `JOIN` when a room is "full". It bounds how many connected clients the daemon includes in the per-room **presence** payload (the admin rooms list / detail view); `connectedCount` in that payload still reports the true total, so this only keeps the per-client array from growing unwieldy for a very large room. Defaults to `50`, seeded on install; the daemon reads it live off `WsConfig`, so a change applies on the next [config reload](ws-sync-server.md#reloading-config-without-a-restart) (or restart) — no need to bounce the process.
 
 ### `freeform_auto_append_cap`
 

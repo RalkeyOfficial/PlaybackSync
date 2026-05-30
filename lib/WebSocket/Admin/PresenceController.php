@@ -6,6 +6,7 @@ namespace OCA\PlaybackSync\WebSocket\Admin;
 
 use OCA\PlaybackSync\WebSocket\RoomRegistry;
 use OCA\PlaybackSync\WebSocket\RoomRuntime;
+use OCA\PlaybackSync\WebSocket\WsConfig;
 
 /**
  * Read-only projection of `RoomRegistry` state for the rooms REST API.
@@ -17,17 +18,16 @@ use OCA\PlaybackSync\WebSocket\RoomRuntime;
 class PresenceController {
 
 	/**
-	 * Default cap on the number of clients returned per room. Keeps the
-	 * response bounded for absurdly busy rooms; `connectedCount` still
-	 * reflects the true total when the list is truncated. The runtime cap
-	 * is configurable via the `max_clients_per_room` IAppConfig key and
-	 * surfaced through `WsConfig::$maxClientsPerRoom`.
+	 * Reference default for the per-room client-list cap, mirrored from
+	 * `SettingsDefaults`. The live value comes from `max_clients_per_room` via
+	 * `WsConfig::$maxClientsPerRoom`, read fresh on each request so an admin
+	 * reload (SIGHUP / `POST /admin/reload`) takes effect without a restart.
 	 */
 	public const MAX_CLIENTS_PER_ROOM = 50;
 
 	public function __construct(
 		private readonly RoomRegistry $registry,
-		private readonly int $maxClientsPerRoom = self::MAX_CLIENTS_PER_ROOM,
+		private readonly WsConfig $config,
 	) {
 	}
 
@@ -77,7 +77,7 @@ class PresenceController {
 				continue;
 			}
 			$count++;
-			if (count($clients) < $this->maxClientsPerRoom) {
+			if (count($clients) < $this->config->maxClientsPerRoom) {
 				$clients[] = [
 					'clientId' => $client->clientId,
 					'nickname' => $client->nickname,

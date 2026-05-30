@@ -58,3 +58,19 @@ export async function regenerateAdminSecret(): Promise<AdminSecretInfo> {
 export async function restartDaemon(): Promise<void> {
 	await axios.post(generateUrl('/apps/playbacksync/api/v1/admin/ws/restart'))
 }
+
+/** Map of changed daemon tunables returned by a config reload, keyed by name. */
+export type ChangedTunables = Record<string, { from: number, to: number }>
+
+/**
+ * Ask the running daemon to re-read its tunables from app config in place — no
+ * restart, no reconnect. Resolves with the set of changed values (keyed by
+ * property name); rejects (502) when the daemon is unreachable.
+ *
+ * @return the tunables the daemon reported as changed
+ */
+export async function reloadDaemon(): Promise<ChangedTunables> {
+	const url = generateUrl('/apps/playbacksync/api/v1/admin/ws/reload')
+	const { data } = await axios.post<{ status: string, changed: ChangedTunables }>(url)
+	return data.changed ?? {}
+}

@@ -24,6 +24,7 @@ use Throwable;
  *   - `POST /admin/rooms/{uuid}/clients/{clientId}/disconnect` — owner kick.
  *   - `POST /admin/rooms/{uuid}/playback` — owner-driven play/pause/seek/reset.
  *   - `POST /admin/restart` — graceful self-exit so the supervisor restarts us.
+ *   - `POST /admin/reload` — re-read tunables from IAppConfig in place (no restart).
  *
  * Every other path returns 404. Authentication runs first (except for
  * `/healthz`) and a missing/invalid HMAC closes the connection with 401 — no
@@ -40,6 +41,7 @@ class PresenceHttpServer implements HttpServerInterface {
 	public const GLOBAL_EVENTS_STREAM_ROUTE = '/admin/events/stream';
 	public const EVENTS_INGEST_ROUTE = '/admin/events';
 	public const RESTART_ROUTE = '/admin/restart';
+	public const RELOAD_ROUTE = '/admin/reload';
 
 	private const KICK_PATTERN = '#^/admin/rooms/(?P<uuid>[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/clients/(?P<clientId>[0-9a-f]{1,64})/disconnect$#';
 	private const PLAYBACK_PATTERN = '#^/admin/rooms/(?P<uuid>[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/playback$#';
@@ -58,6 +60,7 @@ class PresenceHttpServer implements HttpServerInterface {
 		private readonly EventStreamController $eventStreamController,
 		private readonly EventIngestController $eventIngestController,
 		private readonly RoomDestroyController $destroyController,
+		private readonly ReloadController $reloadController,
 		private readonly LoggerInterface $logger,
 	) {
 	}
@@ -116,6 +119,14 @@ class PresenceHttpServer implements HttpServerInterface {
 				// daemon simply stops; the caller's status poll surfaces that.
 				$this->logger->info('PlaybackSync admin restart requested — stopping event loop');
 				Loop::get()->addTimer(0.25, static fn () => Loop::get()->stop());
+				return;
+			}
+
+			if ($method === 'POST' && $path === self::RELOAD_ROUTE) {
+				// Re-read tunables in place — no restart, no reconnect. Returns
+				// the changed keys so the caller can surface what was applied.
+				$changed = $this->reloadController->reload();
+				$this->respond($conn, 200, ['result' => 'reloaded', 'changed' => (object)$changed]);
 				return;
 			}
 

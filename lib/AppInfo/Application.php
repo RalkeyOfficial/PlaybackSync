@@ -45,12 +45,13 @@ class Application extends App implements IBootstrap {
 			return new RoomRegistry($c->get(WsConfig::class)->eventLogSize);
 		});
 
-		// PresenceController takes its per-room client cap from WsConfig so
-		// the daemon's view stays consistent with `max_clients_per_room`.
+		// PresenceController reads its per-room client cap live off the shared
+		// WsConfig so a config reload (SIGHUP / admin reload) updates it without
+		// a restart.
 		$context->registerService(PresenceController::class, static function (ContainerInterface $c): PresenceController {
 			return new PresenceController(
 				$c->get(RoomRegistry::class),
-				$c->get(WsConfig::class)->maxClientsPerRoom,
+				$c->get(WsConfig::class),
 			);
 		});
 

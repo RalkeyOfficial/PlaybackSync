@@ -447,10 +447,17 @@ watch(eventLogEvents, (events) => {
  */
 async function save(section: AdminSettingsSection) {
 	const ok = await store.saveSection(section)
-	// Daemon host/port changes only take effect after a restart, so offer one
-	// straight away once the binding section saves cleanly.
-	if (ok && section === 'daemon') {
+	if (!ok) {
+		return
+	}
+	// Daemon host/port changes can't be hot-reloaded (they'd need the socket
+	// rebound), so offer a restart. The tuning and room-default sections hold
+	// keys the daemon reads, so apply those to the running daemon in place —
+	// no reconnect.
+	if (section === 'daemon') {
 		restartConfirmOpen.value = true
+	} else if (section === 'wsTuning' || section === 'rooms') {
+		await store.reloadDaemon()
 	}
 }
 

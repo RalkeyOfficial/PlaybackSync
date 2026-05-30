@@ -10,6 +10,7 @@ use OCA\PlaybackSync\WebSocket\PlaybackState;
 use OCA\PlaybackSync\WebSocket\RateLimiter;
 use OCA\PlaybackSync\WebSocket\RoomRegistry;
 use OCA\PlaybackSync\WebSocket\RoomRuntime;
+use OCA\PlaybackSync\WebSocket\WsConfig;
 use PHPUnit\Framework\TestCase;
 use Ratchet\ConnectionInterface;
 
@@ -17,21 +18,21 @@ class PresenceControllerTest extends TestCase {
 
 	public function testReturnsEmptyMapWhenNoUuidsRequested(): void {
 		$registry = new RoomRegistry(eventLogSize: 200);
-		$controller = new PresenceController($registry);
+		$controller = new PresenceController($registry, $this->makeConfig());
 
 		$this->assertSame([], $controller->presenceFor([]));
 	}
 
 	public function testSkipsUnknownRooms(): void {
 		$registry = new RoomRegistry(eventLogSize: 200);
-		$controller = new PresenceController($registry);
+		$controller = new PresenceController($registry, $this->makeConfig());
 
 		$this->assertSame([], $controller->presenceFor(['11111111-1111-1111-1111-111111111111']));
 	}
 
 	public function testSerializesActiveClientsAndPlaybackState(): void {
 		$registry = new RoomRegistry(eventLogSize: 200);
-		$controller = new PresenceController($registry);
+		$controller = new PresenceController($registry, $this->makeConfig());
 		$uuid = '22222222-2222-2222-2222-222222222222';
 		$runtime = $registry->getOrCreate($uuid, expiresAtMs: 9_999_999_999_999);
 
@@ -71,7 +72,7 @@ class PresenceControllerTest extends TestCase {
 			$runtime->addClient($this->makeClient('c' . $i, nowMs: 1_700_000_000_000 + $i, conn: $this->fakeConn()));
 		}
 
-		$result = (new PresenceController($registry))->presenceFor([$uuid]);
+		$result = (new PresenceController($registry, $this->makeConfig()))->presenceFor([$uuid]);
 		$entry = $result[$uuid];
 
 		$this->assertSame($total, $entry['connectedCount'], 'count is the true total even when truncated');
@@ -83,7 +84,7 @@ class PresenceControllerTest extends TestCase {
 		$uuid = '55555555-5555-5555-5555-555555555555';
 		$registry->getOrCreate($uuid, expiresAtMs: 9_999_999_999_999);
 
-		$result = (new PresenceController($registry))->presenceFor([$uuid]);
+		$result = (new PresenceController($registry, $this->makeConfig()))->presenceFor([$uuid]);
 		$this->assertArrayHasKey($uuid, $result);
 		$this->assertNull($result[$uuid]['lastActivityMs']);
 		$this->assertSame(0, $result[$uuid]['connectedCount']);
@@ -103,5 +104,26 @@ class PresenceControllerTest extends TestCase {
 
 	private function fakeConn(): ConnectionInterface {
 		return $this->createMock(ConnectionInterface::class);
+	}
+
+	/**
+	 * Build a WsConfig whose client-list cap matches the reference default, so
+	 * the truncation assertion keys off `PresenceController::MAX_CLIENTS_PER_ROOM`.
+	 * The other tunables are arbitrary — PresenceController only reads the cap.
+	 */
+	private function makeConfig(): WsConfig {
+		return new WsConfig(
+			joinTimeoutMs: 5_000,
+			idleCloseMs: 30_000,
+			tombstoneMs: 30_000,
+			kickBlockMs: 30_000,
+			eventLogSize: 200,
+			rateLimitEventsPerSec: 10,
+			rateLimitPlaylistPerSec: 2,
+			driftNudgeThresholdMs: 200,
+			driftSeekThresholdMs: 500,
+			driftCooldownMs: 3_000,
+			maxClientsPerRoom: PresenceController::MAX_CLIENTS_PER_ROOM,
+		);
 	}
 }

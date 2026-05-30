@@ -7,8 +7,10 @@ namespace OCA\PlaybackSync\Tests\Unit\Controller;
 use OCA\PlaybackSync\AppInfo\Application;
 use OCA\PlaybackSync\Controller\AdminSettingsController;
 use OCA\PlaybackSync\Service\AdminEventClient;
+use OCA\PlaybackSync\Service\AdminReloadClient;
 use OCA\PlaybackSync\Service\AdminRestartClient;
 use OCA\PlaybackSync\Service\AdminSecretService;
+use OCA\PlaybackSync\Service\Exceptions\DaemonReloadFailedException;
 use OCA\PlaybackSync\Service\Exceptions\DaemonRestartFailedException;
 use OCA\PlaybackSync\Settings\SettingsDefaults;
 use OCP\AppFramework\Http;
@@ -24,6 +26,7 @@ class AdminSettingsControllerTest extends TestCase {
 	private AdminSecretService&MockObject $secrets;
 	private AdminEventClient&MockObject $eventClient;
 	private AdminRestartClient&MockObject $restartClient;
+	private AdminReloadClient&MockObject $reloadClient;
 	private AdminSettingsController $controller;
 
 	/**
@@ -42,6 +45,7 @@ class AdminSettingsControllerTest extends TestCase {
 		$this->secrets = $this->createMock(AdminSecretService::class);
 		$this->eventClient = $this->createMock(AdminEventClient::class);
 		$this->restartClient = $this->createMock(AdminRestartClient::class);
+		$this->reloadClient = $this->createMock(AdminReloadClient::class);
 
 		$this->secrets->method('peekMasked')->willReturn([
 			'configured' => true,
@@ -57,6 +61,7 @@ class AdminSettingsControllerTest extends TestCase {
 			$this->secrets,
 			$this->eventClient,
 			$this->restartClient,
+			$this->reloadClient,
 		);
 	}
 
@@ -194,6 +199,30 @@ class AdminSettingsControllerTest extends TestCase {
 			->willThrowException(new DaemonRestartFailedException('WebSocket daemon unreachable.'));
 
 		$response = $this->controller->restartDaemon();
+
+		$this->assertSame(Http::STATUS_BAD_GATEWAY, $response->getStatus());
+		$this->assertArrayHasKey('error', $response->getData());
+	}
+
+	public function testReloadDaemonReturnsChangedAndRecordsEvent(): void {
+		$changed = ['driftNudgeThresholdMs' => ['from' => 200, 'to' => 400]];
+		$this->reloadClient->method('reload')->willReturn($changed);
+		$this->eventClient->expects($this->once())
+			->method('record')
+			->with('daemon_config_reloaded', 'admin', 'admin', 'admin', null, ['changed' => ['driftNudgeThresholdMs']]);
+
+		$response = $this->controller->reloadDaemon();
+
+		$this->assertSame(Http::STATUS_OK, $response->getStatus());
+		$this->assertSame(['status' => 'reloaded', 'changed' => $changed], $response->getData());
+	}
+
+	public function testReloadDaemonMapsFailureToBadGateway(): void {
+		$this->reloadClient->method('reload')
+			->willThrowException(new DaemonReloadFailedException('WebSocket daemon unreachable.'));
+		$this->eventClient->expects($this->never())->method('record');
+
+		$response = $this->controller->reloadDaemon();
 
 		$this->assertSame(Http::STATUS_BAD_GATEWAY, $response->getStatus());
 		$this->assertArrayHasKey('error', $response->getData());

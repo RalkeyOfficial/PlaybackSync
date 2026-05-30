@@ -146,6 +146,8 @@ OC.L10N.register(
 		"Admin port": "Admin port",
 		"Changing the daemon host or port requires restarting the WebSocket daemon before it takes effect — however it is supervised on this server (systemd, Docker Compose, or a manual run).": "Changing the daemon host or port requires restarting the WebSocket daemon before it takes effect — however it is supervised on this server (systemd, Docker Compose, or a manual run).",
 		"Restart daemon": "Restart daemon",
+		"Applied to the running daemon": "Applied to the running daemon",
+		"Saved, but the daemon could not be reached to apply it live — the change takes effect on the next restart.": "Saved, but the daemon could not be reached to apply it live — the change takes effect on the next restart.",
 		"Daemon control": "Daemon control",
 		"Restart the WebSocket daemon without opening a terminal. It exits gracefully and its supervisor starts a fresh process; connected viewers reconnect automatically within a second or two.": "Restart the WebSocket daemon without opening a terminal. It exits gracefully and its supervisor starts a fresh process; connected viewers reconnect automatically within a second or two.",
 		"Restart WebSocket daemon?": "Restart WebSocket daemon?",
