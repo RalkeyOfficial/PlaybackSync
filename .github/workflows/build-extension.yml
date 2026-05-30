@@ -1,0 +1,63 @@
+# Builds and packages the browser extension (Chrome MV3 + Firefox MV2) and
+# attaches the .zip files to the GitHub Release that triggered the run.
+#
+# Two ways it runs:
+#   * Automatically — whenever you publish a Release on GitHub. The zips are
+#     uploaded as assets on that release, next to the source code links.
+#   * Manually — via the "Run workflow" button on the Actions tab (handy for a
+#     test build). Manual runs don't touch any release; they just leave the
+#     zips as downloadable "artifacts" on the run's summary page.
+name: Build extension
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch: # adds the manual "Run workflow" button
+
+# The upload-to-release step needs write access to the repo's releases.
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        # All steps run inside the extension/ subfolder, which has its own
+        # package.json + lockfile.
+        working-directory: extension
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: extension/package-lock.json
+
+      - name: Install dependencies
+        # `npm ci` installs exactly what the lockfile pins — reproducible builds.
+        run: npm ci
+
+      - name: Build and zip Chrome (MV3) + Firefox (MV2)
+        run: |
+          npm run zip
+          npm run zip:firefox
+
+      - name: Upload zips as workflow artifacts
+        # Always available — this is what you download after a manual test run.
+        uses: actions/upload-artifact@v4
+        with:
+          name: playbacksync-extension-zips
+          path: extension/.output/*.zip
+          if-no-files-found: error
+
+      - name: Attach zips to the release
+        # Only on a real release; skipped on manual runs.
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ github.event.release.tag_name }}" .output/*.zip --clobber --repo "${{ github.repository }}"

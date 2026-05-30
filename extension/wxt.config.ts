@@ -13,7 +13,7 @@ export default defineConfig({
 		return {
 			name: `PlaybackSync${nameSuffix}`,
 			description: 'Frame-tight video sync across browsers — every play, pause, and seek mirrored in milliseconds over a self-hosted WebSocket relay.',
-			version: '0.1.0',
+			version: '1.0.0',
 			permissions: [
 				'storage',
 				'alarms',
