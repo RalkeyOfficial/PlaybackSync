@@ -12,6 +12,7 @@ use OCA\PlaybackSync\Service\AdminRestartClient;
 use OCA\PlaybackSync\Service\AdminSecretService;
 use OCA\PlaybackSync\Service\Exceptions\DaemonReloadFailedException;
 use OCA\PlaybackSync\Service\Exceptions\DaemonRestartFailedException;
+use OCA\PlaybackSync\Service\UpdateCheckerService;
 use OCA\PlaybackSync\Settings\SettingsDefaults;
 use OCP\AppFramework\Controller;
 use OCP\AppFramework\Http;
@@ -62,6 +63,7 @@ class AdminSettingsController extends Controller {
 		private readonly AdminEventClient $eventClient,
 		private readonly AdminRestartClient $restartClient,
 		private readonly AdminReloadClient $reloadClient,
+		private readonly UpdateCheckerService $updateChecker,
 	) {
 		parent::__construct($appName, $request);
 	}
@@ -139,7 +141,7 @@ class AdminSettingsController extends Controller {
 		if ($key === 'ws_host' || $key === 'ws_admin_host') {
 			return $this->appConfig->getValueString($app, $key);
 		}
-		if ($key === 'restrict_to_admins') {
+		if ($key === 'restrict_to_admins' || $key === 'update_check_enabled') {
 			return $this->appConfig->getValueBool($app, $key);
 		}
 		return null;
@@ -196,6 +198,17 @@ class AdminSettingsController extends Controller {
 			['changed' => array_keys($changed)],
 		);
 		return new DataResponse(['status' => 'reloaded', 'changed' => $changed]);
+	}
+
+	/**
+	 * Run an on-demand GitHub release check and return the resulting update
+	 * status. The check is best-effort — a network failure leaves the cached
+	 * status untouched and still returns `200`, because "couldn't reach GitHub
+	 * right now" is not an admin-actionable error. Ignores the
+	 * `update_check_enabled` toggle: an explicit click is itself consent.
+	 */
+	public function checkForUpdates(): DataResponse {
+		return new DataResponse($this->updateChecker->check());
 	}
 
 	/**
@@ -262,7 +275,8 @@ class AdminSettingsController extends Controller {
 	 *     wsTuning: array<string, int|null>,
 	 *     daemon: array{ws_host: string|null, ws_port: int|null, ws_admin_host: string|null, ws_admin_port: int|null},
 	 *     rooms: array{restrict_to_admins: bool|null, default_ttl_seconds: int|null, max_ttl_seconds: int|null, max_clients_per_room: int|null},
-	 *     secret: array{configured: bool, masked: string, length: int}
+	 *     secret: array{configured: bool, masked: string, length: int},
+	 *     updates: array{enabled: bool, currentVersion: string, latestVersion: ?string, updateAvailable: bool, releaseUrl: string, lastCheckedAt: ?int}
 	 * }
 	 */
 	private function snapshot(): array {
@@ -294,6 +308,7 @@ class AdminSettingsController extends Controller {
 				'max_clients_per_room' => $readInt('max_clients_per_room'),
 			],
 			'secret' => $this->secrets->peekMasked(),
+			'updates' => $this->updateChecker->status(),
 		];
 	}
 
@@ -353,9 +368,9 @@ class AdminSettingsController extends Controller {
 				continue;
 			}
 
-			if ($key === 'restrict_to_admins') {
+			if ($key === 'restrict_to_admins' || $key === 'update_check_enabled') {
 				if (!is_bool($value)) {
-					throw new \InvalidArgumentException('restrict_to_admins must be a boolean.');
+					throw new \InvalidArgumentException($key . ' must be a boolean.');
 				}
 				$out[$key] = $value;
 				continue;

@@ -5,7 +5,7 @@
 	<name>PlaybackSync</name>
 	<summary>Synchronized video playback for groups</summary>
 	<description><![CDATA[Watch videos in sync with others. Create a room, share the link, and enjoy synchronized playback across all participants.]]></description>
-	<version>0.4.0</version>
+	<version>1.0.0</version>
 	<licence>agpl</licence>
 	<namespace>PlaybackSync</namespace>
 	<category>multimedia</category>
@@ -19,6 +19,7 @@
 
 	<background-jobs>
 		<job>OCA\PlaybackSync\BackgroundJob\PruneExpiredRoomsJob</job>
+		<job>OCA\PlaybackSync\BackgroundJob\CheckUpdatesJob</job>
 	</background-jobs>
 
 	<commands>
@@ -40,6 +41,12 @@
 		<post-migration>
 			<step>OCA\PlaybackSync\Migration\EnsureDefaultSettings</step>
 			<step>OCA\PlaybackSync\Migration\EnsureAdminSecret</step>
+			<!--
+				Runs after the seed steps so the bounced daemon comes back on the
+				newly-seeded config. Post-migration only: a fresh install has no
+				prior daemon to restart. Best-effort — never fails the upgrade.
+			-->
+			<step>OCA\PlaybackSync\Migration\RestartDaemonOnUpgrade</step>
 		</post-migration>
 	</repair-steps>
 

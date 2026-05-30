@@ -12,6 +12,7 @@ use OCA\PlaybackSync\Service\AdminRestartClient;
 use OCA\PlaybackSync\Service\AdminSecretService;
 use OCA\PlaybackSync\Service\Exceptions\DaemonReloadFailedException;
 use OCA\PlaybackSync\Service\Exceptions\DaemonRestartFailedException;
+use OCA\PlaybackSync\Service\UpdateCheckerService;
 use OCA\PlaybackSync\Settings\SettingsDefaults;
 use OCP\AppFramework\Http;
 use OCP\IAppConfig;
@@ -27,6 +28,7 @@ class AdminSettingsControllerTest extends TestCase {
 	private AdminEventClient&MockObject $eventClient;
 	private AdminRestartClient&MockObject $restartClient;
 	private AdminReloadClient&MockObject $reloadClient;
+	private UpdateCheckerService&MockObject $updateChecker;
 	private AdminSettingsController $controller;
 
 	/**
@@ -46,11 +48,24 @@ class AdminSettingsControllerTest extends TestCase {
 		$this->eventClient = $this->createMock(AdminEventClient::class);
 		$this->restartClient = $this->createMock(AdminRestartClient::class);
 		$this->reloadClient = $this->createMock(AdminReloadClient::class);
+		$this->updateChecker = $this->createMock(UpdateCheckerService::class);
 
 		$this->secrets->method('peekMasked')->willReturn([
 			'configured' => true,
 			'masked' => 'abcd…wxyz',
 			'length' => 64,
+		]);
+
+		// The update status is read straight off the service (which holds its
+		// own IAppConfig), so it never touches the controller's IAppConfig mock
+		// — stub a fixed snapshot so `index()` returns a well-formed shape.
+		$this->updateChecker->method('status')->willReturn([
+			'enabled' => true,
+			'currentVersion' => '1.0.0',
+			'latestVersion' => null,
+			'updateAvailable' => false,
+			'releaseUrl' => 'https://github.com/RalkeyOfficial/PlaybackSync/releases',
+			'lastCheckedAt' => null,
 		]);
 
 		$this->controller = new AdminSettingsController(
@@ -62,6 +77,7 @@ class AdminSettingsControllerTest extends TestCase {
 			$this->eventClient,
 			$this->restartClient,
 			$this->reloadClient,
+			$this->updateChecker,
 		);
 	}
 

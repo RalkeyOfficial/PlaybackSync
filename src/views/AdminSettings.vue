@@ -6,6 +6,54 @@
 
 		<template v-if="store.loaded">
 			<NcSettingsSection
+				v-if="updates"
+				:name="t('playbacksync', 'Updates')"
+				:description="t('playbacksync', 'PlaybackSync is installed from GitHub rather than the Nextcloud App Store, so it checks the project releases page for newer versions. Nothing is ever installed automatically.')">
+				<NcNoteCard :type="updates.updateAvailable ? 'warning' : 'success'">
+					<span v-if="updates.updateAvailable">
+						{{ t('playbacksync', 'Version {latest} is available — you have {current}.', { latest: updates.latestVersion, current: updates.currentVersion }) }}
+					</span>
+					<span v-else>
+						{{ t('playbacksync', 'You are on the latest version ({current}).', { current: updates.currentVersion }) }}
+					</span>
+				</NcNoteCard>
+				<p class="playbacksync-admin__update-meta">
+					{{ lastCheckedLabel }}
+				</p>
+				<div class="playbacksync-admin__update-controls">
+					<NcCheckboxRadioSwitch
+						:modelValue="updates.enabled"
+						type="switch"
+						@update:modelValue="(v) => store.setUpdateCheckEnabled(v)">
+						{{ t('playbacksync', 'Automatically check for updates daily') }}
+					</NcCheckboxRadioSwitch>
+					<div class="playbacksync-admin__update-buttons">
+						<NcButton
+							v-if="updates.updateAvailable"
+							variant="primary"
+							:href="updates.releaseUrl"
+							target="_blank"
+							rel="noopener noreferrer">
+							<template #icon>
+								<IconOpenInNew :size="20" />
+							</template>
+							{{ t('playbacksync', 'View release') }}
+						</NcButton>
+						<NcButton
+							variant="secondary"
+							:disabled="store.checkingForUpdates"
+							@click="store.checkForUpdates()">
+							<template #icon>
+								<NcLoadingIcon v-if="store.checkingForUpdates" :size="20" />
+								<IconRefresh v-else :size="20" />
+							</template>
+							{{ t('playbacksync', 'Check now') }}
+						</NcButton>
+					</div>
+				</div>
+			</NcSettingsSection>
+
+			<NcSettingsSection
 				:name="t('playbacksync', 'WebSocket sync tuning')"
 				:description="t('playbacksync', 'Tunables that govern how the daemon negotiates joins, idle disconnects, drift correction and rate limiting. Defaults are sane for most installs.')">
 				<div class="playbacksync-admin__grid">
@@ -286,6 +334,7 @@ import NcSettingsSection from '@nextcloud/vue/components/NcSettingsSection'
 import NcTextField from '@nextcloud/vue/components/NcTextField'
 import IconContentCopy from 'vue-material-design-icons/ContentCopy.vue'
 import IconContentSave from 'vue-material-design-icons/ContentSave.vue'
+import IconOpenInNew from 'vue-material-design-icons/OpenInNew.vue'
 import IconRefresh from 'vue-material-design-icons/Refresh.vue'
 import IconRestart from 'vue-material-design-icons/Restart.vue'
 import RoomEventLog from '../components/RoomEventLog.vue'
@@ -305,6 +354,17 @@ interface WsTuningField {
 const store = useAdminSettingsStore()
 const confirmOpen = ref(false)
 const restartConfirmOpen = ref(false)
+
+const updates = computed(() => store.updates)
+
+// Human-readable "when did we last hear from GitHub" line under the banner.
+const lastCheckedLabel = computed(() => {
+	const checkedAt = store.updates?.lastCheckedAt ?? null
+	if (checkedAt === null) {
+		return t('playbacksync', 'Not checked yet.')
+	}
+	return t('playbacksync', 'Last checked {datetime}.', { datetime: new Date(checkedAt * 1000).toLocaleString() })
+})
 
 // Placeholder values displayed in empty inputs. These mirror
 // `SettingsDefaults` in PHP and only surface when the admin has manually
@@ -651,6 +711,25 @@ function parseStringInput(value: string | number): string | null {
 .playbacksync-admin__daemon-control {
 	margin-top: 12px;
 	max-width: 360px;
+}
+
+.playbacksync-admin__update-meta {
+	margin: 8px 2px 12px;
+	color: var(--color-text-maxcontrast);
+	font-size: 0.9em;
+}
+
+.playbacksync-admin__update-controls {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 16px;
+	flex-wrap: wrap;
+}
+
+.playbacksync-admin__update-buttons {
+	display: flex;
+	gap: 8px;
 }
 
 /* Give the restart action real presence — this is a deliberate operational

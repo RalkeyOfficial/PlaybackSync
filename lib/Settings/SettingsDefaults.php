@@ -37,6 +37,9 @@ final class SettingsDefaults {
 		'default_ttl_seconds' => 86_400,
 		'max_ttl_seconds' => 86_400,
 		'max_clients_per_room' => 50,
+		// Unix seconds of the last successful GitHub update check; 0 = never.
+		// Written by UpdateCheckerService, not user-editable.
+		'update_last_checked_at' => 0,
 	];
 
 	/**
@@ -47,6 +50,10 @@ final class SettingsDefaults {
 	public const STRING_DEFAULTS = [
 		'ws_host' => '127.0.0.1',
 		'ws_admin_host' => '127.0.0.1',
+		// Newest release version + its URL as last seen on GitHub; '' = unknown.
+		// Written by UpdateCheckerService, not user-editable.
+		'update_latest_version' => '',
+		'update_latest_url' => '',
 	];
 
 	/**
@@ -56,5 +63,7 @@ final class SettingsDefaults {
 	 */
 	public const BOOL_DEFAULTS = [
 		'restrict_to_admins' => false,
+		// Whether the daily background job is allowed to call out to GitHub.
+		'update_check_enabled' => true,
 	];
 }

@@ -35,6 +35,7 @@ return [
 		['name' => 'admin_settings#regenerateAdminSecret', 'url' => '/api/v1/admin/settings/secret', 'verb' => 'POST'],
 		['name' => 'admin_settings#restartDaemon', 'url' => '/api/v1/admin/ws/restart', 'verb' => 'POST'],
 		['name' => 'admin_settings#reloadDaemon', 'url' => '/api/v1/admin/ws/reload', 'verb' => 'POST'],
+		['name' => 'admin_settings#checkForUpdates', 'url' => '/api/v1/admin/updates/check', 'verb' => 'POST'],
 		['name' => 'admin_settings#eventsStream', 'url' => '/api/v1/admin/events/stream', 'verb' => 'GET'],
 
 		['name' => 'user_settings#index', 'url' => '/api/v1/user/settings', 'verb' => 'GET'],

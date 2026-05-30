@@ -1,4 +1,4 @@
-import type { AdminSecretInfo, AdminSettingsPatch, AdminSettingsSnapshot } from '../types/adminSettings.ts'
+import type { AdminSecretInfo, AdminSettingsPatch, AdminSettingsSnapshot, UpdateStatus } from '../types/adminSettings.ts'
 
 import axios from '@nextcloud/axios'
 import { generateUrl } from '@nextcloud/router'
@@ -73,4 +73,17 @@ export async function reloadDaemon(): Promise<ChangedTunables> {
 	const url = generateUrl('/apps/playbacksync/api/v1/admin/ws/reload')
 	const { data } = await axios.post<{ status: string, changed: ChangedTunables }>(url)
 	return data.changed ?? {}
+}
+
+/**
+ * Run an on-demand GitHub release check and return the refreshed update
+ * status. Resolves even when GitHub was unreachable — the server returns the
+ * cached status unchanged in that case rather than erroring.
+ *
+ * @return the update status after the check
+ */
+export async function checkForUpdates(): Promise<UpdateStatus> {
+	const url = generateUrl('/apps/playbacksync/api/v1/admin/updates/check')
+	const { data } = await axios.post<UpdateStatus>(url)
+	return data
 }

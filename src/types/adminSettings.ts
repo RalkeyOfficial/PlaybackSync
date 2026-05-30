@@ -38,11 +38,32 @@ export interface AdminSecretInfo {
 	length: number
 }
 
+/**
+ * GitHub release-check status. PlaybackSync ships from GitHub, not the
+ * Nextcloud App Store, so this is the app's own "update available?" signal.
+ * `latestVersion` and `lastCheckedAt` are null until the first check succeeds.
+ */
+export interface UpdateStatus {
+	/** Whether the daily background check is allowed to call out to GitHub. */
+	enabled: boolean
+	/** The installed app version, from appinfo/info.xml. */
+	currentVersion: string
+	/** Newest version seen on GitHub, or null if never checked. */
+	latestVersion: string | null
+	/** True when `latestVersion` is strictly newer than `currentVersion`. */
+	updateAvailable: boolean
+	/** Link to the release (or the releases page as a fallback). */
+	releaseUrl: string
+	/** Unix seconds of the last successful check, or null if never. */
+	lastCheckedAt: number | null
+}
+
 export interface AdminSettingsSnapshot {
 	wsTuning: WsTuningSettings
 	daemon: DaemonSettings
 	rooms: RoomSettings
 	secret: AdminSecretInfo
+	updates: UpdateStatus
 }
 
 export type AdminSettingsSection = 'wsTuning' | 'daemon' | 'rooms'
@@ -56,4 +77,7 @@ export type AdminSettingsSection = 'wsTuning' | 'daemon' | 'rooms'
 export type AdminSettingsPatch = Partial<{
 	[K in keyof (WsTuningSettings & DaemonSettings & RoomSettings)]:
 	NonNullable<(WsTuningSettings & DaemonSettings & RoomSettings)[K]>
+} & {
+	/** The update auto-check toggle is patched on its own, outside the form sections. */
+	update_check_enabled: boolean
 }>

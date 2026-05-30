@@ -5,6 +5,7 @@ import type {
 	AdminSettingsSnapshot,
 	DaemonSettings,
 	RoomSettings,
+	UpdateStatus,
 	WsTuningSettings,
 } from '../types/adminSettings.ts'
 
@@ -13,6 +14,7 @@ import { translate as t } from '@nextcloud/l10n'
 import { getLoggerBuilder } from '@nextcloud/logger'
 import { defineStore } from 'pinia'
 import {
+	checkForUpdates as checkForUpdatesRequest,
 	fetchAdminSettings,
 	regenerateAdminSecret,
 	reloadDaemon as reloadDaemonRequest,
@@ -48,11 +50,13 @@ interface AdminSettingsState {
 	daemon: DaemonSettings | null
 	rooms: RoomSettings | null
 	secret: AdminSecretInfo | null
+	updates: UpdateStatus | null
 	loaded: boolean
 	loading: boolean
 	saving: AdminSettingsSection | null
 	regenerating: boolean
 	restarting: boolean
+	checkingForUpdates: boolean
 }
 
 export const useAdminSettingsStore = defineStore('adminSettings', {
@@ -61,11 +65,13 @@ export const useAdminSettingsStore = defineStore('adminSettings', {
 		daemon: null,
 		rooms: null,
 		secret: null,
+		updates: null,
 		loaded: false,
 		loading: false,
 		saving: null,
 		regenerating: false,
 		restarting: false,
+		checkingForUpdates: false,
 	}),
 
 	actions: {
@@ -190,11 +196,47 @@ export const useAdminSettingsStore = defineStore('adminSettings', {
 			}
 		},
 
+		/**
+		 * Run an on-demand update check via the server and fold the refreshed
+		 * status into the store. Never throws — a transport failure just toasts
+		 * an error and leaves the previous status in place.
+		 */
+		async checkForUpdates(): Promise<void> {
+			this.checkingForUpdates = true
+			try {
+				this.updates = await checkForUpdatesRequest()
+				showSuccess(t('playbacksync', 'Update check complete'))
+			} catch (error) {
+				logger.error('Failed to check for updates', { error })
+				showError(t('playbacksync', 'Could not check for updates.'))
+			} finally {
+				this.checkingForUpdates = false
+			}
+		},
+
+		/**
+		 * Toggle the daily auto-check on or off. Persists via the settings PUT
+		 * and folds the refreshed snapshot back in so the switch reflects the
+		 * stored value.
+		 *
+		 * @param enabled whether the background job may call out to GitHub
+		 */
+		async setUpdateCheckEnabled(enabled: boolean): Promise<void> {
+			try {
+				const snapshot = await updateAdminSettings({ update_check_enabled: enabled })
+				this.applySnapshot(snapshot)
+			} catch (error) {
+				logger.error('Failed to toggle update checking', { error })
+				showError(t('playbacksync', 'Could not save settings.'))
+			}
+		},
+
 		applySnapshot(snapshot: AdminSettingsSnapshot) {
 			this.wsTuning = { ...snapshot.wsTuning }
 			this.daemon = { ...snapshot.daemon }
 			this.rooms = { ...snapshot.rooms }
 			this.secret = { ...snapshot.secret }
+			this.updates = { ...snapshot.updates }
 		},
 
 		collectSection(section: AdminSettingsSection): AdminSettingsPatch | null {
