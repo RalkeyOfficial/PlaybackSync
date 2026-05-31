@@ -49,7 +49,11 @@ class RoomMapper extends QBMapper {
 		// already so the statement is harmless there.
 		$sql = $qb->getSQL() . ' FOR UPDATE';
 		$stmt = $this->db->executeQuery($sql, $qb->getParameters(), $qb->getParameterTypes());
-		$row = $stmt->fetchAssociative();
+		// `fetch()` (default PDO::FETCH_ASSOC) is the portable OCP\DB\IResult
+		// method. Do NOT use Doctrine's `fetchAssociative()` here: Nextcloud's
+		// `OC\DB\ResultAdapter` only exposes it on newer releases (NC 34), so on
+		// NC 32 it's an undefined-method fatal that aborts the whole merge.
+		$row = $stmt->fetch();
 		$stmt->closeCursor();
 
 		if ($row === false) {
