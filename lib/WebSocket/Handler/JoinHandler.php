@@ -118,7 +118,7 @@ class JoinHandler {
 				$room = $this->roomMapper->findByUuid($runtime->uuid);
 				$runtime->refreshPlaylistFromDb($room);
 			} catch (\Throwable $e) {
-				$this->logger->info('[playbacksync ws] catalogFragment merge skipped: ' . $e->getMessage());
+				$this->logger->warning('[playbacksync ws] catalogFragment merge skipped: ' . $e->getMessage());
 			}
 		}
 
@@ -208,7 +208,7 @@ class JoinHandler {
 			$room = $this->roomMapper->findByUuid($runtime->uuid);
 			$runtime->refreshPlaylistFromDb($room);
 		} catch (\Throwable $e) {
-			$this->logger->info('[playbacksync ws] empty-playlist seed skipped: ' . $e->getMessage());
+			$this->logger->warning('[playbacksync ws] empty-playlist seed skipped: ' . $e->getMessage());
 		}
 	}
 

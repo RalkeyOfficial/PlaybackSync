@@ -6,7 +6,7 @@ For protocol-level details (message types, fields, error codes), see [`ws-protoc
 
 ## Overview
 
-The sync server is a long-running PHP process launched with `occ playbacksync:ws-serve`. It accepts WebSocket connections, authenticates them with the room password, and broadcasts playback events between members of the same room. State lives only in the daemon's memory — there are no DB writes during normal operation, and no schema changes beyond the existing `oc_playbacksync_rooms` table.
+The sync server is a long-running PHP process launched with `occ playbacksync:ws-serve`. It accepts WebSocket connections, authenticates them with the room password, and broadcasts playback events between members of the same room. Playback state (position, play/pause) lives only in the daemon's memory and is reconstructed on reconnect; playlist and cursor mutations *are* persisted to the existing `oc_playbacksync_rooms` table (`PlaylistService` → `RoomMapper`), so the daemon keeps a live DB connection — see [Operational notes](#operational-notes) for the keepalive that protects it. No schema changes beyond that one table.
 
 Clients connect to:
 
@@ -465,8 +465,25 @@ The bundled Ratchet 0.4.4 has implicit-nullable parameter declarations that PHP 
 error_reporting = E_ALL & ~E_DEPRECATED
 ```
 
+### Playlist stays empty, or only updates after reloading the dashboard
+
+Symptom: the browser extension scrapes an episode list, but the room's playlist stays empty — entries only appear after a full dashboard page reload, and a freshly-created room won't even seed its cursor from the joining tab. The extension *is* sending the data (you can confirm a populated `catalogFragment` in the `JOIN` frame via the extension's service-worker → Network → WS → Messages), so the loss is server-side.
+
+Cause: **a stale database connection on a long-idle daemon.** The daemon holds playback state in memory and only touches the database on `JOIN` and playlist/cursor mutations (heartbeats are in-memory). Between sessions its DB connection can sit idle long enough for the database's `wait_timeout` to reap it. The next playlist merge runs inside a transaction (`PlaylistService::merge` → `BEGIN` + `SELECT … FOR UPDATE`), and a transaction **cannot** be transparently re-established on a dead socket, so it throws `SQLSTATE[HY000]: … MySQL server has gone away`. `JoinHandler` treats `catalogFragment` as best-effort (logs and continues), so the only visible symptom is the empty playlist. `ROOM_STATE` still returns normally because, for an already-cached room, it needs no database read — the merge transaction is the first thing to touch the dead connection.
+
+The daemon now pings the database every 30 s (`Tick::keepDbAlive`, the `DB_KEEPALIVE_INTERVAL_MS` ping) to keep the connection from ever idling out, which prevents this. If you still hit it:
+
+1. **Confirm the running daemon actually has the keepalive.** A code update that swaps the app files but doesn't restart the daemon leaves the *old* process running. The app version (`occ config:app:get playbacksync installed_version`) and the daemon process can drift apart — in a shared-volume Docker setup, `docker restart playbacksync-ws` after deploying. A *fresh process gets a fresh connection*, which is also why restarting "fixes" it temporarily.
+2. **Read the cause** — the swallowed failure is logged at `warning` (note: each `nextcloud.log` line is one long JSON object, so extract just the message):
+   ```bash
+   docker exec <nextcloud-container> sh -c "grep -o '\[playbacksync ws\][^\"]*' /var/www/html/data/nextcloud.log | grep -iE 'skipped' | tail"
+   ```
+   `catalogFragment merge skipped: … MySQL server has gone away` (or `empty-playlist seed skipped: …`) confirms the connection theory. Any other reason (`single_mode_locked`, a cap exception) points elsewhere.
+3. **Stopgap:** restart the daemon to force a fresh connection. The keepalive is the durable fix; restarting is only a band-aid.
+
 ## Operational notes
 
 - **Memory accumulation.** A long-running PHP process slowly grows even with no leaks (interned strings, opcache state). The systemd unit above includes `RuntimeMaxSec=7d` to force a weekly graceful restart. For Docker deployments, schedule an equivalent: a host cron entry that runs the Docker restart sequence weekly, or — if you use Docker Compose / Kubernetes — a healthcheck that fails after a memory threshold so the orchestrator restarts the container. Connected clients reconnect automatically within a second.
 - **Daemon restart wipes playback state.** This is by design — `state` is in-memory only, and reconnects re-establish it from the first client to send a heartbeat. The user-visible effect is a one- to two-second hiccup.
-- **The daemon never writes to the database.** Room identity (uuid, password, expiry) is read from `oc_playbacksync_rooms` on each `JOIN`. Room cleanup is the responsibility of the existing hourly `PruneExpiredRoomsJob`.
+- **The daemon keeps its DB connection warm.** `Tick` pings the database with a trivial `SELECT 1` every 30 s (`DB_KEEPALIVE_INTERVAL_MS`) and `close()`s the connection on failure so the next query reconnects lazily. Without this, a daemon left idle past the database's `wait_timeout` loses its connection, and the next playlist-merge transaction (a `SELECT … FOR UPDATE` inside a transaction, which can't transparently reconnect) fails with "MySQL server has gone away" — silently dropping scraped playlists. See the troubleshooting entry above.
+- **Playback state is in-memory; playlist and cursor changes are persisted.** Playback position and player state live only in the daemon's memory and are reconstructed on reconnect (above). Playlist and cursor mutations — `catalogFragment` merges on `JOIN`, `CURSOR_CHANGE_REQUEST`, and dashboard-driven edits — *are* written back to `oc_playbacksync_rooms` (`PlaylistService` → `RoomMapper`, inside a transaction). Room identity (uuid, password, expiry) is read on each `JOIN`. Room cleanup is the responsibility of the existing hourly `PruneExpiredRoomsJob`.

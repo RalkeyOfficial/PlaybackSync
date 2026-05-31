@@ -11,6 +11,8 @@ use OCA\PlaybackSync\WebSocket\RateLimiter;
 use OCA\PlaybackSync\WebSocket\RoomRegistry;
 use OCA\PlaybackSync\WebSocket\Tick;
 use OCA\PlaybackSync\WebSocket\WsConfig;
+use OCP\DB\IResult;
+use OCP\IDBConnection;
 use PHPUnit\Framework\TestCase;
 use Psr\Log\NullLogger;
 
@@ -29,7 +31,9 @@ class HealthControllerTest extends TestCase {
 			driftCooldownMs: 3_000,
 			maxClientsPerRoom: 50,
 		);
-		return new Tick($registry, new MessageEncoder(), $config, new NullLogger());
+		$db = $this->createMock(IDBConnection::class);
+		$db->method('executeQuery')->willReturn($this->createMock(IResult::class));
+		return new Tick($registry, new MessageEncoder(), $config, new NullLogger(), $db);
 	}
 
 	private function addClient(\OCA\PlaybackSync\WebSocket\RoomRuntime $runtime, string $clientId): void {
