@@ -400,6 +400,7 @@ import { useEventSource } from '../composables/useEventSource.ts'
 import { useNow } from '../composables/useNow.ts'
 import { getRoomStatus } from '../composables/useRoomStatus.ts'
 import { SKIP_CONFIRM_KICK_CLIENT, useSkipConfirm } from '../composables/useSkipConfirm.ts'
+import { getRoomPlaylist } from '../services/playlistApi.ts'
 import { buildRoomEventStreamUrl } from '../services/roomEventsApi.ts'
 import { getRoom } from '../services/roomsApi.ts'
 import { useRoomsStore } from '../stores/rooms.ts'
@@ -523,9 +524,27 @@ async function refreshLive() {
 }
 
 /**
- * SSE stream of the room's event log. Lifecycle is gated to (dialog open
- * AND event-log tab active) so the FPM proxy worker only stays pinned
- * while the user is actually watching the feed.
+ * Re-fetch the room's playlist + cursor and patch it into the store so the
+ * playlist tab and the "now watching" cursor reflect live `playlist_update`
+ * / `cursor_change` events (an extension scrape, a cursor move) without a
+ * page reload. Driven on dialog open and on each relevant SSE event below.
+ * Swallows transient errors, leaving the last-known playlist in place.
+ */
+async function refreshPlaylist() {
+	try {
+		const snap = await getRoomPlaylist(props.room.uuid)
+		roomsStore.patchRoomPlaylist(props.room.uuid, snap.entries, snap.cursorEntryId)
+	} catch (error) {
+		logger.warn('Failed to refresh playlist', { error, uuid: props.room.uuid })
+	}
+}
+
+/**
+ * SSE stream of the room's event log. Kept open the whole time the dialog
+ * is open (any tab), because it also drives the live playlist refresh: a
+ * `playlist_update` / `cursor_change` event triggers a re-fetch (see the
+ * watcher below). Cost: one FPM proxy worker stays pinned per open dialog;
+ * it's released as soon as the dialog closes.
  */
 const {
 	events: eventLogEvents,
@@ -541,23 +560,51 @@ const {
  */
 const activeTab = ref<'overview' | 'playlist' | 'eventLog'>('overview')
 
+/**
+ * High-water mark of the SSE event id we've already reacted to, so a
+ * re-render of the (capped, append-only) event buffer doesn't re-trigger a
+ * playlist refresh on events we've handled. Reset on close.
+ */
+const lastSeenEventId = ref(0)
+
 watch(() => props.open, (isOpen) => {
 	if (!isOpen) {
 		freshLive.value = undefined
 		confirmingClientId.value = null
 		dontAskAgainKick.value = false
+		lastSeenEventId.value = 0
 		stopEventLog()
 		return
 	}
 	activeTab.value = 'overview'
 	void refreshLive()
+	void refreshPlaylist()
+	// Open the stream for the whole dialog session, not just the event-log
+	// tab — it's what feeds the live playlist refresh below.
+	startEventLog()
 }, { immediate: true })
 
-watch([() => props.open, activeTab], ([isOpen, tab]) => {
-	if (isOpen && tab === 'eventLog') {
-		startEventLog()
-	} else {
-		stopEventLog()
+// Refresh the playlist whenever a `playlist_update` / `cursor_change` event
+// newer than the last one handled arrives on the SSE stream. Backfilled
+// events on connect are already covered by the open-time refresh above; the
+// high-water id keeps them (and buffer re-renders) from re-triggering.
+watch(eventLogEvents, (events) => {
+	let maxId = lastSeenEventId.value
+	let relevant = false
+	for (const ev of events) {
+		if (ev.id <= lastSeenEventId.value) {
+			continue
+		}
+		if (ev.type === 'playlist_update' || ev.type === 'cursor_change') {
+			relevant = true
+		}
+		if (ev.id > maxId) {
+			maxId = ev.id
+		}
+	}
+	lastSeenEventId.value = maxId
+	if (relevant) {
+		void refreshPlaylist()
 	}
 })
 

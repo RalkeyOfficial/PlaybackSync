@@ -1,6 +1,6 @@
 import type { AddPlaylistEntryPayload, UpdatePlaylistEntryPayload } from '../services/playlistApi.ts'
 import type { PlaybackAction } from '../services/roomsApi.ts'
-import type { CreatedRoom, CreateRoomPayload, Room, RoomLiveState } from '../types/room.ts'
+import type { CreatedRoom, CreateRoomPayload, PlaylistEntry, Room, RoomLiveState } from '../types/room.ts'
 
 import { showError } from '@nextcloud/dialogs'
 import { translate as t } from '@nextcloud/l10n'
@@ -66,6 +66,26 @@ export const useRoomsStore = defineStore('rooms', {
 			} catch (error) {
 				logger.error('Failed to refresh rooms', { error })
 			}
+		},
+
+		/**
+		 * Overlay a freshly-fetched playlist + cursor onto a room already in
+		 * the store, in place. Lets the detail dialog reflect live
+		 * `playlist_update` / `cursor_change` events (an extension scrape, a
+		 * cursor move) without re-fetching the whole rooms list. No-op when
+		 * the room isn't loaded.
+		 *
+		 * @param uuid the room's UUID
+		 * @param playlist the post-change entries
+		 * @param cursorEntryId the post-change cursor, or null for an empty playlist
+		 */
+		patchRoomPlaylist(uuid: string, playlist: PlaylistEntry[], cursorEntryId: string | null) {
+			const room = this.rooms.find((r) => r.uuid === uuid)
+			if (!room) {
+				return
+			}
+			room.playlist = playlist
+			room.cursorEntryId = cursorEntryId
 		},
 
 		async create(payload: CreateRoomPayload): Promise<boolean> {
