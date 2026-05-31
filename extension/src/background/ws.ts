@@ -64,6 +64,17 @@ const TERMINAL_ERROR_CODES = new Set([
 ])
 
 const HEARTBEAT_INTERVAL_MS = 5_000
+
+/**
+ * Upper bound on how far a `playing` heartbeat position is extrapolated
+ * forward to compensate for the age of the cached status snapshot (see
+ * {@link fireHeartbeat}). The content runtime polls every 1 s, so a healthy
+ * snapshot is ≤1 s old; this cap keeps a throttled or wedged content script
+ * (whose last sample could be many seconds stale) from over-extrapolating
+ * into a phantom *positive* drift. Past the cap we send the raw position and
+ * let the daemon's normal drift correction take over.
+ */
+const HEARTBEAT_EXTRAPOLATION_CAP_MS = 2_000
 const CLOCK_PING_BURST_COUNT = 4
 const CLOCK_PING_BURST_SPACING_MS = 250
 const CLOCK_PING_PERIODIC_MS = 30_000
@@ -604,9 +615,22 @@ function stopTimers(r: WsRuntime): void {
 
 function fireHeartbeat(r: WsRuntime): void {
 	const entry = getTab(r.tabId)
-	const state = entry?.latestState
-	if (!state) return
-	send(r, { type: 'HEARTBEAT', currentPos: state.currentPos, playerState: state.playerState })
+	if (!entry?.latestState) return
+	const state = entry.latestState
+
+	// The cached snapshot was sampled up to STATUS_POLL_MS (1 s) ago. Sending
+	// its `currentPos` verbatim makes the daemon compare a stale reading
+	// against its *real-time* extrapolation, so a playing client always looks
+	// ~0.5-1 s behind and trips the drift-seek threshold on essentially every
+	// heartbeat — a phantom "resync to where we already are". Advance a playing
+	// position by the snapshot's age so the daemon compares like with like.
+	// Paused/buffering positions don't advance, so they go out as sampled.
+	let currentPos = state.currentPos
+	if (state.playerState === 'playing') {
+		const ageMs = Math.min(Math.max(0, Date.now() - entry.lastStateAt), HEARTBEAT_EXTRAPOLATION_CAP_MS)
+		currentPos += ageMs / 1000
+	}
+	send(r, { type: 'HEARTBEAT', currentPos, playerState: state.playerState })
 }
 
 function fireClockPing(r: WsRuntime): void {
