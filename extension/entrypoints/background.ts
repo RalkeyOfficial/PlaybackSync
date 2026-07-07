@@ -750,22 +750,26 @@ function isRoomUrl(session: SessionState, url: string, adapterId: string): boole
 }
 
 /**
- * Return `pageUrl` with the share-URL credential params (`sync_url` /
- * `sync_password`) set from the stored creds, so a pull-back keeps the
- * credentials in the tab's address bar. The room cursor's `pageUrl` is the
- * canonical param-free form and miruro strips arbitrary params on
- * navigation, so the guard re-populates them on every hard-nav pull-back.
+ * Return `pageUrl` with the share-URL credentials (`sync_url` /
+ * `sync_password`) encoded into its **fragment** from the stored creds, so a
+ * pull-back reload can re-hand-off the credentials if the socket ever dropped.
+ * Uses the fragment, not the query string, for the same reason the share
+ * redirect does (`ShareController::buildRedirectUrl`): a fragment is never
+ * sent to the streaming site's server, so a server-side canonicalising
+ * redirect can't strip it and the password never reaches the site's servers.
  *
  * @param pageUrl The navigation target (the cursor's canonical page URL).
  * @param creds The tab's stored credentials.
- * @returns The target URL carrying the credential params, or `pageUrl`
- *   unchanged if it can't be parsed.
+ * @returns The target URL carrying the credentials in its fragment, or
+ *   `pageUrl` unchanged if it can't be parsed.
  */
 function withCredentialParams(pageUrl: string, creds: { syncUrl: string; syncPassword: string }): string {
 	try {
 		const u = new URL(pageUrl)
-		u.searchParams.set('sync_url', creds.syncUrl)
-		u.searchParams.set('sync_password', creds.syncPassword)
+		const frag = new URLSearchParams(u.hash.replace(/^#/, ''))
+		frag.set('sync_url', creds.syncUrl)
+		frag.set('sync_password', creds.syncPassword)
+		u.hash = frag.toString()
 		return u.toString()
 	} catch {
 		return pageUrl
@@ -776,7 +780,8 @@ function withCredentialParams(pageUrl: string, creds: { syncUrl: string; syncPas
  * Redact the `sync_password` value in a URL for logging — keeps the path and
  * every other param (`ep`, `sync_url`, …) visible while never printing the
  * plaintext password. Used by the pull-back log, whose target carries the
- * re-attached credential params.
+ * re-attached credentials in its fragment (a stray query-string copy is
+ * redacted too, harmlessly, for defence in depth).
  *
  * @param url The URL to sanitise.
  * @returns The URL with `sync_password` replaced, or the input unchanged if
@@ -786,6 +791,11 @@ function redactForLog(url: string): string {
 	try {
 		const u = new URL(url)
 		if (u.searchParams.has('sync_password')) u.searchParams.set('sync_password', '<redacted>')
+		const frag = new URLSearchParams(u.hash.replace(/^#/, ''))
+		if (frag.has('sync_password')) {
+			frag.set('sync_password', '<redacted>')
+			u.hash = frag.toString()
+		}
 		return u.toString()
 	} catch {
 		return url

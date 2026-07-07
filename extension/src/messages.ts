@@ -19,9 +19,11 @@ import type { CursorRef, VideoRefWithMeta } from './background/protocol'
  * `currentPos`/`playerState` without an extra round-trip.
  *
  * `credentials` is a one-shot bootstrap message emitted by the dedicated
- * `credentials.content.ts` entrypoint when the page URL carries
- * `?sync_url=…&sync_password=…` (the share-link redirect target produced
- * by `ShareController::buildRedirectUrl` on the PHP side). It is *not*
+ * `credentials.content.ts` entrypoint when the page URL's fragment carries
+ * `#sync_url=…&sync_password=…` (the share-link redirect target produced
+ * by `ShareController::buildRedirectUrl` on the PHP side — the fragment,
+ * not the query string, so a site's server-side redirect can't strip it).
+ * It is *not*
  * adapter-scoped — credential pickup is browser-runtime-global, fires
  * before any adapter has had a chance to match, and may arrive on a page
  * no adapter ever activates on. The background is first-write-wins:
