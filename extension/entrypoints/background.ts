@@ -619,19 +619,15 @@ async function recheckAndPullBack(tabId: number): Promise<void> {
 	// Build the pull-back target from the cursor's canonical identity, not its
 	// raw `pageUrl`: the adapter (`navigableUrlForCursor`) reconstructs the
 	// `?ep=` from the cursor's `videoId` and preserves the show slug from the
-	// cursor's path. The slug matters because miruro server-redirects a
-	// slug-less watch URL to its canonical slugged form and drops unknown query
-	// params (the `sync_url` / `sync_password` handoff) in that redirect; an
-	// already-slugged URL is served as-is, so the credential params survive.
-	// Falls back to the raw `pageUrl` for adapters with no builder registered.
-	const cursorUrl = navigableUrlForCursor(adapterId, cursor) ?? cursor.pageUrl
-	// Re-attach the share-URL credential params so they stay in the address
-	// bar across the pull-back's full page load.
-	const creds = await loadCreds(tabId)
-	const target = creds !== null ? withCredentialParams(cursorUrl, creds) : cursorUrl
+	// cursor's path (so miruro serves it directly instead of bouncing through
+	// its slug-canonicalising redirect). Falls back to the raw `pageUrl` for
+	// adapters with no builder registered. No credentials are attached — they
+	// live in the background's per-tab storage and the socket survives the
+	// reload, so the tab stays joined without carrying creds in the URL.
+	const target = navigableUrlForCursor(adapterId, cursor) ?? cursor.pageUrl
 
 	console.log('[playbacksync:bg] nav-guard pulling tab back to cursor', {
-		tabId, liveUrl, target: redactForLog(target),
+		tabId, liveUrl, target,
 	})
 	// `chrome.tabs.update` is a full page load, but the WS lives in the
 	// background and survives it — so we deliberately do NOT close the
@@ -747,59 +743,6 @@ function isRoomUrl(session: SessionState, url: string, adapterId: string): boole
 	if (videoId === null) return false
 	if (session.cursor?.videoId === videoId) return true
 	return session.playlist.some((entry) => entry.videoId === videoId)
-}
-
-/**
- * Return `pageUrl` with the share-URL credentials (`sync_url` /
- * `sync_password`) encoded into its **fragment** from the stored creds, so a
- * pull-back reload can re-hand-off the credentials if the socket ever dropped.
- * Uses the fragment, not the query string, for the same reason the share
- * redirect does (`ShareController::buildRedirectUrl`): a fragment is never
- * sent to the streaming site's server, so a server-side canonicalising
- * redirect can't strip it and the password never reaches the site's servers.
- *
- * @param pageUrl The navigation target (the cursor's canonical page URL).
- * @param creds The tab's stored credentials.
- * @returns The target URL carrying the credentials in its fragment, or
- *   `pageUrl` unchanged if it can't be parsed.
- */
-function withCredentialParams(pageUrl: string, creds: { syncUrl: string; syncPassword: string }): string {
-	try {
-		const u = new URL(pageUrl)
-		const frag = new URLSearchParams(u.hash.replace(/^#/, ''))
-		frag.set('sync_url', creds.syncUrl)
-		frag.set('sync_password', creds.syncPassword)
-		u.hash = frag.toString()
-		return u.toString()
-	} catch {
-		return pageUrl
-	}
-}
-
-/**
- * Redact the `sync_password` value in a URL for logging — keeps the path and
- * every other param (`ep`, `sync_url`, …) visible while never printing the
- * plaintext password. Used by the pull-back log, whose target carries the
- * re-attached credentials in its fragment (a stray query-string copy is
- * redacted too, harmlessly, for defence in depth).
- *
- * @param url The URL to sanitise.
- * @returns The URL with `sync_password` replaced, or the input unchanged if
- *   it can't be parsed.
- */
-function redactForLog(url: string): string {
-	try {
-		const u = new URL(url)
-		if (u.searchParams.has('sync_password')) u.searchParams.set('sync_password', '<redacted>')
-		const frag = new URLSearchParams(u.hash.replace(/^#/, ''))
-		if (frag.has('sync_password')) {
-			frag.set('sync_password', '<redacted>')
-			u.hash = frag.toString()
-		}
-		return u.toString()
-	} catch {
-		return url
-	}
 }
 
 /**
