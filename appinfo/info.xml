@@ -5,7 +5,7 @@
 	<name>PlaybackSync</name>
 	<summary>Synchronized video playback for groups</summary>
 	<description><![CDATA[Watch videos in sync with others. Create a room, share the link, and enjoy synchronized playback across all participants.]]></description>
-	<version>1.0.3</version>
+	<version>1.1.0</version>
 	<licence>agpl</licence>
 	<namespace>PlaybackSync</namespace>
 	<category>multimedia</category>
