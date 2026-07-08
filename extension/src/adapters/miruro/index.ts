@@ -114,14 +114,11 @@ class MiruroAdapter extends BaseAdapter {
 
   /**
    * Memoised wait for the episode-list container. Shared by
-   * {@link watchCursorTriggers} and {@link scrapeCatalog} so a single
+   * {@link scrapeCatalog} and {@link applyCursorChange} so a single
    * `MutationObserver` serves both — the container is the stable mount point,
    * the inner buttons churn.
    */
   private episodeListPromise: Promise<Element | null> | null = null;
-
-  /** Guards against attaching the delegated cursor-trigger listener twice. */
-  private cursorTriggerAttached = false;
 
   canHandlePage(url: URL): boolean {
     if (!HOST_RE.test(url.hostname)) return false;
@@ -242,9 +239,11 @@ class MiruroAdapter extends BaseAdapter {
    * - the episode list isn't in the DOM yet (cold page mid-hydration);
    * - no button matches the target ep (paginated lists, season filters).
    *
-   * The synthetic `.click()` is filtered out of the cursor-trigger listener
-   * via `Event.isTrusted` (see {@link watchCursorTriggers}) so we don't loop
-   * the broadcast back to the server as a fresh `CURSOR_CHANGE_REQUEST`.
+   * The synthetic `.click()` changes `?ep=`, which the background navigation
+   * guard sees — but it doesn't loop back to the server as a fresh
+   * `CURSOR_CHANGE_REQUEST` because the frame fold sets the session cursor to
+   * this videoId before the click, so the guard's identity loop-stop treats
+   * the landing as "already on cursor" and does nothing.
    *
    * @param pageUrl The target page URL from the broadcast.
    */
@@ -290,24 +289,13 @@ class MiruroAdapter extends BaseAdapter {
     location.href = pageUrl;
   }
 
-  /**
-   * Attach a single delegated `click` listener to the episode-list container
-   * so any episode button click — current or future — emits a cursor trigger.
-   * Fire-and-forget: it waits for the container off the critical path so it
-   * never delays activation. The listener is passive (no `preventDefault`), so
-   * miruro's own SPA routing handles the local nav; the background decides per
-   * room mode whether to forward the trigger or pull the tab back.
-   */
-  protected watchCursorTriggers(): void {
-    const match = PATH_RE.exec(location.pathname);
-    const showId = match?.[1];
-    if (!showId) return;
-    const slug = match?.[2] ?? null;
-    void this.episodeList().then((container) => {
-      if (!container || this.signal.aborted) return;
-      this.attachEpisodeListClickHandler(container, showId, slug);
-    });
-  }
+  // Note: miruro does NOT override `watchCursorTriggers`. Every episode change
+  // here also changes the URL's `?ep=`, so the background navigation guard
+  // (`guardNavigation = true` + `videoIdForUrl` in ./url.ts) is the single
+  // detector for cursor moves — it catches the episode list, the player's
+  // "Next episode" button, keyboard shortcuts, and autoplay-advance alike. A
+  // DOM click listener would only see the episode-list case and would
+  // double-fire with the guard. The base's default no-op stays in force.
 
   async scrapeCatalog(): Promise<VideoRefWithMeta[] | null> {
     if (this.signal.aborted) return null;
@@ -328,9 +316,9 @@ class MiruroAdapter extends BaseAdapter {
   }
 
   /**
-   * Memoised wait for `#episodes-list-container`. Both {@link scrapeCatalog}
-   * and {@link watchCursorTriggers} need it; sharing one promise means one
-   * observer/timer pair, torn down on destroy via {@link BaseAdapter.signal}.
+   * Memoised wait for `#episodes-list-container`. {@link scrapeCatalog} needs
+   * it; sharing one promise means one observer/timer pair, torn down on destroy
+   * via {@link BaseAdapter.signal}.
    */
   private episodeList(): Promise<Element | null> {
     if (!this.episodeListPromise) {
@@ -361,35 +349,6 @@ class MiruroAdapter extends BaseAdapter {
       timeoutMs: LOAD_BUTTON_WAIT_TIMEOUT_MS,
       signal: AbortSignal.any([this.signal, loadStarted.signal]),
     });
-  }
-
-  private attachEpisodeListClickHandler(container: Element, showId: string, slug: string | null): void {
-    if (this.cursorTriggerAttached) return;
-    this.cursorTriggerAttached = true;
-    container.addEventListener(
-      'click',
-      (ev: Event) => {
-        // Skip the synthetic clicks {@link applyCursorChange} dispatches to
-        // replay an authoritative cursor change in this tab — otherwise the
-        // broadcast would loop back to the server as a fresh
-        // `CURSOR_CHANGE_REQUEST`.
-        if (!ev.isTrusted) return;
-        const target = ev.target;
-        if (!(target instanceof Element)) return;
-        const button = target.closest<HTMLButtonElement>(EPISODE_LIST_ENTRY_SELECTOR);
-        if (!button || !container.contains(button)) return;
-        const ep = this.extractEpisodeNumber(button);
-        if (ep === null) return;
-        this.emitCursorTrigger({
-          providerId: 'miruro',
-          videoId: makeVideoId(showId, ep),
-          pageUrl: makeWatchUrl(location.origin, showId, ep, slug),
-          episodeNumber: ep,
-          label: button.title.trim() || null,
-        });
-      },
-      { signal: this.signal }
-    );
   }
 
   /**

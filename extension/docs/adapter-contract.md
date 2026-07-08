@@ -41,7 +41,7 @@ There is also one **separate, DOM-free module** an adapter that opts into the na
 | `canPlay()` | optional override, default `!!this.video?.currentSrc` | once, in `init` | Report whether playback can begin. When false the base calls `ensurePlayable()`. | Block. |
 | `ensurePlayable()` | optional override, default no-op | once, in `init`, only when `canPlay()` is false | Drive whatever the site needs so `canPlay()` becomes true (e.g. a cold-start load). Guard your own post-`await` steps with `this.signal.aborted`. | Assume it always runs — a warm page skips it. |
 | `applyCursorChange(pageUrl)` | optional override, default `location.href = pageUrl` | on each `cursor_change` command | Drive the page to `pageUrl`, ideally via the site's own in-page routing with a `location.href` fallback. | `preventDefault` the user's own clicks. |
-| `watchCursorTriggers()` | optional override, default no-op | once, in `init` (fire-and-forget) | Wire detection of in-page nav clicks → `this.emitCursorTrigger(...)`. Return synchronously; do any DOM wait off the critical path. | Block `init` awaiting a control to hydrate. Forget the `Event.isTrusted` filter. |
+| `watchCursorTriggers()` | optional override, default no-op | once, in `init` (fire-and-forget) | Wire detection of in-page nav clicks → `this.emitCursorTrigger(...)`. **Only for static-URL sites** (URL doesn't change / encode identity between videos); URL-identity adapters use the navigation-guard instead and leave this a no-op. Return synchronously; do any DOM wait off the critical path. | Block `init` awaiting a control to hydrate. Forget the `Event.isTrusted` filter. Override it *and* opt into `guardNavigation` (they'd double-fire). |
 | `scrapeCatalog()` | optional method (no base default) | once per lifetime, after `init` resolves | Return the visible episode list as `VideoRefWithMeta[]`, with full origin-qualified `pageUrl`. Return `null` when none. | Bound your own latency — the runtime times it out. Use `normalizedUrl` form for `pageUrl`. Add an empty stub — omit the method entirely instead (the runtime fast-paths absence). |
 
 ## Talking to the runtime
@@ -128,7 +128,7 @@ The three `playerState` values map directly to the wire field:
 5. **Implement `resolveIdentity()`.** Parse `location.pathname` (and maybe query params) into `{ providerId, videoId, normalizedUrl }`. Be strict — return `null` if you can't. By the time this runs the video has resolved, so query params the player adds on init are present.
 6. **That's the minimum.** Intent listeners, the `play`/`pause`/`seek` command arms, `getState`, `setPlaybackRate`, and teardown are all inherited. The steps below are opt-in.
 7. **(Cold-start players) override `canPlay()` + `ensurePlayable()`.** `canPlay()` reports readiness (default: `!!this.video?.currentSrc`); when it's false the base awaits `ensurePlayable()`, where you drive the site's load control. Re-check `this.signal.aborted` after each `await`.
-8. **(In-page episode nav) override `applyCursorChange(pageUrl)` and `watchCursorTriggers()`.** `applyCursorChange` drives the page to a room cursor target — replay the site's own click routing with a `location.href` fallback (see miruro), or leave the default full-navigation. `watchCursorTriggers` wires clicks on in-page controls to `this.emitCursorTrigger(...)`; keep it non-blocking and filter on `Event.isTrusted`.
+8. **(In-page episode nav) override `applyCursorChange(pageUrl)`.** It drives the page to a room cursor target — replay the site's own click routing with a `location.href` fallback (see miruro), or leave the default full-navigation. **Also override `watchCursorTriggers()` only on static-URL sites** (URL unchanged/identity-free between videos): wire clicks on in-page controls to `this.emitCursorTrigger(...)`, keep it non-blocking, and filter on `Event.isTrusted`. URL-identity adapters skip it and rely on the navigation-guard (step 11).
 9. **(Episode lists) add `scrapeCatalog()`.** See [Catalog reporting](#catalog-reporting-scrapecatalog). Omit the method entirely if there's no catalog.
 10. **Add the factory to the registry** in `src/adapters/runtime.ts` — append it to `ADAPTERS`. Order matters; first match wins. Real-site adapters before `_template` (which only activates on the dev query param anyway).
 11. **(Optional) Opt into the navigation-guard.** If your site's `pageUrl`s are canonical and identity-bearing, ship a pure `videoIdForUrl` matcher, register it in `url-matchers.ts`, and set `readonly guardNavigation = true`. See [Navigation-guard & the URL matcher](#navigation-guard--the-url-matcher).
@@ -137,9 +137,11 @@ The three `playerState` values map directly to the wire field:
 
 ## Navigation-guard & the URL matcher
 
-The `emitCursorTrigger` path only fires on the in-page controls your DOM listener watches (episode buttons). Every *other* way a tab can leave the room's content — the site's home link, a related-video thumbnail, the address bar, browser back/forward, a JS redirect, a full cross-site navigation — bypasses it. The **navigation-guard** is an opt-in background feature that covers those: a `chrome.tabs.onUpdated` listener that pulls an anchored-room tab (default/single mode) back to the cursor when it lands on a URL outside the room.
+The `emitCursorTrigger` path (DOM click listener) only fires on the in-page controls it watches (episode buttons). Every *other* way a tab can move between videos or leave the room's content — the player's "Next episode" button, prev/keyboard shortcuts, end-of-video autoplay-advance, the site's home link, a related-video thumbnail, the address bar, browser back/forward, a JS redirect, a full cross-site navigation — bypasses it. The **navigation-guard** is an opt-in background feature that covers *all* of those: a `chrome.tabs.onUpdated` listener (browser-level, so it sees main-world SPA URL changes the content script's isolated world can't) that resolves the tab's new URL to a `videoId` and routes it per room mode — **forwarding** a `CURSOR_CHANGE_REQUEST` for an in-playlist / freeform move, or **pulling the tab back** to the cursor for an off-playlist / cross-site departure. It mirrors the `handleCursorTrigger` matrix.
 
-The guard is **purely additive** — it never replaces your DOM click listener. On sites where the URL doesn't change between videos (or doesn't encode the video identity), the DOM listener is the *only* signal that the user switched off-playlist, so it stays the primary, all-sites-safe mechanism. Opt into the guard only when your URLs can carry the weight.
+**On a site whose URLs encode video identity (opted into the guard), the guard is the single detector for cursor moves — you do NOT need `watchCursorTriggers`.** Every episode change also changes the URL, so a DOM click listener would only cover the episode-list case *and* would double-fire a second `CURSOR_CHANGE_REQUEST` alongside the guard. Miruro therefore ships no `watchCursorTriggers` override.
+
+The DOM click listener remains essential for the opposite case: **sites where the URL doesn't change between videos (or doesn't encode identity)**. There the guard can't help, so `watchCursorTriggers` → `emitCursorTrigger` is the *only* signal that the user switched, and it stays the primary mechanism. Such sites must **omit** `guardNavigation`. The base adapter must never require URL-encoded identity.
 
 ### Opting in
 
@@ -168,11 +170,21 @@ const URL_MATCHERS = { miruro, mysite }
 
 ### Why identity, not string equality
 
-The background's `isRoomUrl` check resolves the live tab URL through *your* matcher and compares the resulting `videoId` against the cursor's and the playlist's `videoId`s — it never string-compares URLs. That's deliberate: every site has different URL→identity rules (optional human-readable slugs, query-based ids, hash routing), and a generic background guard must not hardcode any of them. Putting the rule in the adapter's `url` module is what absorbs those cases cleanly.
+The guard resolves the live tab URL through *your* matcher and compares the resulting `videoId` against the cursor's and the playlist's `videoId`s — it never string-compares URLs. That's deliberate: every site has different URL→identity rules (optional human-readable slugs, query-based ids, hash routing), and a generic background guard must not hardcode any of them. Putting the rule in the adapter's `url` module is what absorbs those cases cleanly. The resolved `videoId` matching the cursor's is also the guard's **loop-stop**: a room-driven cursor change updates the session cursor to the new `videoId` before the driven nav lands, so when the tab arrives the guard sees "already on cursor" and does nothing — the move never bounces back as a fresh request.
 
-### What the guard does on a pull-back (no socket close)
+### What the guard does per mode
 
-When the guard decides a tab has wandered off, it `chrome.tabs.update`s the tab back to the cursor's `pageUrl` — a full page reload. It deliberately does **not** close the WebSocket: the socket lives in the background and survives the reload, and closing it would announce a spurious `client_left` / `client_joined` flap to the room. Instead the background re-runs the join grace period *in place* so the reloaded player's autoplay + resume-position seek don't leak to the room as wire events. Adapter authors don't need to do anything for this — but it's why holding autoplay (below) matters, and why the guard only acts after the join has converged and its settle window elapsed (it stays out of join-time steering, which is the server's job).
+After a short debounce (so transient intermediate URLs — a slug-canonicalising redirect, a synth-click landing — collapse into the settled destination), the guard resolves the live URL to a `videoId` and, per room mode:
+
+- **resolves to the cursor** → no-op (loop-stop / already on cursor).
+- **freeform + resolvable** → forward a `CURSOR_CHANGE_REQUEST` (the server auto-appends off-playlist targets); **freeform + cross-site** → no-op (freeform never coerces a tab back).
+- **default + in-playlist** → forward a `CURSOR_CHANGE_REQUEST`.
+- **single + in-playlist** → lightweight synth-click pull-back (the playlist is locked).
+- **off-playlist (default/single) or cross-site** → hard-reload pull-back.
+
+A **forward** un-converges the tab (`resetConvergence`) so the new episode player's autoplay / resume-seek is dropped, not shipped as a wire event, during the request→broadcast round trip; the server's `CURSOR_CHANGE` broadcast re-converges it, and a fallback timer re-converges if the request is lost so the tab can't get stuck.
+
+A **hard-reload pull-back** `chrome.tabs.update`s the tab back to the cursor's `pageUrl` — a full page reload. It deliberately does **not** close the WebSocket: the socket lives in the background and survives the reload, and closing it would announce a spurious `client_left` / `client_joined` flap to the room. Instead the background re-runs the join grace period *in place* so the reloaded player's autoplay + resume-position seek don't leak to the room as wire events. Adapter authors don't need to do anything for this — but it's why holding autoplay (below) matters, and why the guard only acts after the join has converged and its settle window elapsed (it stays out of join-time steering, which is the server's job).
 
 ## Holding autoplay until the room's first command
 
@@ -203,7 +215,7 @@ Rules:
 - **`pageUrl` is the full URL.** Origin included. `ContentIdentity.normalizedUrl` is hostname-stripped for identity comparison and is **not** interchangeable here — the server stores `pageUrl` so a later cursor change can navigate clients back to it.
 - **Reconnects skip it.** The runtime calls `scrapeCatalog` exactly once per adapter activation. The first JOIN carries the result; reconnect JOINs go out bare. Tying scrape behavior to "always on JOIN" would scrape repeatedly on flaky networks for no extra benefit (`PlaylistService::merge` is idempotent).
 
-See [`miruro/index.ts`](../src/adapters/miruro/index.ts) `scrapeCatalog` for a working implementation against a live site — it waits for the episode-list container with `waitForElement` (a single memoised wait it shares with `watchCursorTriggers`) and drops entries whose title doesn't parse.
+See [`miruro/index.ts`](../src/adapters/miruro/index.ts) `scrapeCatalog` for a working implementation against a live site — it waits for the episode-list container with `waitForElement` (a single memoised wait) and drops entries whose title doesn't parse.
 
 ## Things that look like they should be in the contract but aren't
 

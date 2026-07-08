@@ -118,6 +118,19 @@ const GUARD_RELOAD_CONVERGE_FALLBACK_MS = 4_000
 const GUARD_RESYNC_SETTLE_MS = 300
 
 /**
+ * Safety net for a nav-guard-forwarded cursor change. Forwarding a
+ * `CURSOR_CHANGE_REQUEST` un-converges the tab (so the new episode player's
+ * autoplay / resume-seek is dropped mid-round-trip); normally the server's
+ * `CURSOR_CHANGE` broadcast re-converges it. If the request is rejected or
+ * lost, this timeout re-converges anyway so the tab can't get stuck dropping
+ * every intent. See {@link forwardCursorChangeFromNav}.
+ */
+const CURSOR_REQUEST_CONVERGE_FALLBACK_MS = 3_000
+
+/** Pending cursor-change re-convergence fallback timers, keyed by tab. */
+const cursorRequestTimers = new Map<number, ReturnType<typeof setTimeout>>()
+
+/**
  * Build the WS callback set for a given tab. The runtime closes over
  * `tabId` so `dispatchCommand` and `onLifecycleChange` don't need to
  * carry it.
@@ -173,6 +186,22 @@ function clearNavGuard(tabId: number): void {
 		navGuardTimers.delete(tabId)
 	}
 	clearNavReloadTimer(tabId)
+	clearCursorRequestTimer(tabId)
+}
+
+/**
+ * Cancel a tab's pending cursor-change re-convergence fallback timer, if any.
+ * Called when a fresh forward supersedes it and from {@link clearNavGuard} on
+ * every session-teardown path.
+ *
+ * @param tabId The tab whose fallback timer to cancel.
+ */
+function clearCursorRequestTimer(tabId: number): void {
+	const timer = cursorRequestTimers.get(tabId)
+	if (timer !== undefined) {
+		clearTimeout(timer)
+		cursorRequestTimers.delete(tabId)
+	}
 }
 
 /**
@@ -526,52 +555,56 @@ function pullTabBackToCursor(tabId: number, session: SessionState): void {
 
 /**
  * Resolve the navigation-guard context for a tab, or `null` when the guard
- * must not act: the tab isn't armed, has no session, is in freeform mode
- * (which never pulls back), or has no cursor to pull back to. Shared by
- * {@link handleTabNavigation} and {@link recheckAndPullBack} so the two
- * can't drift on which tabs the guard may act on; each keeps the extra
- * checks that are uniquely its own (arm-side convergence gating vs.
- * post-debounce live URL re-read).
+ * must not act: the tab isn't armed, has no session, or has no cursor to act
+ * against. Freeform is excluded by default (the pull-back path never coerces a
+ * freeform tab); callers on the forward path pass `includeFreeform` because a
+ * freeform move *is* a cursor change. Shared by {@link handleTabNavigation},
+ * {@link routeGuardedNav}, and {@link recheckAndPullBack} so they can't drift
+ * on which tabs the guard may act on; each keeps the extra checks that are
+ * uniquely its own (arm-side convergence gating vs. post-debounce live URL
+ * re-read).
  *
  * @param tabId The tab to resolve.
+ * @param opts.includeFreeform Resolve context for freeform tabs too (forward
+ *   path); omit/false to exclude them (pull-back path).
  * @returns The armed adapter id, its session, and the non-null cursor, or
  *   `null` when the guard must not act.
  */
 function guardContext(
 	tabId: number,
+	opts?: { includeFreeform?: boolean },
 ): { adapterId: string; session: SessionState; cursor: CursorRef } | null {
 	const adapterId = navGuardedTabs.get(tabId)
 	if (adapterId === undefined) return null
 	const session = sessions.get(tabId)
-	if (!session || session.mode === 'freeform' || !session.cursor) return null
+	if (!session || !session.cursor) return null
+	if (session.mode === 'freeform' && !opts?.includeFreeform) return null
 	return { adapterId, session, cursor: session.cursor }
 }
 
 /**
- * Navigation-guard entry point: a guarded tab's URL changed. Decides
- * whether the tab wandered off the room's content and, if so, pulls it
- * back to the cursor. This complements the in-page DOM click listener —
- * it catches departures the adapter can't observe (home link, address
- * bar, back/forward, cross-site) — and is the only pull-back path that
- * works once the tab has left the adapter's host entirely.
+ * Navigation-guard entry point: a guarded tab's URL changed. This is the
+ * browser-level detector for *every* way a viewer can move between videos —
+ * the player's "Next episode" button, prev/keyboard shortcuts, end-of-video
+ * autoplay-advance, back/forward, the address bar, cross-site links — because
+ * `chrome.tabs.onUpdated` sees the URL change even when it originates in the
+ * page's main world (which the content script's isolated-world history patch
+ * cannot). It arms a debounced re-check; {@link routeGuardedNav} then decides
+ * per room mode whether the move is a cursor change to *forward*, a departure
+ * to *pull back*, or a no-op.
  *
  * The decision is deferred by {@link NAV_GUARD_DEBOUNCE_MS} and then made
- * against the tab's *live* URL, not the URL that triggered this call. That
- * re-check is what coordinates the guard with the DOM pull-back: when an
- * off-list episode click fires both paths, the DOM synth-click lands
- * inside the debounce window and the live URL is already back on the
- * cursor, so the guard does nothing. Non-click departures have no
- * synth-click, so the live URL is still off-playlist and the guard
- * hard-navigates. The re-check also makes the guard self-cancelling
- * against its own correction (the cursor URL is in the playlist).
+ * against the tab's *live* URL, not the URL that triggered this call, so
+ * transient intermediate URLs (miruro's slug-canonicalising redirect, a
+ * synth-click pull-back landing) collapse into the settled destination.
  *
  * @param tabId The tab whose URL changed.
  * @param url The new URL reported by `chrome.tabs.onUpdated`.
  */
 function handleTabNavigation(tabId: number, url: string): void {
-	const ctx = guardContext(tabId)
+	const ctx = guardContext(tabId, { includeFreeform: true })
 	if (!ctx) return
-	const { adapterId, session } = ctx
+	const { adapterId, session, cursor } = ctx
 	// A pull-back is already in flight for this tab (reload under way);
 	// don't stack another on the intermediate URL changes.
 	if (session.awaitingReload) return
@@ -579,18 +612,152 @@ function handleTabNavigation(tabId: number, url: string): void {
 	// cursor via a unicast CURSOR_CHANGE → in-page synth-click. The guard
 	// must stay out of that window or it races the steering with a
 	// redundant hard navigation (two refreshes on join) and trips the
-	// join-settle seek suppression. Only guard once the tab has converged
+	// join-settle seek suppression. Only act once the tab has converged
 	// on the room and the settle window has elapsed — i.e. genuine
-	// mid-session departures.
+	// mid-session moves.
 	if (!hasConverged(session) || inSettleWindow(session)) return
-	if (isRoomUrl(session, url, adapterId)) return
+
+	let incomingVideoId: string | null
+	try {
+		incomingVideoId = videoIdForUrl(adapterId, new URL(url))
+	} catch {
+		incomingVideoId = null
+	}
+	// Loop-stop / manual return: the URL already resolves to the cursor (a
+	// room-driven nav lands here because the frame fold set `session.cursor`
+	// to the new videoId before the driven nav completed; a manual return
+	// needs no action either). Skip arming.
+	if (incomingVideoId !== null && incomingVideoId === cursor.videoId) return
 
 	const existing = navGuardTimers.get(tabId)
 	if (existing !== undefined) clearTimeout(existing)
 	navGuardTimers.set(tabId, setTimeout(() => {
 		navGuardTimers.delete(tabId)
-		void recheckAndPullBack(tabId)
+		void routeGuardedNav(tabId)
 	}, NAV_GUARD_DEBOUNCE_MS))
+}
+
+/**
+ * After the debounce, resolve the tab's *live* URL to a room video id and
+ * route the move per room mode (partitioned so exactly one branch acts):
+ *
+ * - resolves to the cursor → no-op (loop-stop / already on cursor).
+ * - freeform + resolvable → forward as a cursor change (the server
+ *   auto-appends off-playlist targets); freeform + unresolvable (cross-site)
+ *   → no-op (freeform never coerces).
+ * - default + in-playlist → forward as a cursor change.
+ * - single + in-playlist → lightweight synth-click pull-back (playlist locked).
+ * - otherwise (default/single off-playlist, any cross-site) → hard-reload
+ *   pull-back ({@link recheckAndPullBack}), whose convergence gating is
+ *   required to suppress the reloaded player's auto-resume seek.
+ *
+ * @param tabId The tab to route.
+ */
+async function routeGuardedNav(tabId: number): Promise<void> {
+	const ctx = guardContext(tabId, { includeFreeform: true })
+	if (!ctx) return
+	const { adapterId, session, cursor } = ctx
+	// State can change during the debounce; re-check the arm-side gates.
+	if (session.awaitingReload) return
+	if (!hasConverged(session) || inSettleWindow(session)) return
+
+	let tab: chrome.tabs.Tab
+	try {
+		tab = await chrome.tabs.get(tabId)
+	} catch {
+		// Tab closed between arming and firing; nothing to do.
+		return
+	}
+	const liveUrl = tab.url
+	if (!liveUrl) return
+
+	let videoId: string | null
+	try {
+		videoId = videoIdForUrl(adapterId, new URL(liveUrl))
+	} catch {
+		videoId = null
+	}
+
+	// Loop-stop / already on cursor.
+	if (videoId !== null && videoId === cursor.videoId) return
+
+	const entry =
+		videoId === null
+			? undefined
+			: session.playlist.find(
+					(e) => e.providerId === cursor.providerId && e.videoId === videoId,
+			  )
+
+	if (session.mode === 'freeform') {
+		// Cross-site / unresolvable: nothing to forward, and freeform never
+		// pulls a tab back — leave it be.
+		if (videoId === null) return
+		forwardCursorChangeFromNav(tabId, session, {
+			providerId: cursor.providerId,
+			videoId,
+			// Never the raw tab URL — it can carry the `#sync_url…` credential
+			// fragment. `navigableUrlForCursor` rebuilds a clean canonical URL.
+			pageUrl: navigableUrlForCursor(adapterId, { videoId, pageUrl: liveUrl }) ?? liveUrl,
+		})
+		return
+	}
+
+	if (entry !== undefined) {
+		if (session.mode === 'single') {
+			// Playlist is locked; yank the tab straight back to the cursor.
+			pullTabBackToCursor(tabId, session)
+			return
+		}
+		// default + in-playlist: a legitimate cursor change. Build the target
+		// from the playlist entry (already carries clean pageUrl + metadata).
+		forwardCursorChangeFromNav(tabId, session, {
+			providerId: entry.providerId,
+			videoId: entry.videoId,
+			pageUrl: entry.pageUrl,
+			label: entry.label,
+			episodeNumber: entry.episodeNumber,
+			seasonNumber: entry.seasonNumber,
+		})
+		return
+	}
+
+	// Off-playlist (default/single) or cross-site (null videoId): hard-reload
+	// back to the cursor.
+	void recheckAndPullBack(tabId)
+}
+
+/**
+ * Forward a nav-detected cursor move to the room as a `CURSOR_CHANGE_REQUEST`.
+ * Un-converges the tab first so the new episode player's autoplay /
+ * auto-resume-seek is dropped (not shipped as a wire `EVENT`) during the
+ * request→broadcast round trip — the same gate the `intent` route enforces.
+ * The server's `CURSOR_CHANGE` broadcast re-converges the tab; the fallback
+ * timer re-converges if that never arrives so a rejected/lost request can't
+ * strand the tab dropping every intent.
+ *
+ * @param tabId The tab the move came from.
+ * @param session The tab's session, un-converged here.
+ * @param target The video the viewer moved to.
+ */
+function forwardCursorChangeFromNav(
+	tabId: number,
+	session: SessionState,
+	target: VideoRefWithMeta,
+): void {
+	console.log('[playbacksync:bg] nav-guard forwarding CURSOR_CHANGE_REQUEST', {
+		tabId, mode: session.mode, videoId: target.videoId,
+	})
+	resetConvergence(session)
+	clearCursorRequestTimer(tabId)
+	cursorRequestTimers.set(tabId, setTimeout(() => {
+		cursorRequestTimers.delete(tabId)
+		const s = sessions.get(tabId)
+		if (s && !hasConverged(s)) {
+			console.warn('[playbacksync:bg] nav-guard cursor-change converge fallback', { tabId })
+			markConverged(s)
+		}
+	}, CURSOR_REQUEST_CONVERGE_FALLBACK_MS))
+	sendCursorChangeRequest(tabId, target)
 }
 
 /**
