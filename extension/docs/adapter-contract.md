@@ -186,6 +186,10 @@ A **forward** un-converges the tab (`resetConvergence`) so the new episode playe
 
 A **hard-reload pull-back** `chrome.tabs.update`s the tab back to the cursor's `pageUrl` — a full page reload. It deliberately does **not** close the WebSocket: the socket lives in the background and survives the reload, and closing it would announce a spurious `client_left` / `client_joined` flap to the room. Instead the background re-runs the join grace period *in place* so the reloaded player's autoplay + resume-position seek don't leak to the room as wire events. Adapter authors don't need to do anything for this — but it's why holding autoplay (below) matters, and why the guard only acts after the join has converged and its settle window elapsed (it stays out of join-time steering, which is the server's job).
 
+### Periodic reconciliation (drift backstop)
+
+The `onUpdated` guard only fires on a URL *change*. A tab that drifts onto the wrong episode and then sits still — a lost/rejected `CURSOR_CHANGE_REQUEST`, a missed `CURSOR_CHANGE` broadcast, a failed synth-click — has a stable URL the guard never re-sees, and the ~5s heartbeat carries only playback position (never the cursor), so nothing else corrects it. A per-guarded-tab ~5s timer (`reconcileCursorToRoom`) is the generic backstop: it re-resolves the live URL and, on drift, pulls the tab back to the cursor (the same lightweight/hard-reload pull-backs above). It is cause-agnostic and only ever **converges toward the cursor** — it never forwards a new cursor (that stays tied to real user navigation). It shares the guard's convergence/settle gate, so it no-ops on a healthy tab and lets a legitimate in-flight episode change land first. Automatic for any adapter that opts into the guard; nothing for adapter authors to implement.
+
 ## Holding autoplay until the room's first command
 
 If your player **autoplays** when the source loads, the auto-play (and any resume-position seek that rides with it) would fire as a local intent and race the room's state — both at first join and after a guard reload.

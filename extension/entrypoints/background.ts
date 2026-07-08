@@ -131,6 +131,20 @@ const CURSOR_REQUEST_CONVERGE_FALLBACK_MS = 3_000
 const cursorRequestTimers = new Map<number, ReturnType<typeof setTimeout>>()
 
 /**
+ * How often a guarded tab is reconciled against the room cursor. The
+ * navigation-guard only fires on a URL *change*; a tab that drifted onto the
+ * wrong episode and then sits still (a lost/rejected cursor request, a missed
+ * `CURSOR_CHANGE` broadcast, a failed synth-click) has a stable URL the guard
+ * never re-sees. This timer is the generic backstop — it re-checks the live
+ * URL on a cadence matching the WS heartbeat and pulls the tab back to the
+ * cursor. See {@link reconcileCursorToRoom}.
+ */
+const RECONCILE_INTERVAL_MS = 5_000
+
+/** Per-guarded-tab periodic cursor-reconciliation timers, keyed by tab. */
+const reconcileTimers = new Map<number, ReturnType<typeof setInterval>>()
+
+/**
  * Build the WS callback set for a given tab. The runtime closes over
  * `tabId` so `dispatchCommand` and `onLifecycleChange` don't need to
  * carry it.
@@ -187,6 +201,11 @@ function clearNavGuard(tabId: number): void {
 	}
 	clearNavReloadTimer(tabId)
 	clearCursorRequestTimer(tabId)
+	const reconcile = reconcileTimers.get(tabId)
+	if (reconcile !== undefined) {
+		clearInterval(reconcile)
+		reconcileTimers.delete(tabId)
+	}
 }
 
 /**
@@ -412,8 +431,17 @@ async function routeMessage(tabId: number | undefined, msg: ContentToBackground)
 			recordIdentity(tabId, msg.adapterId, msg.identity)
 			// Arm/disarm the navigation-guard per the active adapter's opt-in,
 			// recording the adapter id so the guard can resolve URLs through it.
-			if (msg.guardNavigation) navGuardedTabs.set(tabId, msg.adapterId)
-			else clearNavGuard(tabId)
+			// The identity message repeats (re-init on SPA nav), so arm the
+			// periodic reconciler only once; `clearNavGuard` tears both down.
+			if (msg.guardNavigation) {
+				navGuardedTabs.set(tabId, msg.adapterId)
+				if (!reconcileTimers.has(tabId)) {
+					reconcileTimers.set(
+						tabId,
+						setInterval(() => void reconcileCursorToRoom(tabId), RECONCILE_INTERVAL_MS),
+					)
+				}
+			} else clearNavGuard(tabId)
 			maybeEndGuardReload(tabId, msg.identity)
 			// The WS runtime's first-JOIN deferral is gated on identity +
 			// catalog; feed it the wire-shape `VideoRef` built from the
@@ -758,6 +786,75 @@ function forwardCursorChangeFromNav(
 		}
 	}, CURSOR_REQUEST_CONVERGE_FALLBACK_MS))
 	sendCursorChangeRequest(tabId, target)
+}
+
+/**
+ * Periodic drift backstop for a guarded tab: if the tab has ended up on a
+ * different episode than the room cursor and then sits still, return it to
+ * the cursor. Unlike {@link routeGuardedNav} (armed by a URL *change*), this
+ * fires on a timer, so it catches drift the guard never sees — a lost/rejected
+ * `CURSOR_CHANGE_REQUEST`, a missed `CURSOR_CHANGE` broadcast, a failed
+ * synth-click — regardless of cause. It only ever **converges the tab toward
+ * the room cursor**; it never forwards a new cursor (that stays tied to real
+ * user navigation, where intent is unambiguous), so a timer can't drag the
+ * room to wherever a tab happens to sit.
+ *
+ * Freeform is excluded (via {@link guardContext}'s default): freeform is
+ * non-coercive, and there's no single episode to converge a freeform tab to.
+ *
+ * The convergence/settle gate is what lets this coexist with a legitimate
+ * episode change: {@link forwardCursorChangeFromNav} un-converges the tab and
+ * arms a ~3 s fallback, and this no-ops until it re-converges — so a real
+ * forward gets its round-trip to land before the reconciler would undo it. If
+ * the forward lands, the tab is already on the new cursor (no-op); if it never
+ * lands, the next tick pulls the tab back.
+ *
+ * Only URL-identity adapters (a registered `videoIdForUrl`) can be reconciled
+ * from the background. Static-URL sites — where the episode changes with no URL
+ * change — have no background-resolvable identity; reconciling them would need
+ * periodic content-script identity reporting. Out of scope for now.
+ *
+ * @param tabId The guarded tab to reconcile.
+ */
+async function reconcileCursorToRoom(tabId: number): Promise<void> {
+	const ctx = guardContext(tabId)
+	if (!ctx) return
+	const { adapterId, session, cursor } = ctx
+	if (session.awaitingReload) return
+	if (!hasConverged(session) || inSettleWindow(session)) return
+
+	let tab: chrome.tabs.Tab
+	try {
+		tab = await chrome.tabs.get(tabId)
+	} catch {
+		// Tab closed between ticks; the `onRemoved` teardown clears the timer.
+		return
+	}
+	const liveUrl = tab.url
+	if (!liveUrl) return
+
+	let videoId: string | null
+	try {
+		videoId = videoIdForUrl(adapterId, new URL(liveUrl))
+	} catch {
+		videoId = null
+	}
+
+	// Healthy: the tab is already on the room cursor.
+	if (videoId !== null && videoId === cursor.videoId) return
+
+	const inPlaylist =
+		videoId !== null &&
+		session.playlist.some((e) => e.providerId === cursor.providerId && e.videoId === videoId)
+
+	if (inPlaylist) {
+		// Drifted to another in-playlist episode: lightweight synth-click back.
+		pullTabBackToCursor(tabId, session)
+		return
+	}
+
+	// Off-playlist / cross-site: hard-reload back to the cursor.
+	void recheckAndPullBack(tabId)
 }
 
 /**
