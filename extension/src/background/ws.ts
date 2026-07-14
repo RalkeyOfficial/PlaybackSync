@@ -39,6 +39,7 @@ import {
 	applyState,
 	applySyncAdjust,
 	markConverged,
+	resetConnectionState,
 	resetConvergence,
 	startClockPing,
 } from './session'
@@ -340,9 +341,10 @@ export function sendBuffer(tabId: number, kind: 'BUFFER_START' | 'BUFFER_END', v
 
 function openSocket(r: WsRuntime): void {
 	log('info', 'connecting', { tabId: r.tabId, url: redactUrl(r.creds.syncUrl) })
-	// Each connection re-gates: the tab has to be re-converged by the
-	// fresh ROOM_STATE before its intents flow again.
-	resetConvergence(r.session)
+	// Each connection re-gates from scratch: the tab has to be re-steered by the
+	// fresh ROOM_STATE before its intents flow again, and any cursor change that
+	// was in flight on the dead socket is void.
+	resetConnectionState(r.session)
 	notifyConnecting(r.tabId, r.creds.syncUrl)
 	let socket: WebSocket
 	try {

@@ -97,6 +97,16 @@ export interface SessionState {
 	lastEventId: number
 	/** Current cursor entry; `null` for an empty playlist. */
 	cursor: CursorRef | null
+	/**
+	 * videoId of a cursor change the nav-guard has forwarded and is awaiting the
+	 * server's `CURSOR_CHANGE` broadcast for; `null` when none is in flight.
+	 * `session.cursor` only advances on that broadcast, so during a round-trip
+	 * it lags behind where the user actually is. The nav-guard's loop-stop uses
+	 * this as the *effective* cursor (see {@link effectiveCursorVideoId}) so a
+	 * rapid change back to a different episode isn't mistaken for the stale
+	 * cursor and dropped.
+	 */
+	pendingCursorTarget: string | null
 	/** Hash from `ROOM_STATE` / `PLAYLIST_UPDATE`; lets us skip redundant work. */
 	playlistVersion: string | null
 	/** Full latest playlist; cached for popup / future UI. */
@@ -124,6 +134,17 @@ export interface SessionState {
 	 * before the room's authoritative state has converged the local player.
 	 */
 	converged: boolean
+	/**
+	 * Latch: whether this tab has converged *at least once* on the current
+	 * connection. Unlike {@link converged} (which a cursor forward deliberately
+	 * resets to re-arm playback-echo suppression), this stays `true` for the
+	 * life of the connection once set, and is cleared only on (re)connect. The
+	 * nav-guard uses it to distinguish the initial join-steering window (never
+	 * converged → the server steers, don't forward) from a mid-session cursor
+	 * round-trip (converged before → a genuine move must still be forwarded even
+	 * while transiently un-converged/settling).
+	 */
+	everConverged: boolean
 	/**
 	 * Wall-clock ms (Date.now()) until which intents from this tab are
 	 * dropped as "join settle", or `null` once the window has elapsed or
@@ -158,6 +179,7 @@ export function createSession(): SessionState {
 		clientId: null,
 		lastEventId: 0,
 		cursor: null,
+		pendingCursorTarget: null,
 		playlistVersion: null,
 		playlist: [],
 		mode: 'default',
@@ -166,6 +188,7 @@ export function createSession(): SessionState {
 		rttSamplesMs: [],
 		lastPlayerState: null,
 		converged: false,
+		everConverged: false,
 		settleUntil: null,
 		awaitingReload: false,
 		lastRoomPlayback: null,
@@ -185,6 +208,7 @@ export function createSession(): SessionState {
 export function markConverged(s: SessionState): void {
 	if (s.converged || s.awaitingReload) return
 	s.converged = true
+	s.everConverged = true
 	s.settleUntil = Date.now() + JOIN_SETTLE_WINDOW_MS
 }
 
@@ -210,13 +234,68 @@ export function hasConverged(s: SessionState): boolean {
 }
 
 /**
- * Reset the convergence gate. Called when the WS (re)connects so that
- * the tab has to be re-converged by the fresh `ROOM_STATE` before its
- * intents are allowed to flow again.
+ * Whether the tab has converged at least once on the current connection.
+ * The nav-guard uses this to tell the initial join-steering window apart from
+ * a mid-session cursor round-trip. See {@link SessionState.everConverged}.
+ */
+export function hasEverConverged(s: SessionState): boolean {
+	return s.everConverged
+}
+
+/**
+ * Reset the *transient* convergence gate. Called mid-session (cursor forward,
+ * inbound `CURSOR_CHANGE`) to re-arm playback-echo suppression. Leaves the
+ * {@link SessionState.everConverged} latch and {@link SessionState.pendingCursorTarget}
+ * intact — the latter because the inbound `CURSOR_CHANGE` handler calls this
+ * *before* `applyCursorChange` does its match-clear.
  */
 export function resetConvergence(s: SessionState): void {
 	s.converged = false
 	s.settleUntil = null
+}
+
+/**
+ * Reset *all* per-connection convergence state. Called on WS (re)connect: the
+ * tab must be re-steered from scratch by the fresh `ROOM_STATE`, and any
+ * in-flight cursor change on the dead socket is void.
+ */
+export function resetConnectionState(s: SessionState): void {
+	s.converged = false
+	s.everConverged = false
+	s.settleUntil = null
+	s.pendingCursorTarget = null
+}
+
+/**
+ * Record that the nav-guard has forwarded a cursor change and is awaiting its
+ * broadcast. Overrides the stale confirmed cursor in {@link effectiveCursorVideoId}.
+ *
+ * @param s The session to update.
+ * @param videoId The forwarded target's videoId.
+ */
+export function setPendingCursorTarget(s: SessionState, videoId: string): void {
+	s.pendingCursorTarget = videoId
+}
+
+/**
+ * Clear any in-flight forwarded cursor target. Called on reconnect and when a
+ * forward's round-trip is abandoned (fallback timer).
+ *
+ * @param s The session to update.
+ */
+export function clearPendingCursorTarget(s: SessionState): void {
+	s.pendingCursorTarget = null
+}
+
+/**
+ * The videoId the user is effectively on for nav-guard loop-stop purposes: the
+ * in-flight forwarded target if a cursor change is round-tripping, else the
+ * confirmed cursor. `null` when neither is known.
+ *
+ * @param s The session to read.
+ */
+export function effectiveCursorVideoId(s: SessionState): string | null {
+	return s.pendingCursorTarget ?? s.cursor?.videoId ?? null
 }
 
 // ─── Server-frame folders ─────────────────────────────────────────────
@@ -233,6 +312,9 @@ export function applyRoomState(s: SessionState, frame: RoomStateFrame): Authorit
 	s.clientId = frame.clientId
 	s.lastEventId = frame.lastEventId
 	s.cursor = frame.cursor
+	// ROOM_STATE only arrives on (re)JOIN; any locally-forwarded cursor target
+	// is stale by now, so drop it rather than let it skew the nav-guard.
+	s.pendingCursorTarget = null
 	s.playlistVersion = frame.playlistVersion
 	s.mode = frame.singleMode ? 'single' : frame.freeformMode ? 'freeform' : 'default'
 	s.lastRoomPlayback = { videoPos: frame.videoPos, playerState: frame.playerState, serverTs: frame.serverTs }
@@ -283,6 +365,11 @@ export function applyState(s: SessionState, frame: StateFrame): AuthoritativeCom
  */
 export function applyCursorChange(s: SessionState, frame: CursorChangeFrame): AuthoritativeCommand[] {
 	s.cursor = frame.cursor
+	// Clear the in-flight target only when this broadcast confirms *it* — a
+	// broadcast for an earlier target must not clear a newer pending forward.
+	if (s.pendingCursorTarget !== null && frame.cursor.videoId === s.pendingCursorTarget) {
+		s.pendingCursorTarget = null
+	}
 	s.lastEventId = Math.max(s.lastEventId, frame.eventId)
 	return [{ type: 'cursor_change', pageUrl: frame.cursor.pageUrl }]
 }

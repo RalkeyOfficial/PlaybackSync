@@ -18,12 +18,16 @@ import type { CursorRef, VideoRefWithMeta } from '@/src/background/protocol'
 import {
 	type SessionState,
 	buildResyncCommands,
+	clearPendingCursorTarget,
 	createSession,
+	effectiveCursorVideoId,
 	hasConverged,
+	hasEverConverged,
 	inSettleWindow,
 	markConverged,
 	recordCommand,
 	resetConvergence,
+	setPendingCursorTarget,
 	shouldSuppress,
 } from '@/src/background/session'
 import {
@@ -632,18 +636,22 @@ function guardContext(
 function handleTabNavigation(tabId: number, url: string): void {
 	const ctx = guardContext(tabId, { includeFreeform: true })
 	if (!ctx) return
-	const { adapterId, session, cursor } = ctx
+	const { adapterId, session } = ctx
 	// A pull-back is already in flight for this tab (reload under way);
 	// don't stack another on the intermediate URL changes.
 	if (session.awaitingReload) return
-	// Join-time mismatch is the server's job: it steers a joiner to the
-	// cursor via a unicast CURSOR_CHANGE → in-page synth-click. The guard
-	// must stay out of that window or it races the steering with a
-	// redundant hard navigation (two refreshes on join) and trips the
-	// join-settle seek suppression. Only act once the tab has converged
-	// on the room and the settle window has elapsed — i.e. genuine
-	// mid-session moves.
-	if (!hasConverged(session) || inSettleWindow(session)) return
+	// Initial join-steering is the server's job: it steers a joiner to the
+	// cursor via a unicast CURSOR_CHANGE → in-page synth-click. The guard must
+	// stay out of that window or it races the steering with a redundant hard
+	// navigation (two refreshes on join) and trips the join-settle seek
+	// suppression. We gate this on the `everConverged` *latch*, not the
+	// transient convergence/settle gate: a mid-session cursor change
+	// deliberately un-converges the tab (playback-echo suppression) and, on a
+	// fast round-trip, re-converges into a fresh settle window before this
+	// nav's debounce fires — so gating on transient convergence would swallow a
+	// genuine rapid change back to another episode. The loop-stop below handles
+	// echoes via the effective cursor.
+	if (!hasEverConverged(session)) return
 
 	let incomingVideoId: string | null
 	try {
@@ -651,11 +659,14 @@ function handleTabNavigation(tabId: number, url: string): void {
 	} catch {
 		incomingVideoId = null
 	}
-	// Loop-stop / manual return: the URL already resolves to the cursor (a
-	// room-driven nav lands here because the frame fold set `session.cursor`
-	// to the new videoId before the driven nav completed; a manual return
-	// needs no action either). Skip arming.
-	if (incomingVideoId !== null && incomingVideoId === cursor.videoId) return
+	// Loop-stop / manual return: the URL already resolves to the *effective*
+	// cursor — the in-flight forwarded target if a change is round-tripping,
+	// else the confirmed cursor. Using the effective cursor is what lets a
+	// rapid change back to a different episode through instead of mistaking it
+	// for the stale confirmed cursor. A room-driven nav also lands here (the
+	// fold set the cursor before the driven nav completed); a manual return
+	// needs no action either. Skip arming.
+	if (incomingVideoId !== null && incomingVideoId === effectiveCursorVideoId(session)) return
 
 	const existing = navGuardTimers.get(tabId)
 	if (existing !== undefined) clearTimeout(existing)
@@ -687,7 +698,9 @@ async function routeGuardedNav(tabId: number): Promise<void> {
 	const { adapterId, session, cursor } = ctx
 	// State can change during the debounce; re-check the arm-side gates.
 	if (session.awaitingReload) return
-	if (!hasConverged(session) || inSettleWindow(session)) return
+	// See handleTabNavigation: gate on the everConverged latch (initial join
+	// steering), not the transient convergence/settle gate.
+	if (!hasEverConverged(session)) return
 
 	let tab: chrome.tabs.Tab
 	try {
@@ -706,8 +719,9 @@ async function routeGuardedNav(tabId: number): Promise<void> {
 		videoId = null
 	}
 
-	// Loop-stop / already on cursor.
-	if (videoId !== null && videoId === cursor.videoId) return
+	// Loop-stop / already on the effective cursor (pending forward target if a
+	// change is round-tripping, else the confirmed cursor).
+	if (videoId !== null && videoId === effectiveCursorVideoId(session)) return
 
 	const entry =
 		videoId === null
@@ -776,14 +790,23 @@ function forwardCursorChangeFromNav(
 		tabId, mode: session.mode, videoId: target.videoId,
 	})
 	resetConvergence(session)
+	// Record the in-flight target so the nav-guard's loop-stop treats it as the
+	// effective cursor (session.cursor won't advance until the broadcast lands).
+	setPendingCursorTarget(session, target.videoId)
 	clearCursorRequestTimer(tabId)
 	cursorRequestTimers.set(tabId, setTimeout(() => {
 		cursorRequestTimers.delete(tabId)
 		const s = sessions.get(tabId)
-		if (s && !hasConverged(s)) {
+		if (!s) return
+		if (!hasConverged(s)) {
 			console.warn('[playbacksync:bg] nav-guard cursor-change converge fallback', { tabId })
 			markConverged(s)
 		}
+		// The broadcast never arrived within the window; drop the in-flight
+		// target unconditionally so a lost/rejected request can't permanently
+		// gate the reconciler or skew the loop-stop — even if an earlier
+		// broadcast already re-converged the tab.
+		clearPendingCursorTarget(s)
 	}, CURSOR_REQUEST_CONVERGE_FALLBACK_MS))
 	sendCursorChangeRequest(tabId, target)
 }
@@ -822,6 +845,10 @@ async function reconcileCursorToRoom(tabId: number): Promise<void> {
 	const { adapterId, session, cursor } = ctx
 	if (session.awaitingReload) return
 	if (!hasConverged(session) || inSettleWindow(session)) return
+	// A forwarded cursor change is still round-tripping: stay dormant until its
+	// broadcast lands (or the fallback clears it), or we'd yank the tab toward
+	// the now-stale confirmed cursor and undo the user's in-flight move.
+	if (session.pendingCursorTarget !== null) return
 
 	let tab: chrome.tabs.Tab
 	try {
