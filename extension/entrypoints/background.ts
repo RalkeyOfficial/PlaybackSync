@@ -386,7 +386,7 @@ async function routeMessage(tabId: number | undefined, msg: ContentToBackground)
 				// the adapter finishes init. Dropping them prevents the joiner
 				// from clobbering the room's playback state.
 				console.log('[playbacksync:bg] dropping pre-convergence intent', {
-					tabId, type: msg.intent.type,
+					tabId, type: msg.intent.type, time: msg.intent.time,
 				})
 				return
 			}
@@ -397,13 +397,13 @@ async function routeMessage(tabId: number | undefined, msg: ContentToBackground)
 				// outside the 600 ms echo window. Drop until the settle window
 				// elapses so these late writes don't reach the daemon.
 				console.log('[playbacksync:bg] dropping settle-window intent', {
-					tabId, type: msg.intent.type,
+					tabId, type: msg.intent.type, time: msg.intent.time,
 				})
 				return
 			}
 			if (shouldSuppress(session, msg.intent)) {
 				console.log('[playbacksync:bg] suppressed echo intent', {
-					tabId, type: msg.intent.type,
+					tabId, type: msg.intent.type, time: msg.intent.time,
 				})
 				return
 			}

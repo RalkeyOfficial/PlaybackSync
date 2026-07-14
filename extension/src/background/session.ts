@@ -37,6 +37,15 @@ import type {
 export const SUPPRESSION_WINDOW_MS = 600
 
 /**
+ * Max distance (seconds) between a dispatched seek command's target and a
+ * subsequent seek intent for that intent to count as the command's echo.
+ * Arrow-key skips jump ~5 s, so ~1 s comfortably separates a real skip from
+ * the round-trip echo (which lands at the command's target) while absorbing
+ * any player-side rounding.
+ */
+export const SEEK_ECHO_TOLERANCE_S = 1
+
+/**
  * Drop *all* intents from this tab for this long after it first converges
  * on a connection. The 600 ms echo window is too narrow for the page's
  * own resume / auto-play logic: e.g. Vidstack on miruro restores the
@@ -53,6 +62,12 @@ export const JOIN_SETTLE_WINDOW_MS = 1_000
 interface RecentCommand {
 	kind: LocalIntent['type']
 	at: number
+	/**
+	 * Seek target (seconds) for `kind === 'seek'`; `undefined` for play/pause.
+	 * Lets {@link shouldSuppress} drop only the echo that lands at this target,
+	 * not a genuine user skip to a different position.
+	 */
+	time?: number
 }
 
 /**
@@ -347,9 +362,10 @@ export function buildResyncCommands(s: SessionState): AuthoritativeCommand[] {
 export function recordCommand(s: SessionState, cmd: AuthoritativeCommand): void {
 	const kind = mapCommandKind(cmd.type)
 	if (!kind) return
-	s.recentCommands.push({ kind, at: Date.now() })
+	const at = Date.now()
+	s.recentCommands.push({ kind, at, ...(cmd.type === 'seek' ? { time: cmd.time } : {}) })
 	// Trim aged-out entries to keep the bucket small.
-	const cutoff = Date.now() - SUPPRESSION_WINDOW_MS
+	const cutoff = at - SUPPRESSION_WINDOW_MS
 	s.recentCommands = s.recentCommands.filter(b => b.at >= cutoff)
 }
 
@@ -362,7 +378,16 @@ export function recordCommand(s: SessionState, cmd: AuthoritativeCommand): void 
 export function shouldSuppress(s: SessionState, intent: LocalIntent): boolean {
 	if (s.recentCommands.length === 0) return false
 	const cutoff = Date.now() - SUPPRESSION_WINDOW_MS
-	return s.recentCommands.some(b => b.at >= cutoff && b.kind === intent.type)
+	return s.recentCommands.some((b) => {
+		if (b.at < cutoff || b.kind !== intent.type) return false
+		// A seek intent is an echo only if it lands at the command's target; a
+		// genuine skip to a different position must pass through. Play/pause
+		// have no position, so kind + window is the whole test.
+		if (intent.type === 'seek') {
+			return b.time !== undefined && Math.abs(b.time - intent.time) <= SEEK_ECHO_TOLERANCE_S
+		}
+		return true
+	})
 }
 
 function mapCommandKind(t: AuthoritativeCommand['type']): RecentCommand['kind'] | null {
