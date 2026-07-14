@@ -38,6 +38,7 @@ import {
 	wipeIfFreshBrowserSession,
 } from '@/src/background/storage'
 import { forgetTab, getTab, recordIdentity, recordStatus } from '@/src/background/tabs'
+import { log, logStartupBanner } from '@/src/background/log'
 import { forgetIconForTab, initGreyscaleDefaults, setColored } from '@/src/background/icon'
 import {
 	getDerivedStatus,
@@ -161,10 +162,9 @@ function makeCallbacks(tabId: number): WsCallbacks {
 			// AUTH_FAILED, CLIENT_ID_IN_USE) all mean this tab's stored creds
 			// are dead — no reconnect can succeed, so wipe them now rather than
 			// re-attempting on the next service-worker boot. Logged at `warn`
-			// (not `error`) because these are expected protocol outcomes; in
-			// MV3, any `console.error` from a service worker is surfaced on the
-			// browser's extension-management page as a red error notification.
-			console.warn('[playbacksync:bg] terminal close', { tabId, reason, code })
+			// (not `error`): these are expected protocol outcomes, not extension
+			// faults (see the log module's level policy).
+			log('bg', 'warn', 'terminal close', { tabId, reason, code })
 			void tearDownTab(tabId)
 		},
 		onLifecycleChange: () => recomputeIconForTab(tabId),
@@ -255,7 +255,8 @@ function recomputeIconForTab(tabId: number): void {
 }
 
 export default defineBackground(() => {
-	console.log('[playbacksync:bg] worker booted')
+	logStartupBanner()
+	log('bg', 'info', 'worker booted')
 
 	initPopupBroadcast(sessions)
 	void initGreyscaleDefaults()
@@ -326,10 +327,7 @@ async function bootstrap(): Promise<void> {
 	await wipeIfFreshBrowserSession()
 	const all = await loadAllCreds()
 	if (all.size === 0) {
-		console.log(
-			'[playbacksync:bg] no per-tab creds in chrome.storage.local; '
-			+ 'follow a room share link to connect',
-		)
+		log('bg', 'info', 'no stored per-tab creds; follow a room share link to connect')
 		return
 	}
 	for (const [tabId, creds] of all) {
@@ -383,14 +381,15 @@ async function routeMessage(tabId: number | undefined, msg: ContentToBackground)
 		case 'intent': {
 			const session = sessions.get(tabId)
 			if (!session) return
+			log('bg', 'debug', `intent received: ${msg.intent.type}`, { tabId, time: msg.intent.time })
 			if (!hasConverged(session)) {
 				// Native video events fired before the room's authoritative
 				// state has been applied to this tab are not real user actions
 				// — typically the site's own resume-position logic firing as
 				// the adapter finishes init. Dropping them prevents the joiner
 				// from clobbering the room's playback state.
-				console.log('[playbacksync:bg] dropping pre-convergence intent', {
-					tabId, type: msg.intent.type, time: msg.intent.time,
+				log('bg', 'info', `intent dropped (pre-convergence): ${msg.intent.type}`, {
+					tabId, time: msg.intent.time,
 				})
 				return
 			}
@@ -400,14 +399,14 @@ async function routeMessage(tabId: number | undefined, msg: ContentToBackground)
 				// adapter has applied the room's first authoritative command,
 				// outside the 600 ms echo window. Drop until the settle window
 				// elapses so these late writes don't reach the daemon.
-				console.log('[playbacksync:bg] dropping settle-window intent', {
-					tabId, type: msg.intent.type, time: msg.intent.time,
+				log('bg', 'info', `intent dropped (settle window): ${msg.intent.type}`, {
+					tabId, time: msg.intent.time,
 				})
 				return
 			}
 			if (shouldSuppress(session, msg.intent)) {
-				console.log('[playbacksync:bg] suppressed echo intent', {
-					tabId, type: msg.intent.type, time: msg.intent.time,
+				log('bg', 'info', `intent dropped (echo): ${msg.intent.type}`, {
+					tabId, time: msg.intent.time,
 				})
 				return
 			}
@@ -432,6 +431,9 @@ async function routeMessage(tabId: number | undefined, msg: ContentToBackground)
 			return
 		}
 		case 'identity': {
+			log('nav', 'info', 'identity reported', {
+				tabId, videoId: msg.identity.videoId, guard: msg.guardNavigation,
+			})
 			recordIdentity(tabId, msg.adapterId, msg.identity)
 			// Arm/disarm the navigation-guard per the active adapter's opt-in,
 			// recording the adapter id so the guard can resolve URLs through it.
@@ -464,7 +466,7 @@ async function routeMessage(tabId: number | undefined, msg: ContentToBackground)
 			await handleCursorTrigger(tabId, msg.target)
 			return
 		case 'fail':
-			console.warn('[playbacksync:bg] adapter failed', {
+			log('bg', 'warn', 'adapter failed', {
 				tabId, adapterId: msg.adapterId, reason: msg.reason,
 			})
 			disconnect(tabId)
@@ -488,7 +490,7 @@ async function routeMessage(tabId: number | undefined, msg: ContentToBackground)
  */
 async function handleCredentials(tabId: number, syncUrl: string, syncPassword: string): Promise<void> {
 	await saveCreds(tabId, { syncUrl, syncPassword })
-	console.log('[playbacksync:bg] share-URL creds accepted; connecting', { tabId })
+	log('bg', 'info', 'share-URL creds accepted; connecting', { tabId })
 	ensureConnectedWithCreds(tabId, { syncUrl, syncPassword })
 }
 
@@ -536,7 +538,7 @@ async function handleCursorTrigger(tabId: number, target: VideoRefWithMeta): Pro
 	}
 
 	if (session.mode === 'freeform') {
-		console.log('[playbacksync:bg] cursor_trigger forwarding (freeform)', {
+		log('nav', 'info', 'cursor-trigger forwarding (freeform)', {
 			tabId, videoId: target.videoId,
 		})
 		sendCursorChangeRequest(tabId, target)
@@ -548,14 +550,14 @@ async function handleCursorTrigger(tabId: number, target: VideoRefWithMeta): Pro
 	)
 
 	if (session.mode === 'single' || !inPlaylist) {
-		console.log('[playbacksync:bg] cursor_trigger pulling tab back to cursor', {
+		log('nav', 'info', 'cursor-trigger pull-back to cursor', {
 			tabId, mode: session.mode, videoId: target.videoId, inPlaylist,
 		})
 		pullTabBackToCursor(tabId, session)
 		return
 	}
 
-	console.log('[playbacksync:bg] cursor_trigger forwarding as CURSOR_CHANGE_REQUEST', {
+	log('nav', 'info', 'cursor-trigger forwarding cursor change', {
 		tabId, videoId: target.videoId,
 	})
 	sendCursorChangeRequest(tabId, target)
@@ -651,7 +653,10 @@ function handleTabNavigation(tabId: number, url: string): void {
 	// nav's debounce fires — so gating on transient convergence would swallow a
 	// genuine rapid change back to another episode. The loop-stop below handles
 	// echoes via the effective cursor.
-	if (!hasEverConverged(session)) return
+	if (!hasEverConverged(session)) {
+		log('nav', 'debug', 'nav ignored: not yet converged (join steering)', { tabId, url })
+		return
+	}
 
 	let incomingVideoId: string | null
 	try {
@@ -659,6 +664,10 @@ function handleTabNavigation(tabId: number, url: string): void {
 	} catch {
 		incomingVideoId = null
 	}
+	const effective = effectiveCursorVideoId(session)
+	log('nav', 'debug', 'nav observed', {
+		tabId, url, incomingVideoId, effective, pending: session.pendingCursorTarget,
+	})
 	// Loop-stop / manual return: the URL already resolves to the *effective*
 	// cursor — the in-flight forwarded target if a change is round-tripping,
 	// else the confirmed cursor. Using the effective cursor is what lets a
@@ -666,8 +675,12 @@ function handleTabNavigation(tabId: number, url: string): void {
 	// for the stale confirmed cursor. A room-driven nav also lands here (the
 	// fold set the cursor before the driven nav completed); a manual return
 	// needs no action either. Skip arming.
-	if (incomingVideoId !== null && incomingVideoId === effectiveCursorVideoId(session)) return
+	if (incomingVideoId !== null && incomingVideoId === effective) {
+		log('nav', 'debug', 'nav loop-stop (on effective cursor)', { tabId, incomingVideoId })
+		return
+	}
 
+	log('nav', 'debug', 'nav arming debounce', { tabId, incomingVideoId })
 	const existing = navGuardTimers.get(tabId)
 	if (existing !== undefined) clearTimeout(existing)
 	navGuardTimers.set(tabId, setTimeout(() => {
@@ -719,9 +732,16 @@ async function routeGuardedNav(tabId: number): Promise<void> {
 		videoId = null
 	}
 
+	const effective = effectiveCursorVideoId(session)
+	log('nav', 'debug', 'route resolved', {
+		tabId, liveUrl, videoId, effective, mode: session.mode, pending: session.pendingCursorTarget,
+	})
 	// Loop-stop / already on the effective cursor (pending forward target if a
 	// change is round-tripping, else the confirmed cursor).
-	if (videoId !== null && videoId === effectiveCursorVideoId(session)) return
+	if (videoId !== null && videoId === effective) {
+		log('nav', 'debug', 'route loop-stop (on effective cursor)', { tabId, videoId })
+		return
+	}
 
 	const entry =
 		videoId === null
@@ -786,7 +806,7 @@ function forwardCursorChangeFromNav(
 	session: SessionState,
 	target: VideoRefWithMeta,
 ): void {
-	console.log('[playbacksync:bg] nav-guard forwarding CURSOR_CHANGE_REQUEST', {
+	log('nav', 'info', 'nav-guard forwarding cursor change', {
 		tabId, mode: session.mode, videoId: target.videoId,
 	})
 	resetConvergence(session)
@@ -799,7 +819,7 @@ function forwardCursorChangeFromNav(
 		const s = sessions.get(tabId)
 		if (!s) return
 		if (!hasConverged(s)) {
-			console.warn('[playbacksync:bg] nav-guard cursor-change converge fallback', { tabId })
+			log('nav', 'warn', 'nav-guard cursor-change converge fallback', { tabId })
 			markConverged(s)
 		}
 		// The broadcast never arrived within the window; drop the in-flight
@@ -874,6 +894,9 @@ async function reconcileCursorToRoom(tabId: number): Promise<void> {
 		videoId !== null &&
 		session.playlist.some((e) => e.providerId === cursor.providerId && e.videoId === videoId)
 
+	log('nav', 'info', 'reconcile: tab drifted off cursor, pulling back', {
+		tabId, liveVideoId: videoId, cursor: cursor.videoId, inPlaylist,
+	})
 	if (inPlaylist) {
 		// Drifted to another in-playlist episode: lightweight synth-click back.
 		pullTabBackToCursor(tabId, session)
@@ -917,7 +940,7 @@ async function recheckAndPullBack(tabId: number): Promise<void> {
 	// reload, so the tab stays joined without carrying creds in the URL.
 	const target = navigableUrlForCursor(adapterId, cursor) ?? cursor.pageUrl
 
-	console.log('[playbacksync:bg] nav-guard pulling tab back to cursor', {
+	log('nav', 'info', 'nav-guard pull-back to cursor', {
 		tabId, liveUrl, target,
 	})
 	// `chrome.tabs.update` is a full page load, but the WS lives in the
@@ -940,7 +963,7 @@ async function recheckAndPullBack(tabId: number): Promise<void> {
 		navReloadTimers.delete(tabId)
 		const s = sessions.get(tabId)
 		if (s?.awaitingReload) {
-			console.warn('[playbacksync:bg] nav-guard reload converge fallback', { tabId })
+			log('nav', 'warn', 'nav-guard reload converge fallback', { tabId })
 			s.awaitingReload = false
 			markConverged(s)
 		}
@@ -971,7 +994,7 @@ function scheduleGuardResync(tabId: number): void {
 		if (!session || session.awaitingReload) return
 		const cmds = buildResyncCommands(session)
 		if (cmds.length === 0) return
-		console.log('[playbacksync:bg] nav-guard resyncing reloaded tab to room playback', {
+		log('nav', 'info', 'nav-guard resyncing reloaded tab to room playback', {
 			tabId, playerState: session.lastRoomPlayback?.playerState,
 		})
 		for (const cmd of cmds) dispatchCommand(tabId, cmd)
@@ -1052,7 +1075,7 @@ function isRoomUrl(session: SessionState, url: string, adapterId: string): boole
 async function handlePopupMessage(msg: PopupToBackground): Promise<void> {
 	switch (msg.kind) {
 		case 'leave_room': {
-			console.log('[playbacksync:bg] popup requested leave_room', { tabId: msg.tabId })
+			log('bg', 'info', 'popup requested leave_room', { tabId: msg.tabId })
 			disconnect(msg.tabId)
 			await tearDownTab(msg.tabId)
 			return
@@ -1066,7 +1089,7 @@ async function handlePopupMessage(msg: PopupToBackground): Promise<void> {
 function dispatchCommand(tabId: number, cmd: AuthoritativeCommand): void {
 	const session = sessions.get(tabId)
 	if (!session) {
-		console.warn('[playbacksync:bg] dispatch with no session', { tabId })
+		log('bg', 'warn', 'dispatch with no session', { tabId })
 		return
 	}
 	// Arm the suppression window *before* the command lands, so the
@@ -1074,9 +1097,15 @@ function dispatchCommand(tabId: number, cmd: AuthoritativeCommand): void {
 	recordCommand(session, cmd)
 	const entry = getTab(tabId)
 	if (!entry) {
-		console.warn('[playbacksync:bg] dispatch to unknown tab', { tabId })
+		log('bg', 'warn', 'dispatch to unknown tab', { tabId })
 		return
 	}
+	const detail =
+		cmd.type === 'seek' ? { pos: cmd.time }
+		: cmd.type === 'cursor_change' ? { pageUrl: cmd.pageUrl }
+		: cmd.type === 'nudge_rate' ? { targetPos: cmd.targetPos }
+		: {}
+	log('bg', 'info', `command dispatched: ${cmd.type}`, { tabId, ...detail })
 	const payload: BackgroundToContent = { kind: 'command', command: cmd }
 	void chrome.tabs.sendMessage(tabId, payload).catch(() => {
 		// Tab closed or content script not present; nothing actionable.

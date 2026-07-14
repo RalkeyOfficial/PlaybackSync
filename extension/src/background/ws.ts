@@ -44,6 +44,7 @@ import {
 	startClockPing,
 } from './session'
 import { saveClientId, type PbSyncCreds } from './storage'
+import { log as bgLog, type LogLevel } from './log'
 import { getTab } from './tabs'
 import {
 	notifyConnecting,
@@ -241,6 +242,9 @@ export function sendEvent(tabId: number, intent: { type: 'play' | 'pause' | 'see
 	const frame: OutboundFrame = intent.type === 'seek'
 		? { type: 'EVENT', event: 'seek', value: intent.time, clientTs: nowMs() }
 		: { type: 'EVENT', event: intent.type, clientTs: nowMs() }
+	log('info', `EVENT sent: ${intent.type}`, {
+		tabId, ...(intent.type === 'seek' ? { pos: intent.time } : {}),
+	})
 	send(r, frame)
 }
 
@@ -262,6 +266,8 @@ export function sendEvent(tabId: number, intent: { type: 'play' | 'pause' | 'see
 export function sendCursorChangeRequest(tabId: number, target: VideoRefWithMeta): void {
 	const r = pool.get(tabId)
 	if (!r?.socket || r.socket.readyState !== WebSocket.OPEN) return
+	// The nav layer logs the *decision* at info; this confirms the wire send.
+	log('debug', 'CURSOR_CHANGE_REQUEST sent', { tabId, videoId: target.videoId })
 	send(r, { type: 'CURSOR_CHANGE_REQUEST', target, clientTs: nowMs() })
 }
 
@@ -334,6 +340,7 @@ export function sendPlaylistUpdate(
 export function sendBuffer(tabId: number, kind: 'BUFFER_START' | 'BUFFER_END', videoPos: number): void {
 	const r = pool.get(tabId)
 	if (!r?.socket || r.socket.readyState !== WebSocket.OPEN) return
+	log('info', `${kind} sent`, { tabId, pos: videoPos })
 	send(r, { type: kind, videoPos })
 }
 
@@ -555,14 +562,21 @@ function handleFrame(r: WsRuntime, frame: InboundFrame): void {
 				void saveClientId(r.tabId, frame.clientId)
 			}
 			dispatchToOwner(r, applyRoomState(r.session, frame))
+			log('info', 'ROOM_STATE applied', {
+				tabId: r.tabId, cursor: r.session.cursor?.videoId ?? null,
+				mode: r.session.mode, playerState: frame.playerState, pos: frame.videoPos,
+			})
 			notifyRoomStateChanged(r.tabId)
 			r.cb.onLifecycleChange?.()
 			return
 		}
 		case 'STATE':
 			dispatchToOwner(r, applyState(r.session, frame))
+			log('info', 'STATE applied', {
+				tabId: r.tabId, playerState: frame.playerState, pos: frame.videoPos, eventId: frame.eventId,
+			})
 			return
-		case 'CURSOR_CHANGE':
+		case 'CURSOR_CHANGE': {
 			// Re-arm the join settle window: miruro (and similar players) auto-
 			// restore the viewer's last position on the new episode shortly
 			// after the source loads, which the adapter would otherwise observe
@@ -571,14 +585,23 @@ function handleFrame(r: WsRuntime, frame: InboundFrame): void {
 			// `markConverged` inside `dispatchToOwner` flips it back on and
 			// arms a fresh settle window — matching exactly the pattern that
 			// already covers JOIN-time auto-resume.
+			const from = r.session.cursor?.videoId ?? null
 			resetConvergence(r.session)
 			dispatchToOwner(r, applyCursorChange(r.session, frame))
+			log('info', 'CURSOR_CHANGE applied', { tabId: r.tabId, from, to: frame.cursor.videoId })
 			notifyCursorChanged(r.tabId)
 			return
+		}
 		case 'PLAYLIST_UPDATE':
 			applyPlaylistUpdate(r.session, frame)
+			log('info', 'PLAYLIST_UPDATE applied', { tabId: r.tabId, entries: frame.entries.length })
 			return
 		case 'SYNC_ADJUST':
+			// A `seek` adjust is a real jump worth seeing; `nudge-rate` is a
+			// continuous drift trim, so it stays at debug to avoid flooding.
+			log(frame.mode === 'seek' ? 'info' : 'debug', `SYNC_ADJUST applied: ${frame.mode}`, {
+				tabId: r.tabId, targetPos: frame.targetPos,
+			})
 			dispatchToOwner(r, applySyncAdjust(r.session, frame))
 			return
 		case 'CLOCK_PONG': {
@@ -586,6 +609,9 @@ function handleFrame(r: WsRuntime, frame: InboundFrame): void {
 			const t4 = nowMs()
 			r.pendingPings.delete(t1)
 			applyClockPong(r.session, t1, frame.serverRecvTime, frame.serverSendTime, t4)
+			bgLog('sync', 'debug', 'CLOCK_PONG', {
+				tabId: r.tabId, offsetMs: Math.round(r.session.serverClockOffsetMs),
+			})
 			return
 		}
 		case 'ERROR':
@@ -646,12 +672,14 @@ function fireHeartbeat(r: WsRuntime): void {
 		const ageMs = Math.min(Math.max(0, Date.now() - entry.lastStateAt), HEARTBEAT_EXTRAPOLATION_CAP_MS)
 		currentPos += ageMs / 1000
 	}
+	bgLog('sync', 'debug', 'HEARTBEAT sent', { tabId: r.tabId, pos: currentPos, playerState: state.playerState })
 	send(r, { type: 'HEARTBEAT', currentPos, playerState: state.playerState })
 }
 
 function fireClockPing(r: WsRuntime): void {
 	const t1 = startClockPing()
 	r.pendingPings.set(t1, t1)
+	bgLog('sync', 'debug', 'CLOCK_PING sent', { tabId: r.tabId })
 	send(r, { type: 'CLOCK_PING', clientSendTime: t1 })
 }
 
@@ -682,10 +710,7 @@ function redactUrl(url: string): string {
 	return q === -1 ? url : url.slice(0, q) + '?…'
 }
 
-function log(level: 'info' | 'warn' | 'error', msg: string, data?: Record<string, unknown>): void {
-	const line = `[playbacksync:ws] ${msg}`
-	const payload = data ?? {}
-	if (level === 'error') console.error(line, payload)
-	else if (level === 'warn') console.warn(line, payload)
-	else console.log(line, payload)
+/** Connection/frame log line under the `ws` scope. See {@link bgLog}. */
+function log(level: LogLevel, event: string, data?: Record<string, unknown>): void {
+	bgLog('ws', level, event, data)
 }
