@@ -344,7 +344,21 @@ function openSocket(r: WsRuntime): void {
 	// fresh ROOM_STATE before its intents flow again.
 	resetConvergence(r.session)
 	notifyConnecting(r.tabId, r.creds.syncUrl)
-	const socket = new WebSocket(r.creds.syncUrl)
+	let socket: WebSocket
+	try {
+		socket = new WebSocket(r.creds.syncUrl)
+	} catch (e) {
+		// Malformed sync URL: dead creds, not an extension bug. Treat as a
+		// terminal close so it wipes creds instead of throwing uncaught.
+		log('warn', 'WebSocket construction failed; treating as terminal', {
+			tabId: r.tabId,
+			reason: e instanceof Error ? e.message : String(e),
+		})
+		r.terminated = true
+		pool.delete(r.tabId)
+		r.cb.onTerminal('invalid sync url', null)
+		return
+	}
 	r.socket = socket
 
 	socket.addEventListener('open', () => onOpen(r))
@@ -517,7 +531,7 @@ function scheduleReconnect(r: WsRuntime): void {
 	const delay = RECONNECT_BACKOFF_MS[idx]
 	r.reconnectAttempt += 1
 	if (r.reconnectAttempt > RECONNECT_BACKOFF_MS.length + 1) {
-		log('error', 'giving up after repeated reconnect failures', { tabId: r.tabId })
+		log('warn', 'giving up after repeated reconnect failures', { tabId: r.tabId })
 		r.terminated = true
 		pool.delete(r.tabId)
 		r.cb.onTerminal('reconnect exhausted', null)
