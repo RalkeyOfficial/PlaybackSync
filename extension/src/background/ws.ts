@@ -368,6 +368,10 @@ function openSocket(r: WsRuntime): void {
 	// was in flight on the dead socket is void.
 	resetConnectionState(r.session)
 	notifyConnecting(r.tabId, r.creds.syncUrl)
+	// A failed handshake (e.g. server down → 503) makes Chromium print its own
+	// "WebSocket connection failed" line here — browser noise we can't catch or
+	// suppress. The failure is handled via the error/close listeners below; the
+	// try/catch only guards synchronous construction (malformed URL).
 	let socket: WebSocket
 	try {
 		socket = new WebSocket(r.creds.syncUrl)
