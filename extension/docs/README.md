@@ -11,6 +11,7 @@ This directory is the source of truth for *how the extension is shaped and why*.
 - **Working on the protocol client?** [`protocol-client.md`](protocol-client.md) covers JOIN, reconnect, clock-sync, heartbeats, suppression — the WS-side concerns.
 - **Setting up creds for dev?** [`storage.md`](storage.md) shows the `chrome.storage.local` shape and the DevTools snippet to seed it.
 - **Touching the toolbar popup?** [`popup.md`](popup.md) covers the snapshot channel, the `PopupStatus` state machine, and the leave-room flow.
+- **Working on on-page notifications?** [`notifications.md`](notifications.md) covers the `NOTICE` frame, the `notice` message, the toast/welcome-badge surfaces, and the shadow-root rendering.
 - **Submitting to a browser store?** [`store-listing.md`](store-listing.md) is the canonical copy + reviewer-notes source; [`privacy.md`](privacy.md) is the hosted privacy policy.
 
 ## Index
@@ -22,6 +23,7 @@ This directory is the source of truth for *how the extension is shaped and why*.
 | [`adapter-contract.md`](adapter-contract.md) | `Adapter` / `AdapterContext` / `LocalIntent` / `AuthoritativeCommand` / `ContentIdentity` / `VideoState`, `guardNavigation` + the `videoIdForUrl` matcher, autoplay-hold — how to write an adapter |
 | [`storage.md`](storage.md) | Per-tab `chrome.storage.local['pbsync.tab.<tabId>']` schema; cold-boot sentinel; dev-time creds workflow |
 | [`popup.md`](popup.md) | Toolbar popup: snapshot channel, `PopupStatus`, leave-room flow |
+| [`notifications.md`](notifications.md) | On-page toasts + welcome badge: `NOTICE` frame, `notice` message, copy map, shadow-root rendering |
 | [`playlist-update.md`](playlist-update.md) | `sendPlaylistUpdate` background API for out-of-flow playlist contributions; freeform-chain rule; mode gating |
 | [`store-listing.md`](store-listing.md) | Short / long descriptions, reviewer notes, screenshot brief, pre-submission checklist |
 | [`privacy.md`](privacy.md) | Data-handling statement (the version hosted at the privacy-policy URL) |

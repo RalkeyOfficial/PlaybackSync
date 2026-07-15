@@ -151,6 +151,8 @@ export type OutboundFrame =
 export interface RoomStateFrame {
 	type: 'ROOM_STATE'
 	clientId: string
+	/** The client's own server-assigned nickname — surfaced in the self "welcome" toast. */
+	nickname: string
 	singleMode: boolean
 	freeformMode: boolean
 	cursor: CursorRef | null
@@ -211,6 +213,43 @@ export interface ErrorFrame {
 	serverTs: number
 }
 
+/** Inner discriminant on a `NOTICE` frame — the peer action being announced. */
+export type NoticeEvent =
+	| 'play'
+	| 'pause'
+	| 'seek'
+	| 'cursor_change'
+	| 'client_joined'
+	| 'client_left'
+
+/** Event-specific payload on a `NOTICE` frame. All fields optional per event. */
+export interface NoticeData {
+	/** Seek target position in seconds (`seek` only). */
+	value?: number
+	/** New video reference (`cursor_change` only) — the label names the video. */
+	videoRef?: { label: string | null } | null
+	/** Actor nickname (`client_left`, where `actor` is `system` so `actorId` is null). */
+	nickname?: string
+	/** Disconnect reason (`client_left`). */
+	reason?: string
+}
+
+/**
+ * `NOTICE` — a display-only, actor-attributed frame the daemon broadcasts to
+ * a room's peers so the extension can surface "who did what" toasts. Unlike
+ * the authoritative frames it carries an actor nickname; it never affects
+ * playback state. See `docs/ws-protocol.md` §NOTICE.
+ */
+export interface NoticeFrame {
+	type: 'NOTICE'
+	event: NoticeEvent
+	category: 'playback' | 'presence'
+	actor: 'client' | 'owner' | 'system'
+	actorId: string | null
+	data: NoticeData | null
+	serverTs: number
+}
+
 /** All server→client frames, discriminated by `type`. */
 export type InboundFrame =
 	| RoomStateFrame
@@ -220,6 +259,7 @@ export type InboundFrame =
 	| SyncAdjustFrame
 	| ClockPongFrame
 	| ErrorFrame
+	| NoticeFrame
 
 // ─── Encode / decode ────────────────────────────────────────────────────
 
@@ -292,6 +332,8 @@ export function decode(raw: string): { ok: true; frame: InboundFrame } | DecodeE
 			return decodeClockPong(parsed)
 		case 'ERROR':
 			return decodeError(parsed)
+		case 'NOTICE':
+			return decodeNotice(parsed)
 		default:
 			return { ok: false, error: 'unknown_type', detail: type }
 	}
@@ -307,6 +349,9 @@ function isObj(v: unknown): v is Obj {
 
 function decodeRoomState(o: Obj): { ok: true; frame: RoomStateFrame } | DecodeError {
 	const clientId = asString(o['clientId'])
+	// Tolerant: an older daemon may omit `nickname`. Fall back to '' rather
+	// than rejecting the whole ROOM_STATE, which would break sync entirely.
+	const nickname = asString(o['nickname']) ?? ''
 	const playlistVersion = asString(o['playlistVersion'])
 	const playerState = asPlayerState(o['playerState'])
 	const videoPos = asNumber(o['videoPos'])
@@ -366,6 +411,7 @@ function decodeRoomState(o: Obj): { ok: true; frame: RoomStateFrame } | DecodeEr
 		frame: {
 			type: 'ROOM_STATE',
 			clientId,
+			nickname,
 			singleMode,
 			freeformMode,
 			cursor,
@@ -496,6 +542,54 @@ function decodeError(o: Obj): { ok: true; frame: ErrorFrame } | DecodeError {
 	const serverTs = asInt(o['serverTs'])
 	if (code === null || message === null || serverTs === null) return shape('ERROR missing fields')
 	return { ok: true, frame: { type: 'ERROR', code, message, serverTs } }
+}
+
+function decodeNotice(o: Obj): { ok: true; frame: NoticeFrame } | DecodeError {
+	const event = o['event']
+	if (
+		event !== 'play' && event !== 'pause' && event !== 'seek'
+		&& event !== 'cursor_change' && event !== 'client_joined' && event !== 'client_left'
+	) {
+		return shape('NOTICE.event invalid')
+	}
+	const category = o['category']
+	if (category !== 'playback' && category !== 'presence') return shape('NOTICE.category invalid')
+	const actor = o['actor']
+	if (actor !== 'client' && actor !== 'owner' && actor !== 'system') return shape('NOTICE.actor invalid')
+	const serverTs = asInt(o['serverTs'])
+	if (serverTs === null) return shape('NOTICE missing serverTs')
+	return {
+		ok: true,
+		frame: {
+			type: 'NOTICE',
+			event,
+			category,
+			actor,
+			actorId: asNullableString(o['actorId']),
+			data: decodeNoticeData(o['data']),
+			serverTs,
+		},
+	}
+}
+
+/**
+ * Parse a `NOTICE.data` blob loosely — every field is optional and
+ * event-specific, and unknown fields are ignored (forward-compat). Returns
+ * null when `data` is absent or not an object.
+ *
+ * @param v The raw `data` field off the wire.
+ */
+function decodeNoticeData(v: unknown): NoticeData | null {
+	if (!isObj(v)) return null
+	const data: NoticeData = {}
+	const value = asNumber(v['value'])
+	if (value !== null) data.value = value
+	const nickname = asString(v['nickname'])
+	if (nickname !== null) data.nickname = nickname
+	const reason = asString(v['reason'])
+	if (reason !== null) data.reason = reason
+	if (isObj(v['videoRef'])) data.videoRef = { label: asNullableString(v['videoRef']['label']) }
+	return data
 }
 
 function decodeOptionalCursor(v: unknown): CursorRef | null | 'bad' {

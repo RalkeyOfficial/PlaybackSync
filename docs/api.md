@@ -735,7 +735,7 @@ The route lives outside `/api/v1/` because it isn't a JSON API call — it's a r
 
 #### Authentication
 
-HTTP Basic Auth. The username is **ignored** (browsers strip user info from URLs anyway); only the password matters and is compared against the room's argon2id hash. On a missing or malformed `Authorization` header, the response is `401 Unauthorized` with `WWW-Authenticate: Basic realm="Room {uuid}"`, which triggers the browser's native password prompt.
+HTTP Basic Auth. **The username field must be left empty** — enter *only* the password (compared against the room's argon2id hash). The controller itself ignores the username, but Nextcloud core does not: during `OC::init`, `\OC\User\Session::tryBasicAuthLogin()` (called from `base.php`) treats *any* Basic credentials with a **non-empty username** as an attempt to log that user into Nextcloud, and 401s the request before the public share controller ever runs. An empty username is the only case core skips, letting the request reach this endpoint. So a filled-in username doesn't just get ignored — it makes the join fail with a generic 401. On a missing or malformed `Authorization` header, the response is `401 Unauthorized` with `WWW-Authenticate: Basic realm="Room {uuid}"`, which triggers the browser's native password prompt.
 
 #### Brute-force protection
 

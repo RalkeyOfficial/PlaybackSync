@@ -18,6 +18,7 @@
  * arrives through the typed snapshot envelope in `src/messages.ts`.
  */
 
+import type { Runtime } from 'wxt/browser'
 import type {
 	BackgroundToPopup,
 	PopupSnapshot,
@@ -31,7 +32,7 @@ const bodyEl = document.getElementById('body') as HTMLDivElement
 const pillEl = document.getElementById('status-pill') as HTMLSpanElement
 const pillLabelEl = document.getElementById('status-label') as HTMLSpanElement
 
-let port: chrome.runtime.Port | null = null
+let port: Runtime.Port | null = null
 let boundTabId: number | null = null
 let lastSnapshot: PopupSnapshot | null = null
 let leaving = false
@@ -39,19 +40,20 @@ let leaving = false
 void connect()
 
 async function connect(): Promise<void> {
-	const tabs = await chrome.tabs.query({ active: true, currentWindow: true })
+	const tabs = await browser.tabs.query({ active: true, currentWindow: true })
 	const tabId = tabs[0]?.id
 	if (tabId === undefined) {
 		renderPortLost()
 		return
 	}
 	boundTabId = tabId
-	port = chrome.runtime.connect({ name: POPUP_PORT_NAME })
-	port.onMessage.addListener((msg: BackgroundToPopup) => {
-		if (msg.kind !== 'snapshot') return
+	port = browser.runtime.connect({ name: POPUP_PORT_NAME })
+	port.onMessage.addListener((msg: unknown) => {
+		const env = msg as BackgroundToPopup
+		if (env.kind !== 'snapshot') return
 		leaving = false
-		lastSnapshot = msg.snapshot
-		render(msg.snapshot)
+		lastSnapshot = env.snapshot
+		render(env.snapshot)
 	})
 	port.onDisconnect.addListener(() => {
 		// Background torn down (worker idle-out is rare while we're open
@@ -120,11 +122,12 @@ function buildBody(s: PopupSnapshot): DocumentFragment {
 			))
 			break
 		case 'joined':
+			frag.appendChild(buildIdentityRow(s))
 			frag.appendChild(buildCursorBlock(s))
-			if (s.mode) frag.appendChild(buildChips(s.mode))
 			frag.appendChild(buildLeaveButton())
 			break
 		case 'disconnected':
+			if (s.nickname) frag.appendChild(buildIdentity(s.nickname))
 			frag.appendChild(makeCopy(
 				'Disconnected from the room. Reconnecting automatically; use Leave room to discard the credentials.',
 			))
@@ -132,6 +135,45 @@ function buildBody(s: PopupSnapshot): DocumentFragment {
 			break
 	}
 	return frag
+}
+
+/**
+ * Top row of the joined view: the your-identity chip on the left and the mode
+ * chip pushed to the right, sharing one line to keep the popup compact.
+ *
+ * @param s The current snapshot (reads `nickname` and `mode`).
+ */
+function buildIdentityRow(s: PopupSnapshot): HTMLElement {
+	const row = document.createElement('div')
+	row.className = 'identity-row'
+	if (s.nickname) row.appendChild(buildIdentity(s.nickname))
+	if (s.mode) row.appendChild(buildChips(s.mode))
+	return row
+}
+
+/**
+ * Your-identity chip: a dot + "YOU" label + the room nickname. Shown whenever
+ * the nickname is known so you can always see who you are in the room.
+ *
+ * @param nickname The viewer's own server-assigned nickname.
+ */
+function buildIdentity(nickname: string): HTMLElement {
+	const box = document.createElement('div')
+	box.className = 'identity'
+
+	const dot = document.createElement('span')
+	dot.className = 'identity__dot'
+
+	const label = document.createElement('span')
+	label.className = 'identity__label'
+	label.textContent = 'You'
+
+	const name = document.createElement('span')
+	name.className = 'identity__name'
+	name.textContent = nickname
+
+	box.append(dot, label, name)
+	return box
 }
 
 function buildCursorBlock(s: PopupSnapshot): HTMLElement {

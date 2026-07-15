@@ -28,11 +28,13 @@ class MessageEncoder {
 	}
 
 	/**
+	 * @param string $nickname The joining client's own server-assigned nickname. Echoed back so the client can render a self-facing "you joined as …" welcome; the client has no other way to learn its nickname.
 	 * @param list<PlaylistEntry> $playlist Full playlist; used to derive `playlistVersion`.
 	 * @param list<array{type: string, value?: mixed, clientId: string, ts: int, eventId: int}> $recentEvents Tail of playback events the joiner missed on the previous connection.
 	 */
 	public function roomState(
 		string $clientId,
+		string $nickname,
 		PlaybackState $state,
 		?PlaylistEntry $cursorEntry,
 		bool $singleMode,
@@ -44,6 +46,7 @@ class MessageEncoder {
 		$payload = [
 			'type' => 'ROOM_STATE',
 			'clientId' => $clientId,
+			'nickname' => $nickname,
 			'singleMode' => $singleMode,
 			'freeformMode' => $freeformMode,
 			'cursor' => $cursorEntry !== null ? $this->encodeCursor($cursorEntry) : null,
@@ -95,6 +98,36 @@ class MessageEncoder {
 			'type' => 'PLAYLIST_UPDATE',
 			'entries' => array_map(fn (PlaylistEntry $e) => $this->encodePlaylistEntry($e), $entries),
 			'playlistVersion' => self::playlistVersion($entries),
+			'serverTs' => $serverTsMs,
+		]);
+	}
+
+	/**
+	 * `NOTICE` is a display-only, actor-attributed frame broadcast to a
+	 * room's peers so their clients can surface "who did what" toasts
+	 * (e.g. "SwiftFox42 paused", "SwiftFox42 skipped to 12:34"). It is
+	 * deliberately decoupled from the authoritative `STATE` / `CURSOR_CHANGE`
+	 * frames, which stay identity-free — `NOTICE` is the one server→client
+	 * frame that carries a nickname.
+	 *
+	 * The inner discriminant is `event` (not `type`) so it doesn't collide
+	 * with the frame's own `type: 'NOTICE'`. The field vocabulary mirrors the
+	 * event-log envelope built in `RoomRuntime::pushEvent`.
+	 *
+	 * @param string $event play|pause|seek|cursor_change|client_joined|client_left.
+	 * @param string $category playback|presence — the envelope class the event belongs to.
+	 * @param string $actor client|owner|system — origin class of the action.
+	 * @param string|null $actorId Actor nickname (for clients), owner userId (for owner), or null (system).
+	 * @param array<string, mixed>|null $data Event-specific payload: seek `{value}`, cursor_change `{videoRef}`, client_left `{nickname, reason}`.
+	 */
+	public function notice(string $event, string $category, string $actor, ?string $actorId, ?array $data, int $serverTsMs): string {
+		return $this->encode([
+			'type' => 'NOTICE',
+			'event' => $event,
+			'category' => $category,
+			'actor' => $actor,
+			'actorId' => $actorId,
+			'data' => $data,
 			'serverTs' => $serverTsMs,
 		]);
 	}

@@ -61,12 +61,28 @@ class EventHandlerTest extends TestCase {
 
 		$this->handler->handle($connA, $ctx, ['event' => 'play', 'value' => null, 'clientTs' => 0], self::NOW);
 
-		$this->assertCount(1, $framesA, 'sender also receives the STATE');
-		$this->assertCount(1, $framesB);
-		$decoded = json_decode($framesB[0], true);
-		$this->assertSame('STATE', $decoded['type']);
-		$this->assertSame(PlaybackState::PLAYING, $decoded['playerState']);
-		$this->assertSame(1, $decoded['eventId']);
+		// Sender gets only the authoritative STATE echo — never a NOTICE about
+		// its own action.
+		$this->assertCount(1, $framesA, 'sender receives the STATE echo but no self-notice');
+		$this->assertSame('STATE', json_decode($framesA[0], true)['type']);
+
+		// Peer gets the STATE plus a peer-attributed NOTICE.
+		$this->assertCount(2, $framesB, 'peer receives STATE + NOTICE');
+		$byType = [];
+		foreach ($framesB as $f) {
+			$decoded = json_decode($f, true);
+			$byType[$decoded['type']] = $decoded;
+		}
+
+		$this->assertArrayHasKey('STATE', $byType);
+		$this->assertSame(PlaybackState::PLAYING, $byType['STATE']['playerState']);
+		$this->assertSame(1, $byType['STATE']['eventId']);
+
+		$this->assertArrayHasKey('NOTICE', $byType);
+		$this->assertSame('play', $byType['NOTICE']['event']);
+		$this->assertSame('playback', $byType['NOTICE']['category']);
+		$this->assertSame('client', $byType['NOTICE']['actor']);
+		$this->assertSame('NickA', $byType['NOTICE']['actorId'], 'notice is attributed to the sender nickname');
 	}
 
 	public function testRateLimitRejectsBurstWithoutAffectingOthers(): void {

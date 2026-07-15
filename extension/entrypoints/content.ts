@@ -2,7 +2,7 @@
  * Content-script entrypoint. Runs on every adapter host (workshop §2
  * rule 3: unsupported pages stay silent) and bootstraps the adapter
  * runtime with a {@link RuntimeBridge} that forwards every outbound
- * call to the background via `chrome.runtime.sendMessage`. Inbound
+ * call to the background via `browser.runtime.sendMessage`. Inbound
  * `command` messages from the background are routed straight into the
  * runtime, which dispatches them to the active adapter.
  *
@@ -16,12 +16,17 @@
 
 import { deliverCommand, start, type RuntimeBridge } from '@/src/adapters/runtime'
 import { ADAPTER_MATCHES } from '@/src/adapters/host-matches'
+import { initNotifications, showNotice } from '@/src/ui/notifications'
 import type { BackgroundToContent, ContentToBackground } from '@/src/messages'
 
 export default defineContentScript({
 	matches: [...ADAPTER_MATCHES],
 	runAt: 'document_idle',
-	main() {
+	main(ctx) {
+		// Register the on-page notification UI. Lazy: the shadow root only
+		// mounts once the first notice arrives, so pages that never sync pay
+		// nothing.
+		initNotifications(ctx)
 		// Latched once the extension worker has been torn down (typical in
 		// dev: `wxt dev` reload, or any extension reload). Content scripts
 		// outlive their host extension, so the runtime keeps polling
@@ -32,16 +37,16 @@ export default defineContentScript({
 		let contextInvalidated = false
 		const send = (msg: ContentToBackground) => {
 			if (contextInvalidated) return
-			// `chrome.runtime.id` is the canonical "is this script still
+			// `browser.runtime.id` is the canonical "is this script still
 			// attached to a live extension" probe — it goes `undefined` the
 			// moment the worker is gone, before any `sendMessage` call has
 			// a chance to throw.
-			if (!chrome.runtime?.id) {
+			if (!browser.runtime?.id) {
 				contextInvalidated = true
 				return
 			}
 			try {
-				void chrome.runtime.sendMessage(msg).catch(() => {
+				void browser.runtime.sendMessage(msg).catch(() => {
 					// Background worker may be sleeping (MV3); message dropped
 					// is fine until the next event re-wakes it.
 				})
@@ -78,8 +83,12 @@ export default defineContentScript({
 			},
 		}
 
-		chrome.runtime.onMessage.addListener((msg: BackgroundToContent) => {
-			if (msg.kind === 'command') deliverCommand(msg.command)
+		browser.runtime.onMessage.addListener((msg: unknown) => {
+			const m = msg as BackgroundToContent
+			if (m.kind === 'command') deliverCommand(m.command)
+			else if (m.kind === 'notice') showNotice(m.notice)
+			// Fire-and-forget: return undefined so the browser doesn't hold the
+			// message channel open waiting for a sendResponse we never call.
 		})
 
 		void start(bridge)

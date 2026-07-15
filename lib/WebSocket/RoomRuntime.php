@@ -261,6 +261,44 @@ class RoomRuntime {
 	}
 
 	/**
+	 * Fan out a display-only `NOTICE` frame to the room's peers so their
+	 * clients can render a "who did what" toast. The actor is normally
+	 * excluded via `$excludeClientId` — they already receive the
+	 * authoritative `STATE` / `CURSOR_CHANGE` for the same action and must
+	 * not be told about their own move.
+	 *
+	 * Unlike `pushEvent` / `pushEnvelope` this deliberately does NOT touch the
+	 * event-log ring or the SSE stream — it is purely peer notification, so
+	 * the dashboard's log stays the single source of history. The encoder is
+	 * passed in (not injected) to keep `RoomRuntime` a service-free value
+	 * object.
+	 *
+	 * @param MessageEncoder $encoder Builds the wire frame.
+	 * @param string $event play|pause|seek|cursor_change|client_joined|client_left.
+	 * @param string $category playback|presence.
+	 * @param string $actor client|owner|system.
+	 * @param string|null $actorId Actor nickname, owner userId, or null.
+	 * @param array<string, mixed>|null $data Event-specific payload forwarded verbatim on the wire.
+	 * @param int $serverTsMs Server send timestamp (ms epoch).
+	 * @param string|null $excludeClientId Client to skip (usually the actor), or null to send to all.
+	 */
+	public function broadcastNotice(
+		MessageEncoder $encoder,
+		string $event,
+		string $category,
+		string $actor,
+		?string $actorId,
+		?array $data,
+		int $serverTsMs,
+		?string $excludeClientId,
+	): void {
+		$frame = $encoder->notice($event, $category, $actor, $actorId, $data, $serverTsMs);
+		foreach ($this->activeConnectionsExcept($excludeClientId) as $peer) {
+			$peer->send($frame);
+		}
+	}
+
+	/**
 	 * @return list<ConnectionInterface>
 	 */
 	public function activeConnectionsExcept(?string $excludeClientId = null): array {

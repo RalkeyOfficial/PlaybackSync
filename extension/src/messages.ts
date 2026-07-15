@@ -4,7 +4,7 @@ import type {
 	LocalIntent,
 	VideoState,
 } from './adapters/types'
-import type { CursorRef, VideoRefWithMeta } from './background/protocol'
+import type { CursorRef, NoticeEvent, VideoRefWithMeta } from './background/protocol'
 
 /**
  * Discriminated union of every message a content script may send the
@@ -19,9 +19,11 @@ import type { CursorRef, VideoRefWithMeta } from './background/protocol'
  * `currentPos`/`playerState` without an extra round-trip.
  *
  * `credentials` is a one-shot bootstrap message emitted by the dedicated
- * `credentials.content.ts` entrypoint when the page URL carries
- * `?sync_url=…&sync_password=…` (the share-link redirect target produced
- * by `ShareController::buildRedirectUrl` on the PHP side). It is *not*
+ * `credentials.content.ts` entrypoint when the page URL's fragment carries
+ * `#sync_url=…&sync_password=…` (the share-link redirect target produced
+ * by `ShareController::buildRedirectUrl` on the PHP side — the fragment,
+ * not the query string, so a site's server-side redirect can't strip it).
+ * It is *not*
  * adapter-scoped — credential pickup is browser-runtime-global, fires
  * before any adapter has had a chance to match, and may arrive on a page
  * no adapter ever activates on. The background is first-write-wins:
@@ -82,12 +84,45 @@ export type ContentToBackground =
 	| { kind: 'credentials'; syncUrl: string; syncPassword: string }
 
 /**
- * Background → content. Carries authoritative commands the active
- * adapter must apply verbatim. Will grow as the WS client surfaces more
- * server-driven concerns (e.g. room-state hydration for the popup).
+ * Event-specific payload attached to a {@link Notice}. Structurally the same as
+ * the wire-format `NoticeData` (a wire `NoticeData` is assignable to this).
+ */
+export interface NoticeData {
+	/** Seek target position in seconds (`seek`). */
+	value?: number
+	/** New video reference (`cursor_change`) — the label names the video. */
+	videoRef?: { label: string | null } | null
+	/** Actor nickname (`client_left`, where the wire actor is `system`). */
+	nickname?: string
+	/** Disconnect reason (`client_left`). */
+	reason?: string
+}
+
+/**
+ * A display-only notification the content script renders as an on-page toast
+ * (or, for `welcome`, the centered join badge). Most notices originate from a
+ * server `NOTICE` frame; `welcome` is synthesised client-side on the first
+ * `ROOM_STATE` and never crosses the wire.
+ */
+export interface Notice {
+	/** The peer action, or the client-only `welcome`. */
+	event: NoticeEvent | 'welcome'
+	/** Origin class — drives the display name ("Host" for `owner`). */
+	actor?: 'client' | 'owner' | 'system'
+	/** Actor nickname, owner userId, or (for `welcome`) the viewer's own nickname. */
+	actorId?: string | null
+	/** Event-specific payload. */
+	data?: NoticeData | null
+}
+
+/**
+ * Background → content. Carries either an authoritative command the active
+ * adapter must apply verbatim, or a display-only {@link Notice} the content
+ * script renders as an on-page toast / welcome badge.
  */
 export type BackgroundToContent =
 	| { kind: 'command'; command: AuthoritativeCommand }
+	| { kind: 'notice'; notice: Notice }
 
 /**
  * Derived connection state surfaced to the toolbar popup. The popup
@@ -137,6 +172,12 @@ export interface PopupSnapshot {
 	status: PopupStatus
 	/** Server-assigned client id, or `null` before the first `ROOM_STATE`. */
 	clientId: string | null
+	/**
+	 * The viewer's own server-assigned nickname (e.g. `SwiftFox42`), shown in
+	 * the popup so you can always see who you are in the room. `null` before the
+	 * first `ROOM_STATE` (or if an older daemon didn't send one).
+	 */
+	nickname: string | null
 	/** Current cursor entry, or `null` for an empty playlist / pre-JOIN. */
 	cursor: CursorRef | null
 	/** Room playback mode; `null` before the first `ROOM_STATE`. */

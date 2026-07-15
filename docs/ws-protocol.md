@@ -56,6 +56,15 @@ the client disconnects and reconnects within `ws_tombstone_ms` (default
 30 s), passing the same `clientId` lets the server resume the session,
 including replaying any events the client missed.
 
+Each client is also assigned a **nickname** (adjective + animal + digits,
+e.g. `SwiftFox42`). It is returned in `ROOM_STATE.nickname` and — since the
+[playback notifications](#notice) feature — is **broadcast to the room's
+peers** on `NOTICE` frames so clients can render "who did what" toasts. This
+is deliberate: the authoritative `STATE` / `CURSOR_CHANGE` frames stay
+identity-free, and `NOTICE` is the only server→client frame that carries a
+nickname. Nicknames are ephemeral, server-generated, and unlinked to any
+Nextcloud account — there is no user-chosen username.
+
 ---
 
 ## Client → server messages
@@ -297,6 +306,7 @@ Sent immediately after a successful `JOIN` and again after every
 {
   "type": "ROOM_STATE",
   "clientId": "5c4df08c5b4a4e2d8f3aab0c0123abcd",
+  "nickname": "SwiftFox42",
   "singleMode": false,
   "freeformMode": false,
   "cursor": {
@@ -318,6 +328,11 @@ Sent immediately after a successful `JOIN` and again after every
 }
 ```
 
+- `nickname` is the client's own server-assigned nickname (adjective +
+  animal + digits, e.g. `SwiftFox42`). It is echoed back so the client can
+  render a self-facing "you joined as …" message — the client has no other
+  way to learn its nickname. The same nickname appears as `actorId` on the
+  peer-facing `NOTICE` frames below.
 - `cursor` is `null` when the room's playlist is empty (e.g. an
   unscraped default-mode room before the first joiner, or a fresh
   freeform room).
@@ -466,6 +481,66 @@ Suppressed entirely while the client is `buffering` and during the
 (`toggle_conflict` and `cursor_locked_entry` only surface via the HTTP
 API — see [`api.md`](api.md). They cannot be triggered through the WS
 wire because the corresponding mutations aren't WS-exposed.)
+
+### `NOTICE`
+
+A **display-only** frame broadcast to a room's peers so their clients can
+surface "who did what" toasts (e.g. "SwiftFox42 paused"). It is deliberately
+decoupled from the authoritative `STATE` / `CURSOR_CHANGE` frames — those
+carry no identity — and is the only server→client frame that carries a
+nickname. A `NOTICE` never affects playback state; a client that ignores it
+loses nothing but the toast.
+
+The **actor is excluded** from their own `NOTICE`: the client that paused
+gets the `STATE` echo, not a "you paused" toast. The self-facing "welcome"
+message is client-only (derived from `ROOM_STATE.nickname`) and is **not**
+sent over the wire.
+
+```json
+{
+  "type": "NOTICE",
+  "event": "seek",
+  "category": "playback",
+  "actor": "client",
+  "actorId": "SwiftFox42",
+  "data": { "value": 754.0 },
+  "serverTs": 1700000000000
+}
+```
+
+- `event` — the inner discriminant (named `event`, not `type`, so it doesn't
+  collide with the frame's own `type: "NOTICE"`): one of `play`, `pause`,
+  `seek`, `cursor_change`, `client_joined`, `client_left`.
+- `category` — `playback` (`play`/`pause`/`seek`/`cursor_change`) or
+  `presence` (`client_joined`/`client_left`).
+- `actor` — `client` (a viewer), `owner` (a dashboard-driven change; render
+  as "Host"), or `system` (server-originated, e.g. a disconnect).
+- `actorId` — the actor nickname for `client`, the Nextcloud userId for
+  `owner`, or `null` for `system`.
+- `data` — event-specific, or `null`:
+
+  | `event` | `data` |
+  |---|---|
+  | `play`, `pause` | `null` |
+  | `seek` | `{ "value": <seconds:float> }` — the seek target |
+  | `cursor_change` | `{ "videoRef": { "label": "Episode 5", ... } }` — the new video |
+  | `client_joined` | `{ "nickname": "SwiftFox42" }` |
+  | `client_left` | `{ "nickname": "SwiftFox42", "reason": "closed" }` (actor is `system`) |
+
+Only the events above emit a `NOTICE`. `playlist_update`, `reset`, buffering,
+and clock frames deliberately do not — they aren't user-legible actions.
+
+---
+
+## Sequence: another client pauses → peers get a NOTICE
+
+```
+A (paused)        server            B (peer)
+|--EVENT{pause}--->|                 |
+|<-STATE{paused}---|                 |   (echo to A — no NOTICE for A)
+|                  |--STATE{paused}->|
+|                  |--NOTICE{event:pause, actorId:"SwiftFox42"}->|   (B shows "SwiftFox42 paused")
+```
 
 ---
 

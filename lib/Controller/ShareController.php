@@ -88,9 +88,16 @@ class ShareController extends Controller {
 	 * Extract the password from a `Basic` Authorization header.
 	 *
 	 * Returns `null` for a missing, non-Basic, or otherwise unparseable header.
-	 * Username is intentionally ignored to match the OLD_CODE behaviour and to
-	 * accommodate browsers that strip user info from URLs. Splitting on the
-	 * first `:` keeps passwords containing colons intact.
+	 * Splitting on the first `:` keeps passwords containing colons intact.
+	 *
+	 * This method reads only the password half and doesn't look at the username,
+	 * but that does NOT mean callers may send a non-empty username: Nextcloud
+	 * core (`\OC\User\Session::tryBasicAuthLogin()`, invoked from `base.php`
+	 * during `OC::init`) treats any Basic credentials whose username is
+	 * non-empty as a Nextcloud login attempt and 401s the request before this
+	 * public controller runs. Only an empty username reaches here. Visitors must
+	 * therefore leave the username blank and enter only the room password — see
+	 * the note in `docs/api.md` (Public share endpoint).
 	 */
 	private function extractBasicPassword(string $authHeader): ?string {
 		if ($authHeader === '' || !str_starts_with($authHeader, 'Basic ')) {
@@ -114,9 +121,18 @@ class ShareController extends Controller {
 	/**
 	 * Build the post-auth redirect URL.
 	 *
-	 * Merges `sync_url` (the WebSocket URL the daemon answers on) and
+	 * Encodes `sync_url` (the WebSocket URL the daemon answers on) and
 	 * `sync_password` (the plaintext just verified) into the target URL's
-	 * query string, preserving any existing parameters and the fragment.
+	 * **fragment**, leaving its query string and path untouched.
+	 *
+	 * The fragment — not the query — is deliberate: a fragment is never sent to
+	 * the streaming site's server, so a server-side canonicalising redirect
+	 * (e.g. miruro rewriting a slug-less `/watch/<id>` to its slugged form)
+	 * cannot strip the credentials, and browsers re-attach the original
+	 * fragment across a redirect whose `Location` carries none (RFC 7231
+	 * §7.1.2). It also means the room password never reaches the streaming
+	 * site's servers at all. The page's `credentials.content.ts` reads them
+	 * back from `location.hash` at `document_start`.
 	 */
 	private function buildRedirectUrl(string $bootstrapUrl, string $uuid, string $password): string {
 		$wsUrl = $this->buildWebSocketUrl($uuid);
@@ -125,17 +141,15 @@ class ShareController extends Controller {
 		if ($parts === false) {
 			// Defensive: bootstrapUrl was validated at room-creation time, so
 			// reaching here would mean the row is corrupt. Fall back to the
-			// raw URL with the params appended — better than 500ing.
+			// raw URL with the fragment appended — better than 500ing.
 			$parts = ['path' => $bootstrapUrl];
 		}
 
-		$existing = [];
-		if (isset($parts['query']) && $parts['query'] !== '') {
-			parse_str($parts['query'], $existing);
-		}
-		$existing['sync_url'] = $wsUrl;
-		$existing['sync_password'] = $password;
-		$parts['query'] = http_build_query($existing);
+		$creds = http_build_query(['sync_url' => $wsUrl, 'sync_password' => $password]);
+		// A streaming watch URL carrying a meaningful fragment is not expected,
+		// but preserve one non-destructively rather than clobbering it.
+		$existingFragment = $parts['fragment'] ?? '';
+		$parts['fragment'] = $existingFragment !== '' ? $existingFragment . '&' . $creds : $creds;
 
 		return $this->reassembleUrl($parts);
 	}

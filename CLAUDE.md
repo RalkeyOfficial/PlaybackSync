@@ -20,6 +20,10 @@ A Nextcloud app for synchronized video playback across groups.
 - **Use camelCase prop names** in templates (`:inputLabel`, `:helperText`) — eslint-plugin-vue is configured to flag hyphenated forms (`:input-label`) as errors.
 - **Localize every user-facing string.** Wrap with `t('playbacksync', '…')` and add the key to **both** `l10n/en.js` and `l10n/nl.js` in the same change. Provide a real Dutch translation, not a copy of the English. Drop keys that no longer have a referrer in `src/`.
 
+## Browser Extension (WXT)
+
+The extension under `extension/` is built with WXT and ships to both Chrome and Firefox from one codebase. Before touching anything under `extension/entrypoints/` or `extension/src/`, read the rules in @extension/WXT-AND-BROWSERS.md — use `browser.*` (never `chrome.*`), Chrome=MV3 / Firefox=MV2 (don't force a global `manifestVersion`), write manifest-version-agnostic code, and build both targets before committing.
+
 ## Old Code
 
 This is a refactor / recode of the old (incomplete) version of this project to become a nextcloud app instead of a standalone app. Old code, alongside documentation, can be read in `./OLD_CODE`, which may give proper insight.

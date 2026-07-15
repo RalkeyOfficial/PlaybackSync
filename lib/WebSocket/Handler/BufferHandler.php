@@ -55,6 +55,7 @@ class BufferHandler {
 
 		$conn->send($this->encoder->roomState(
 			$client->clientId,
+			$client->nickname,
 			$runtime->state,
 			$runtime->cursorEntry(),
 			$runtime->singleMode,

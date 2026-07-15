@@ -87,5 +87,20 @@ class EventHandler {
 		// Echo back to sender too, so all clients converge on the same state
 		// and the sender's own pendingEventId tracking stays consistent.
 		$conn->send($frame);
+
+		// Peer notification: tell everyone *but* the actor who did what. Seek
+		// carries the target position so the toast can read "skipped to 12:34";
+		// play/pause need no data. The actor is excluded — they get the STATE
+		// echo above, not a "you paused" toast about their own action.
+		$runtime->broadcastNotice(
+			$this->encoder,
+			$payload['event'],
+			'playback',
+			'client',
+			$client->nickname,
+			$payload['event'] === 'seek' ? ['value' => $payload['value'] ?? 0.0] : null,
+			$nowMs,
+			$ctx->clientId,
+		);
 	}
 }

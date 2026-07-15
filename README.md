@@ -108,7 +108,7 @@ See [extension/README.md](extension/README.md) for development builds (HMR), the
 
 1. **Create a room.** A user creates a room in the Nextcloud UI and pastes the video URL. The dialog shows a one-time password and a share link — the password is **never** shown again.
 2. **Share it.** Send the link + password to whoever you're watching with. Everyone needs the browser extension installed.
-3. **Join.** Each participant opens the share link, enters the password, and lands on the video. The extension picks up the credentials from the link, connects to the daemon, and from then on play/pause/seek stays in sync for everyone in the room.
+3. **Join.** Each participant opens the share link and, at the browser's login prompt, enters the password while **leaving the username field empty**, then lands on the video. The extension picks up the credentials from the link, connects to the daemon, and from then on play/pause/seek stays in sync for everyone in the room.
 
 ---
 

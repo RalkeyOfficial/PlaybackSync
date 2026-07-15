@@ -16,8 +16,14 @@ The popup is scoped to a single tab: on connect it derives the active tab via `c
 |--------|------|------|
 | `no_credentials` | No creds in this tab's `pbsync.tab.<tabId>` slot | Header + grey "No room" pill + guidance copy ("Open a share link…") |
 | `connecting` | Creds present, socket opening or `ROOM_STATE` not yet received | Amber "Connecting" pill + "Connecting to `<host>`…" copy |
-| `joined` | `ROOM_STATE` applied; `clientId` is set | Green "Joined" pill + cursor block (provider · label, page URL link) + mode chip + Leave Room button |
-| `disconnected` | Creds present, socket dropped — **reconnect-pending only** (transient drop, backoff in progress) | Red "Offline" pill + "Reconnecting automatically…" copy + Leave Room button |
+| `joined` | `ROOM_STATE` applied; `clientId` is set | Green "Joined" pill + a top row pairing the your-identity chip ("You · `<nickname>`") on the left with the mode chip on the right + cursor block (provider · label, page URL link) + Leave Room button |
+| `disconnected` | Creds present, socket dropped — **reconnect-pending only** (transient drop, backoff in progress) | Red "Offline" pill + your-identity chip + "Reconnecting automatically…" copy + Leave Room button |
+
+The **your-identity chip** shows the server-assigned nickname (e.g. `SwiftFox42`)
+carried on `ROOM_STATE.nickname`, so you can always see who you are in the room.
+It renders whenever the nickname is known (`joined` and reconnecting
+`disconnected`); it's omitted before the first `ROOM_STATE` or against an older
+daemon that doesn't send one.
 
 The cursor block reads:
 
@@ -70,6 +76,7 @@ interface PopupSnapshot {
   tabId: number | null             // null only for the no-creds placeholder
   status: PopupStatus              // derived in the background
   clientId: string | null
+  nickname: string | null          // your own nickname, from ROOM_STATE.nickname
   cursor: CursorRef | null         // from session.cursor
   mode: 'default' | 'single' | 'freeform' | null
   syncUrl: string | null           // password NEVER included

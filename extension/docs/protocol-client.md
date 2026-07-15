@@ -58,6 +58,8 @@ Exponential backoff with a hard cap: `1 s, 2 s, 4 s, 8 s, 16 s, 30 s`. After six
 
 Importantly the cap is **inside the 30 s tombstone window**, so any reconnect that succeeds carries the same `clientId` + `lastEventId` and gets a clean replay.
 
+A backend that's down or unreachable is an expected connectivity condition, not an extension fault, so none of the connection-failure paths use `console.error` (which Chrome collects on the extensions page and badges the extension as broken): a failed handshake, giving up after the backoff cap, and even a synchronous `new WebSocket()` throw on a malformed sync URL (treated as a terminal close) all log at `warn` or below. `console.error` / uncaught throws are reserved for genuine extension malfunctions.
+
 Close reasons that *stop* the reconnect loop (the daemon already told us "don't bother retrying"):
 
 | Code | Meaning |
@@ -122,10 +124,12 @@ The daemon **broadcasts STATE to every connection including the sender** (see [`
 
 To stop the echo:
 
-1. The entrypoint calls `session.recordCommand(tabId, cmd)` immediately before `chrome.tabs.sendMessage` ships the command.
-2. The next intent of the matching type arriving within 600 ms is dropped silently (`shouldSuppress`).
+1. The entrypoint calls `session.recordCommand(tabId, cmd)` immediately before `chrome.tabs.sendMessage` ships the command. For a `seek` the recorded slot also stores the command's target position (`RecentCommand.time`).
+2. A matching intent arriving within 600 ms is dropped silently (`shouldSuppress`).
 
 600 ms covers the round-trip + browser event-fire delay. The window is short enough that real user actions don't get eaten — a person can't physically click play, then click pause, in under 600 ms with intent.
+
+**Seek is position-aware.** `play`/`pause` match on kind alone, but a seek slot only suppresses a seek intent whose position is within `SEEK_ECHO_TOLERANCE_S` (1 s) of the recorded target. The echo of an applied seek lands *at* the command's target, so it's caught; a genuine user skip goes somewhere else and passes through. Without this, rapid skips broke: the daemon's STATE echo of skip #1 armed a kind-only seek slot that then swallowed the user's skip #2 (a different position) if it landed inside the 600 ms window. Arrow-key skips jump ~5 s, comfortably clear of the 1 s tolerance.
 
 `nudge_rate` commands arm no suppression slot — they don't produce a `seeking` event, only a `ratechange` event, and no adapter listens to that.
 
@@ -147,7 +151,7 @@ The window is armed at two points: once per connection (after the initial JOIN c
 
 ### Reset on (re)connection
 
-`resetConvergence(session)` clears `converged` and `settleUntil` on every WS `openSocket` (so a reconnect onto the same tab has to be re-converged by the fresh `ROOM_STATE` before its intents are allowed to flow). On `leave_room` / `chrome.tabs.onRemoved` / adapter `fail`, the entire session is dropped from the entrypoint's `Map<tabId, SessionState>` together with the runtime — no per-field cleanup needed.
+`resetConnectionState(session)` runs on every WS `openSocket` — it clears the transient `converged` / `settleUntil` **and** the connection-scoped `everConverged` latch and `pendingCursorTarget` (see [§Viewer-driven cursor changes](#viewer-driven-cursor-changes)), so a reconnect onto the same tab is re-steered from scratch by the fresh `ROOM_STATE` before its intents flow. (The mid-session `resetConvergence`, used by a cursor forward and the inbound `CURSOR_CHANGE` arm, resets only the transient pair — it deliberately leaves the latch and pending target alone.) On `leave_room` / `chrome.tabs.onRemoved` / adapter `fail`, the entire session is dropped from the entrypoint's `Map<tabId, SessionState>` together with the runtime — no per-field cleanup needed.
 
 ## Buffer transitions
 
@@ -187,7 +191,8 @@ The cursor-trigger path above only fires on the in-page controls the adapter's D
 
 The guard:
 
-- **Only acts on armed tabs**, in default/single mode, with a cursor, **after** the join has converged and the settle window elapsed (it stays out of join-time steering, which the server owns via unicast `CURSOR_CHANGE`), and skips while a reload is already pending.
+- **Only acts on armed tabs**, in default/single mode, with a cursor, **after the tab has converged at least once on this connection** (`hasEverConverged`), and skips while a reload is already pending. It gates on the `everConverged` *latch*, not the transient `converged` / settle window: staying out of the *initial* join-steering (which the server owns via unicast `CURSOR_CHANGE`) is the goal, but a mid-session cursor change deliberately un-converges the tab for playback-echo suppression — and on a fast round-trip re-converges into a fresh settle window before the next nav's debounce fires — so gating on transient convergence would swallow a genuine rapid change to another episode. The latch is set once by the first `markConverged` and cleared only on (re)connect.
+- **Loop-stops against the *effective* cursor**, not the confirmed one. `session.cursor` only advances when the server's `CURSOR_CHANGE` broadcast lands, so during a round-trip it lags behind where the user actually is. `forwardCursorChangeFromNav` records the forwarded target in `SessionState.pendingCursorTarget`, and `effectiveCursorVideoId` returns `pendingCursorTarget ?? cursor.videoId`. Both loop-stops (arm-side and post-debounce) compare against that. This is what fixes rapid ep1 → ep2 → back-to-ep1: while ep2 is round-tripping the effective cursor is ep2, so the return to ep1 is a genuine change (forwarded) rather than being mistaken for the stale confirmed cursor (still ep1) and dropped. Pending is cleared when the matching broadcast confirms it (`applyCursorChange`), on ROOM_STATE, on reconnect, and by the ~3 s `CURSOR_REQUEST_CONVERGE_FALLBACK_MS` fallback if the broadcast never arrives.
 - **Matches by video identity, not URL string.** `isRoomUrl` resolves the live URL through the active adapter's pure `videoIdForUrl` matcher (registered in `src/adapters/url-matchers.ts`) and compares the resulting `videoId` against the cursor + playlist. A `null` id (wrong site, home, search) counts as off-playlist. The background imports the matcher registry without pulling in the DOM-bound adapter class.
 - **Debounces (`NAV_GUARD_DEBOUNCE_MS` = 300 ms) then re-checks the live URL** via `chrome.tabs.get`. On an off-list episode *click* both paths fire (DOM synth-click + URL change); the live re-check lets the synth-click win the race — if the tab is already back on an in-playlist page the guard does nothing. Non-click departures have no synth-click, so the guard hard-navigates.
 - **Does not close the socket.** The pull-back is a `chrome.tabs.update` reload; the WS survives it. To stop the reloaded player's autoplay + resume-seek leaking, the guard re-runs the join grace period in place: `resetConvergence` un-converges, and `SessionState.awaitingReload` holds convergence off (suppressing `markConverged` even against server frames mid-reload) until the reloaded page reports the **cursor's** identity — at which point the `identity` route clears the flag and `markConverged`s, arming a fresh settle window. `GUARD_RELOAD_CONVERGE_FALLBACK_MS` (4 s) un-strands a tab whose reload never reports the cursor. Because no socket closes, the room sees no `client_left` / `client_joined` flap.

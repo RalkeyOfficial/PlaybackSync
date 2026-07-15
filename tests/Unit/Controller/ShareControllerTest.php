@@ -161,7 +161,7 @@ class ShareControllerTest extends TestCase {
 
 	// ─── 302: success cases ──────────────────────────────────────────────
 
-	public function testValidPasswordRedirectsWithSyncParamsOnSimpleTarget(): void {
+	public function testValidPasswordRedirectsWithSyncCredsInFragmentOnSimpleTarget(): void {
 		$this->rooms->method('getActiveRoom')->willReturn($this->makeRoom('https://video.example/watch'));
 		$this->rooms->method('verifyPassword')->willReturn(true);
 		$this->withAuthHeader(self::basic('', self::PASSWORD));
@@ -172,17 +172,18 @@ class ShareControllerTest extends TestCase {
 		$this->assertSame(Http::STATUS_FOUND, $response->getStatus());
 
 		$location = $response->getRedirectURL();
-		$this->assertStringStartsWith('https://video.example/watch?', $location);
+		// Credentials ride the fragment, not the query; the target has no query here.
+		$this->assertStringStartsWith('https://video.example/watch#', $location);
 
-		$query = $this->queryOf($location);
+		$fragment = $this->fragmentOf($location);
 		$this->assertSame(
 			'wss://cloud.example/apps/playbacksync/ws/' . self::UUID,
-			$query['sync_url'] ?? null,
+			$fragment['sync_url'] ?? null,
 		);
-		$this->assertSame(self::PASSWORD, $query['sync_password'] ?? null);
+		$this->assertSame(self::PASSWORD, $fragment['sync_password'] ?? null);
 	}
 
-	public function testRedirectMergesIntoExistingTargetQuery(): void {
+	public function testRedirectPreservesExistingQueryAndPutsCredsInFragment(): void {
 		$this->rooms->method('getActiveRoom')->willReturn(
 			$this->makeRoom('https://video.example/watch?v=abc&t=10'),
 		);
@@ -190,18 +191,25 @@ class ShareControllerTest extends TestCase {
 		$this->withAuthHeader(self::basic('', self::PASSWORD));
 
 		$response = $this->controller->show(self::UUID);
-		$query = $this->queryOf($response->getRedirectURL());
+		$location = $response->getRedirectURL();
 
+		// The target's own query is preserved verbatim and gains no sync params.
+		$query = $this->queryOf($location);
 		$this->assertSame('abc', $query['v'] ?? null);
 		$this->assertSame('10', $query['t'] ?? null);
+		$this->assertArrayNotHasKey('sync_url', $query);
+		$this->assertArrayNotHasKey('sync_password', $query);
+
+		// The credentials live in the fragment instead.
+		$fragment = $this->fragmentOf($location);
 		$this->assertSame(
 			'wss://cloud.example/apps/playbacksync/ws/' . self::UUID,
-			$query['sync_url'] ?? null,
+			$fragment['sync_url'] ?? null,
 		);
-		$this->assertSame(self::PASSWORD, $query['sync_password'] ?? null);
+		$this->assertSame(self::PASSWORD, $fragment['sync_password'] ?? null);
 	}
 
-	public function testRedirectPreservesFragment(): void {
+	public function testRedirectPreservesExistingFragmentAlongsideCreds(): void {
 		$this->rooms->method('getActiveRoom')->willReturn(
 			$this->makeRoom('https://video.example/watch#chap1'),
 		);
@@ -211,9 +219,15 @@ class ShareControllerTest extends TestCase {
 		$response = $this->controller->show(self::UUID);
 		$location = $response->getRedirectURL();
 
-		$this->assertStringEndsWith('#chap1', $location);
-		// Fragment must come after the merged query, not get clobbered by it.
-		$this->assertMatchesRegularExpression('~\?[^#]+#chap1$~', $location);
+		// The pre-existing fragment token is kept, with the creds appended after it.
+		$this->assertStringContainsString('#chap1&', $location);
+		$fragment = $this->fragmentOf($location);
+		$this->assertArrayHasKey('chap1', $fragment);
+		$this->assertSame(
+			'wss://cloud.example/apps/playbacksync/ws/' . self::UUID,
+			$fragment['sync_url'] ?? null,
+		);
+		$this->assertSame(self::PASSWORD, $fragment['sync_password'] ?? null);
 	}
 
 	public function testHttpUrlGeneratorYieldsWsScheme(): void {
@@ -227,11 +241,11 @@ class ShareControllerTest extends TestCase {
 		$this->withAuthHeader(self::basic('', self::PASSWORD));
 
 		$response = $controller->show(self::UUID);
-		$query = $this->queryOf($response->getRedirectURL());
+		$fragment = $this->fragmentOf($response->getRedirectURL());
 
 		$this->assertSame(
 			'ws://cloud.example/apps/playbacksync/ws/' . self::UUID,
-			$query['sync_url'] ?? null,
+			$fragment['sync_url'] ?? null,
 		);
 	}
 
@@ -246,9 +260,9 @@ class ShareControllerTest extends TestCase {
 		$this->withAuthHeader(self::basic('', $pwd));
 
 		$response = $this->controller->show(self::UUID);
-		$query = $this->queryOf($response->getRedirectURL());
+		$fragment = $this->fragmentOf($response->getRedirectURL());
 
-		$this->assertSame($pwd, $query['sync_password'] ?? null);
+		$this->assertSame($pwd, $fragment['sync_password'] ?? null);
 	}
 
 	public function testUsernameInBasicAuthIsIgnored(): void {
@@ -279,6 +293,24 @@ class ShareControllerTest extends TestCase {
 		}
 		$out = [];
 		parse_str($queryString, $out);
+		/** @var array<string, string> $out */
+		return $out;
+	}
+
+	/**
+	 * Parse the fragment of a URL into an associative array. The credentials
+	 * are `http_build_query`-encoded there, so the same `parse_str` decoding
+	 * as {@see queryOf} applies.
+	 *
+	 * @return array<string, string>
+	 */
+	private function fragmentOf(string $url): array {
+		$fragment = parse_url($url, PHP_URL_FRAGMENT);
+		if (!is_string($fragment)) {
+			return [];
+		}
+		$out = [];
+		parse_str($fragment, $out);
 		/** @var array<string, string> $out */
 		return $out;
 	}

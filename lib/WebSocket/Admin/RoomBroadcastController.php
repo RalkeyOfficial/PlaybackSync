@@ -118,6 +118,20 @@ class RoomBroadcastController {
 			$peerConn->send($frame);
 		}
 
+		// Peer notification for the host-driven change ("Host changed the video
+		// to <label>"). The owner acts via the loopback bridge and has no WS
+		// connection, so there is no actor to exclude.
+		$runtime->broadcastNotice(
+			$this->encoder,
+			'cursor_change',
+			'playback',
+			'owner',
+			$ownerUserId,
+			['videoRef' => self::videoRefOf($cursor)],
+			$nowMs,
+			null,
+		);
+
 		$runtime->pushEnvelope([
 			'ts' => $nowMs,
 			'type' => 'cursor_change',

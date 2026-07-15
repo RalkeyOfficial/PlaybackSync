@@ -39,10 +39,12 @@ import {
 	applyState,
 	applySyncAdjust,
 	markConverged,
+	resetConnectionState,
 	resetConvergence,
 	startClockPing,
 } from './session'
 import { saveClientId, type PbSyncCreds } from './storage'
+import { log as bgLog, type LogLevel } from './log'
 import { getTab } from './tabs'
 import {
 	notifyConnecting,
@@ -52,6 +54,7 @@ import {
 	notifyRoomStateChanged,
 } from './popupBroadcast'
 import type { AuthoritativeCommand } from '@/src/adapters/types'
+import type { Notice } from '@/src/messages'
 
 /** Close codes whose meaning is "give up, don't reconnect". */
 const TERMINAL_ERROR_CODES = new Set([
@@ -102,6 +105,12 @@ const FIRST_JOIN_DEFERRAL_MS = 3_000
 export interface WsCallbacks {
 	/** Deliver an authoritative command to this runtime's tab. */
 	dispatchCommand(cmd: AuthoritativeCommand): void
+	/**
+	 * Deliver a display-only notice (peer action or self "welcome") to this
+	 * runtime's tab for rendering as an on-page toast. Fire-and-forget —
+	 * ignored if the tab has no content script listening.
+	 */
+	dispatchNotice(notice: Notice): void
 	/** Surface a fatal protocol/connection error for logging. */
 	onTerminal(reason: string, code: string | null): void
 	/**
@@ -158,6 +167,13 @@ interface WsRuntime {
 	 * — `currentlyShowing` / `catalogFragment` are first-JOIN-only.
 	 */
 	firstJoinSent: boolean
+	/**
+	 * Whether the self-facing "welcome" notice has been emitted for this
+	 * runtime. Latched on the first `ROOM_STATE` so a reconnect (which
+	 * re-sends `ROOM_STATE`) doesn't re-trigger the welcome badge — it
+	 * fires once per join session, not once per socket.
+	 */
+	welcomeShown: boolean
 }
 
 const pool = new Map<number, WsRuntime>()
@@ -200,6 +216,7 @@ export function connect(tabId: number, creds: PbSyncCreds, session: SessionState
 		catalogReported: false,
 		pendingJoinDeadline: null,
 		firstJoinSent: false,
+		welcomeShown: false,
 	}
 	pool.set(tabId, r)
 	openSocket(r)
@@ -240,6 +257,9 @@ export function sendEvent(tabId: number, intent: { type: 'play' | 'pause' | 'see
 	const frame: OutboundFrame = intent.type === 'seek'
 		? { type: 'EVENT', event: 'seek', value: intent.time, clientTs: nowMs() }
 		: { type: 'EVENT', event: intent.type, clientTs: nowMs() }
+	log('info', `EVENT sent: ${intent.type}`, {
+		tabId, ...(intent.type === 'seek' ? { pos: intent.time } : {}),
+	})
 	send(r, frame)
 }
 
@@ -261,6 +281,8 @@ export function sendEvent(tabId: number, intent: { type: 'play' | 'pause' | 'see
 export function sendCursorChangeRequest(tabId: number, target: VideoRefWithMeta): void {
 	const r = pool.get(tabId)
 	if (!r?.socket || r.socket.readyState !== WebSocket.OPEN) return
+	// The nav layer logs the *decision* at info; this confirms the wire send.
+	log('debug', 'CURSOR_CHANGE_REQUEST sent', { tabId, videoId: target.videoId })
 	send(r, { type: 'CURSOR_CHANGE_REQUEST', target, clientTs: nowMs() })
 }
 
@@ -333,6 +355,7 @@ export function sendPlaylistUpdate(
 export function sendBuffer(tabId: number, kind: 'BUFFER_START' | 'BUFFER_END', videoPos: number): void {
 	const r = pool.get(tabId)
 	if (!r?.socket || r.socket.readyState !== WebSocket.OPEN) return
+	log('info', `${kind} sent`, { tabId, pos: videoPos })
 	send(r, { type: kind, videoPos })
 }
 
@@ -340,11 +363,30 @@ export function sendBuffer(tabId: number, kind: 'BUFFER_START' | 'BUFFER_END', v
 
 function openSocket(r: WsRuntime): void {
 	log('info', 'connecting', { tabId: r.tabId, url: redactUrl(r.creds.syncUrl) })
-	// Each connection re-gates: the tab has to be re-converged by the
-	// fresh ROOM_STATE before its intents flow again.
-	resetConvergence(r.session)
+	// Each connection re-gates from scratch: the tab has to be re-steered by the
+	// fresh ROOM_STATE before its intents flow again, and any cursor change that
+	// was in flight on the dead socket is void.
+	resetConnectionState(r.session)
 	notifyConnecting(r.tabId, r.creds.syncUrl)
-	const socket = new WebSocket(r.creds.syncUrl)
+	// A failed handshake (e.g. server down → 503) makes Chromium print its own
+	// "WebSocket connection failed" line here — browser noise we can't catch or
+	// suppress. The failure is handled via the error/close listeners below; the
+	// try/catch only guards synchronous construction (malformed URL).
+	let socket: WebSocket
+	try {
+		socket = new WebSocket(r.creds.syncUrl)
+	} catch (e) {
+		// Malformed sync URL: dead creds, not an extension bug. Treat as a
+		// terminal close so it wipes creds instead of throwing uncaught.
+		log('warn', 'WebSocket construction failed; treating as terminal', {
+			tabId: r.tabId,
+			reason: e instanceof Error ? e.message : String(e),
+		})
+		r.terminated = true
+		pool.delete(r.tabId)
+		r.cb.onTerminal('invalid sync url', null)
+		return
+	}
 	r.socket = socket
 
 	socket.addEventListener('open', () => onOpen(r))
@@ -517,7 +559,7 @@ function scheduleReconnect(r: WsRuntime): void {
 	const delay = RECONNECT_BACKOFF_MS[idx]
 	r.reconnectAttempt += 1
 	if (r.reconnectAttempt > RECONNECT_BACKOFF_MS.length + 1) {
-		log('error', 'giving up after repeated reconnect failures', { tabId: r.tabId })
+		log('warn', 'giving up after repeated reconnect failures', { tabId: r.tabId })
 		r.terminated = true
 		pool.delete(r.tabId)
 		r.cb.onTerminal('reconnect exhausted', null)
@@ -539,14 +581,28 @@ function handleFrame(r: WsRuntime, frame: InboundFrame): void {
 				void saveClientId(r.tabId, frame.clientId)
 			}
 			dispatchToOwner(r, applyRoomState(r.session, frame))
+			log('info', 'ROOM_STATE applied', {
+				tabId: r.tabId, cursor: r.session.cursor?.videoId ?? null,
+				mode: r.session.mode, playerState: frame.playerState, pos: frame.videoPos,
+			})
+			// Self-facing welcome: fired once per join session (latched), not on
+			// every reconnect ROOM_STATE. Derived entirely client-side from the
+			// frame — the server never sends a welcome notice.
+			if (!r.welcomeShown) {
+				r.welcomeShown = true
+				r.cb.dispatchNotice({ event: 'welcome', actorId: frame.nickname })
+			}
 			notifyRoomStateChanged(r.tabId)
 			r.cb.onLifecycleChange?.()
 			return
 		}
 		case 'STATE':
 			dispatchToOwner(r, applyState(r.session, frame))
+			log('info', 'STATE applied', {
+				tabId: r.tabId, playerState: frame.playerState, pos: frame.videoPos, eventId: frame.eventId,
+			})
 			return
-		case 'CURSOR_CHANGE':
+		case 'CURSOR_CHANGE': {
 			// Re-arm the join settle window: miruro (and similar players) auto-
 			// restore the viewer's last position on the new episode shortly
 			// after the source loads, which the adapter would otherwise observe
@@ -555,14 +611,23 @@ function handleFrame(r: WsRuntime, frame: InboundFrame): void {
 			// `markConverged` inside `dispatchToOwner` flips it back on and
 			// arms a fresh settle window — matching exactly the pattern that
 			// already covers JOIN-time auto-resume.
+			const from = r.session.cursor?.videoId ?? null
 			resetConvergence(r.session)
 			dispatchToOwner(r, applyCursorChange(r.session, frame))
+			log('info', 'CURSOR_CHANGE applied', { tabId: r.tabId, from, to: frame.cursor.videoId })
 			notifyCursorChanged(r.tabId)
 			return
+		}
 		case 'PLAYLIST_UPDATE':
 			applyPlaylistUpdate(r.session, frame)
+			log('info', 'PLAYLIST_UPDATE applied', { tabId: r.tabId, entries: frame.entries.length })
 			return
 		case 'SYNC_ADJUST':
+			// A `seek` adjust is a real jump worth seeing; `nudge-rate` is a
+			// continuous drift trim, so it stays at debug to avoid flooding.
+			log(frame.mode === 'seek' ? 'info' : 'debug', `SYNC_ADJUST applied: ${frame.mode}`, {
+				tabId: r.tabId, targetPos: frame.targetPos,
+			})
 			dispatchToOwner(r, applySyncAdjust(r.session, frame))
 			return
 		case 'CLOCK_PONG': {
@@ -570,8 +635,22 @@ function handleFrame(r: WsRuntime, frame: InboundFrame): void {
 			const t4 = nowMs()
 			r.pendingPings.delete(t1)
 			applyClockPong(r.session, t1, frame.serverRecvTime, frame.serverSendTime, t4)
+			bgLog('sync', 'debug', 'CLOCK_PONG', {
+				tabId: r.tabId, offsetMs: Math.round(r.session.serverClockOffsetMs),
+			})
 			return
 		}
+		case 'NOTICE':
+			// Display-only peer notification — forward verbatim to the content
+			// script's toast layer. Never touches session/playback state.
+			r.cb.dispatchNotice({
+				event: frame.event,
+				actor: frame.actor,
+				actorId: frame.actorId,
+				data: frame.data,
+			})
+			log('debug', 'NOTICE forwarded', { tabId: r.tabId, event: frame.event, actorId: frame.actorId })
+			return
 		case 'ERROR':
 			log('warn', 'server ERROR frame', { tabId: r.tabId, code: frame.code, message: frame.message })
 			if (TERMINAL_ERROR_CODES.has(frame.code)) {
@@ -630,12 +709,14 @@ function fireHeartbeat(r: WsRuntime): void {
 		const ageMs = Math.min(Math.max(0, Date.now() - entry.lastStateAt), HEARTBEAT_EXTRAPOLATION_CAP_MS)
 		currentPos += ageMs / 1000
 	}
+	bgLog('sync', 'debug', 'HEARTBEAT sent', { tabId: r.tabId, pos: currentPos, playerState: state.playerState })
 	send(r, { type: 'HEARTBEAT', currentPos, playerState: state.playerState })
 }
 
 function fireClockPing(r: WsRuntime): void {
 	const t1 = startClockPing()
 	r.pendingPings.set(t1, t1)
+	bgLog('sync', 'debug', 'CLOCK_PING sent', { tabId: r.tabId })
 	send(r, { type: 'CLOCK_PING', clientSendTime: t1 })
 }
 
@@ -666,10 +747,7 @@ function redactUrl(url: string): string {
 	return q === -1 ? url : url.slice(0, q) + '?…'
 }
 
-function log(level: 'info' | 'warn' | 'error', msg: string, data?: Record<string, unknown>): void {
-	const line = `[playbacksync:ws] ${msg}`
-	const payload = data ?? {}
-	if (level === 'error') console.error(line, payload)
-	else if (level === 'warn') console.warn(line, payload)
-	else console.log(line, payload)
+/** Connection/frame log line under the `ws` scope. See {@link bgLog}. */
+function log(level: LogLevel, event: string, data?: Record<string, unknown>): void {
+	bgLog('ws', level, event, data)
 }
