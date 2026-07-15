@@ -49,14 +49,14 @@ export default defineContentScript({
 		if (!syncUrl || !syncPassword) return
 
 		const msg: ContentToBackground = { kind: 'credentials', syncUrl, syncPassword }
-		// `chrome.runtime.id` is undefined once the worker has been torn
+		// `browser.runtime.id` is undefined once the worker has been torn
 		// down (dev reload, manual extension reload); `sendMessage` would
 		// then throw synchronously as "Extension context invalidated"
 		// instead of returning a rejected promise. Pre-check to avoid the
 		// throw and the `Uncaught` it would surface on the extension page.
-		if (!chrome.runtime?.id) return
+		if (!browser.runtime?.id) return
 		try {
-			void chrome.runtime.sendMessage(msg).catch(() => {
+			void browser.runtime.sendMessage(msg).catch(() => {
 				// Background worker may be waking (MV3); the share link is
 				// also typically opened in a fresh tab where the worker
 				// boots in response to this very message, so transient send

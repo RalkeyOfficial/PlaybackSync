@@ -5,9 +5,10 @@
  * commands back to that tab.
  *
  * Everything WS-related lives in `src/background/`; this file is the
- * thin glue that owns `chrome.*` APIs and forwards.
+ * thin glue that owns `browser.*` APIs and forwards.
  */
 
+import type { Runtime, Tabs } from 'wxt/browser'
 import type { AuthoritativeCommand, ContentIdentity } from '@/src/adapters/types'
 import type {
 	BackgroundToContent,
@@ -66,7 +67,7 @@ const sessions = new Map<number, SessionState>()
 /**
  * Tabs whose active adapter opted into the navigation-guard (via
  * `Adapter.guardNavigation`, echoed on the `identity` message), mapped to
- * that adapter's id. The `chrome.tabs.onUpdated` guard only acts for tabs
+ * that adapter's id. The `browser.tabs.onUpdated` guard only acts for tabs
  * in this map, so it never fires for adapters that didn't opt in or sites
  * structured differently. The adapter id is kept because the guard resolves
  * a live URL to a room video id through that adapter's matcher (see
@@ -262,35 +263,38 @@ export default defineBackground(() => {
 	void initGreyscaleDefaults()
 	void bootstrap()
 
-	chrome.runtime.onMessage.addListener(
-		(msg: ContentToBackground, sender: chrome.runtime.MessageSender) => {
+	browser.runtime.onMessage.addListener(
+		// The runtime types the payload as `unknown`; the content script is
+		// trusted to send well-formed `ContentToBackground` envelopes (see
+		// messages.ts), so we assert the shape at this boundary.
+		(msg: unknown, sender: Runtime.MessageSender) => {
 			// Wrap async work in an IIFE so the listener returns `undefined`
-			// synchronously. Returning a Promise / `true` would tell Chrome
-			// to hold the message channel open for a `sendResponse` call we
-			// never make.
+			// synchronously. Returning a Promise / `true` would tell the
+			// browser to hold the message channel open for a `sendResponse`
+			// call we never make.
 			void (async () => {
-				await routeMessage(sender.tab?.id, msg)
+				await routeMessage(sender.tab?.id, msg as ContentToBackground)
 			})()
 		},
 	)
 
-	chrome.runtime.onConnect.addListener((port: chrome.runtime.Port) => {
+	browser.runtime.onConnect.addListener((port: Runtime.Port) => {
 		if (port.name !== POPUP_PORT_NAME) return
 		registerPopupPort(port)
-		port.onMessage.addListener((msg: PopupToBackground) => {
-			void handlePopupMessage(msg)
+		port.onMessage.addListener((msg: unknown) => {
+			void handlePopupMessage(msg as PopupToBackground)
 		})
 	})
 
-	// chrome.tabs.onRemoved fires synchronously before the tab id can be
+	// browser.tabs.onRemoved fires synchronously before the tab id can be
 	// reused for a new tab, so the cleanup below is safe against id reuse.
 	// forgetIconForTab runs *first* so the synchronous setColored(false)
 	// triggered from disconnect's onLifecycleChange short-circuits — calling
-	// chrome.action.setIcon on a tab that just went away surfaces as an
+	// browser.action.setIcon on a tab that just went away surfaces as an
 	// "Unchecked runtime.lastError: No tab with id" warning even when the
 	// returned promise is caught, so the safest fix is to never make the
 	// call in the first place.
-	chrome.tabs.onRemoved.addListener((tabId: number) => {
+	browser.tabs.onRemoved.addListener((tabId: number) => {
 		forgetIconForTab(tabId)
 		disconnect(tabId)
 		notifyPopupCredsCleared(tabId)
@@ -305,14 +309,14 @@ export default defineBackground(() => {
 	// click listener can't see (home link, address bar, back/forward,
 	// cross-site). Only acts for tabs whose adapter opted in via
 	// `Adapter.guardNavigation`. See `handleTabNavigation`.
-	chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+	browser.tabs.onUpdated.addListener((tabId, changeInfo) => {
 		if (changeInfo.url === undefined) return
 		handleTabNavigation(tabId, changeInfo.url)
 	})
 })
 
 /**
- * Port name the toolbar popup uses for {@link chrome.runtime.connect}.
+ * Port name the toolbar popup uses for {@link browser.runtime.connect}.
  * Must match the popup's call site verbatim.
  */
 const POPUP_PORT_NAME = 'pbsync-popup'
@@ -320,7 +324,7 @@ const POPUP_PORT_NAME = 'pbsync-popup'
 /**
  * Service-worker boot path. Wipes orphan storage on the first boot of a
  * fresh browser session, then reconnects every tab whose creds slot
- * still has a live `chrome.tabs.id`. Slots whose tab no longer exists
+ * still has a live `browser.tabs.id`. Slots whose tab no longer exists
  * are pruned.
  */
 async function bootstrap(): Promise<void> {
@@ -332,7 +336,7 @@ async function bootstrap(): Promise<void> {
 	}
 	for (const [tabId, creds] of all) {
 		try {
-			await chrome.tabs.get(tabId)
+			await browser.tabs.get(tabId)
 		} catch {
 			// Tab no longer exists — orphan slot from a previous worker
 			// generation. Prune.
@@ -621,7 +625,7 @@ function guardContext(
  * browser-level detector for *every* way a viewer can move between videos —
  * the player's "Next episode" button, prev/keyboard shortcuts, end-of-video
  * autoplay-advance, back/forward, the address bar, cross-site links — because
- * `chrome.tabs.onUpdated` sees the URL change even when it originates in the
+ * `browser.tabs.onUpdated` sees the URL change even when it originates in the
  * page's main world (which the content script's isolated-world history patch
  * cannot). It arms a debounced re-check; {@link routeGuardedNav} then decides
  * per room mode whether the move is a cursor change to *forward*, a departure
@@ -633,7 +637,7 @@ function guardContext(
  * synth-click pull-back landing) collapse into the settled destination.
  *
  * @param tabId The tab whose URL changed.
- * @param url The new URL reported by `chrome.tabs.onUpdated`.
+ * @param url The new URL reported by `browser.tabs.onUpdated`.
  */
 function handleTabNavigation(tabId: number, url: string): void {
 	const ctx = guardContext(tabId, { includeFreeform: true })
@@ -715,9 +719,9 @@ async function routeGuardedNav(tabId: number): Promise<void> {
 	// steering), not the transient convergence/settle gate.
 	if (!hasEverConverged(session)) return
 
-	let tab: chrome.tabs.Tab
+	let tab: Tabs.Tab
 	try {
-		tab = await chrome.tabs.get(tabId)
+		tab = await browser.tabs.get(tabId)
 	} catch {
 		// Tab closed between arming and firing; nothing to do.
 		return
@@ -870,9 +874,9 @@ async function reconcileCursorToRoom(tabId: number): Promise<void> {
 	// the now-stale confirmed cursor and undo the user's in-flight move.
 	if (session.pendingCursorTarget !== null) return
 
-	let tab: chrome.tabs.Tab
+	let tab: Tabs.Tab
 	try {
-		tab = await chrome.tabs.get(tabId)
+		tab = await browser.tabs.get(tabId)
 	} catch {
 		// Tab closed between ticks; the `onRemoved` teardown clears the timer.
 		return
@@ -920,9 +924,9 @@ async function recheckAndPullBack(tabId: number): Promise<void> {
 	if (!ctx) return
 	const { adapterId, session, cursor } = ctx
 
-	let tab: chrome.tabs.Tab
+	let tab: Tabs.Tab
 	try {
-		tab = await chrome.tabs.get(tabId)
+		tab = await browser.tabs.get(tabId)
 	} catch {
 		// Tab closed between arming and firing; nothing to do.
 		return
@@ -943,7 +947,7 @@ async function recheckAndPullBack(tabId: number): Promise<void> {
 	log('nav', 'info', 'nav-guard pull-back to cursor', {
 		tabId, liveUrl, target,
 	})
-	// `chrome.tabs.update` is a full page load, but the WS lives in the
+	// `browser.tabs.update` is a full page load, but the WS lives in the
 	// background and survives it — so we deliberately do NOT close the
 	// socket (closing it would announce a spurious client_left/_joined flap
 	// to the room). Instead re-run the join grace period in place: un-
@@ -968,7 +972,7 @@ async function recheckAndPullBack(tabId: number): Promise<void> {
 			markConverged(s)
 		}
 	}, GUARD_RELOAD_CONVERGE_FALLBACK_MS))
-	void chrome.tabs.update(tabId, { url: target }).catch(() => {
+	void browser.tabs.update(tabId, { url: target }).catch(() => {
 		// Tab closed or navigation blocked; `onRemoved` will clean up.
 	})
 }
@@ -1107,7 +1111,7 @@ function dispatchCommand(tabId: number, cmd: AuthoritativeCommand): void {
 		: {}
 	log('bg', 'info', `command dispatched: ${cmd.type}`, { tabId, ...detail })
 	const payload: BackgroundToContent = { kind: 'command', command: cmd }
-	void chrome.tabs.sendMessage(tabId, payload).catch(() => {
+	void browser.tabs.sendMessage(tabId, payload).catch(() => {
 		// Tab closed or content script not present; nothing actionable.
 	})
 }

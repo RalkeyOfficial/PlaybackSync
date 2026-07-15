@@ -2,7 +2,7 @@
  * Push-based snapshot channel between the background worker and the
  * toolbar popup. Owns three concerns:
  *
- * 1. A registry of open `chrome.runtime.Port`s from popup instances,
+ * 1. A registry of open `Runtime.Port`s from popup instances,
  *    each bound to a single `tabId` via the popup's `subscribe`
  *    envelope.
  * 2. A per-tab mirror of WS-runtime / creds state so a
@@ -28,6 +28,7 @@
  * by the entrypoint and injected via {@link initPopupBroadcast}.
  */
 
+import type { Runtime } from 'wxt/browser'
 import type {
 	BackgroundToPopup,
 	PopupSnapshot,
@@ -53,7 +54,7 @@ interface TabMirror {
 
 let sessions: Map<number, SessionState> | null = null
 const mirrors = new Map<number, TabMirror>()
-const portTabs = new Map<chrome.runtime.Port, number>()
+const portTabs = new Map<Runtime.Port, number>()
 
 /**
  * Wire the broadcast module to the per-tab session map. Called once
@@ -177,7 +178,7 @@ export function notifyCursorChanged(tabId: number): void {
  *
  * @param port The port the popup just opened with name `'pbsync-popup'`.
  */
-export function registerPopupPort(port: chrome.runtime.Port): void {
+export function registerPopupPort(port: Runtime.Port): void {
 	port.onMessage.addListener((msg: unknown) => {
 		if (!msg || typeof msg !== 'object') return
 		const env = msg as { kind?: string; tabId?: number }
@@ -249,7 +250,7 @@ function buildSnapshot(tabId: number): PopupSnapshot {
 	}
 }
 
-function sendTo(port: chrome.runtime.Port, tabId: number): void {
+function sendTo(port: Runtime.Port, tabId: number): void {
 	const env: BackgroundToPopup = { kind: 'snapshot', snapshot: buildSnapshot(tabId) }
 	try {
 		port.postMessage(env)

@@ -18,6 +18,7 @@
  * arrives through the typed snapshot envelope in `src/messages.ts`.
  */
 
+import type { Runtime } from 'wxt/browser'
 import type {
 	BackgroundToPopup,
 	PopupSnapshot,
@@ -31,7 +32,7 @@ const bodyEl = document.getElementById('body') as HTMLDivElement
 const pillEl = document.getElementById('status-pill') as HTMLSpanElement
 const pillLabelEl = document.getElementById('status-label') as HTMLSpanElement
 
-let port: chrome.runtime.Port | null = null
+let port: Runtime.Port | null = null
 let boundTabId: number | null = null
 let lastSnapshot: PopupSnapshot | null = null
 let leaving = false
@@ -39,19 +40,20 @@ let leaving = false
 void connect()
 
 async function connect(): Promise<void> {
-	const tabs = await chrome.tabs.query({ active: true, currentWindow: true })
+	const tabs = await browser.tabs.query({ active: true, currentWindow: true })
 	const tabId = tabs[0]?.id
 	if (tabId === undefined) {
 		renderPortLost()
 		return
 	}
 	boundTabId = tabId
-	port = chrome.runtime.connect({ name: POPUP_PORT_NAME })
-	port.onMessage.addListener((msg: BackgroundToPopup) => {
-		if (msg.kind !== 'snapshot') return
+	port = browser.runtime.connect({ name: POPUP_PORT_NAME })
+	port.onMessage.addListener((msg: unknown) => {
+		const env = msg as BackgroundToPopup
+		if (env.kind !== 'snapshot') return
 		leaving = false
-		lastSnapshot = msg.snapshot
-		render(msg.snapshot)
+		lastSnapshot = env.snapshot
+		render(env.snapshot)
 	})
 	port.onDisconnect.addListener(() => {
 		// Background torn down (worker idle-out is rare while we're open

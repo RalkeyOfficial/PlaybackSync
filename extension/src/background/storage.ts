@@ -1,5 +1,5 @@
 /**
- * Thin wrapper over `chrome.storage.local` for the WebSocket client's
+ * Thin wrapper over `browser.storage.local` for the WebSocket client's
  * credentials. Each tab gets its own slot so multiple rooms can coexist
  * in one browser and `credentials.content.ts` writes scope to the
  * capturing tab.
@@ -15,12 +15,12 @@
  * ```
  *
  * Lifecycle: slots are ephemeral. `chrome.tabs.onRemoved` clears the
- * matching key, and a cold-boot sentinel in `chrome.storage.session`
+ * matching key, and a cold-boot sentinel in `browser.storage.session`
  * wipes every `pbsync.tab.*` key on the first service-worker boot of a
  * browser session, so a browser restart never auto-rejoins.
  */
 
-/** Credential record stored at `chrome.storage.local['pbsync.tab.<tabId>']`. */
+/** Credential record stored at `browser.storage.local['pbsync.tab.<tabId>']`. */
 export interface PbSyncCreds {
 	syncUrl: string
 	syncPassword: string
@@ -49,7 +49,7 @@ function keyFor(tabId: number): string {
  */
 export async function loadCreds(tabId: number): Promise<PbSyncCreds | null> {
 	const k = keyFor(tabId)
-	const result = await chrome.storage.local.get(k)
+	const result = await browser.storage.local.get(k)
 	const raw = result[k]
 	if (!raw || typeof raw !== 'object') return null
 	const obj = raw as Record<string, unknown>
@@ -72,7 +72,7 @@ export async function loadCreds(tabId: number): Promise<PbSyncCreds | null> {
  * @param creds The credentials to persist.
  */
 export async function saveCreds(tabId: number, creds: { syncUrl: string; syncPassword: string }): Promise<void> {
-	await chrome.storage.local.set({
+	await browser.storage.local.set({
 		[keyFor(tabId)]: { syncUrl: creds.syncUrl, syncPassword: creds.syncPassword },
 	})
 }
@@ -88,7 +88,7 @@ export async function saveCreds(tabId: number, creds: { syncUrl: string; syncPas
 export async function saveClientId(tabId: number, clientId: string): Promise<void> {
 	const current = await loadCreds(tabId)
 	if (!current) return
-	await chrome.storage.local.set({ [keyFor(tabId)]: { ...current, clientId } })
+	await browser.storage.local.set({ [keyFor(tabId)]: { ...current, clientId } })
 }
 
 /**
@@ -99,7 +99,7 @@ export async function saveClientId(tabId: number, clientId: string): Promise<voi
  * @param tabId Browser tab id whose slot to remove.
  */
 export async function clearCreds(tabId: number): Promise<void> {
-	await chrome.storage.local.remove(keyFor(tabId))
+	await browser.storage.local.remove(keyFor(tabId))
 }
 
 /**
@@ -111,7 +111,7 @@ export async function clearCreds(tabId: number): Promise<void> {
  * @returns Map of `tabId` → credentials for every well-formed slot.
  */
 export async function loadAllCreds(): Promise<Map<number, PbSyncCreds>> {
-	const all = await chrome.storage.local.get(null)
+	const all = await browser.storage.local.get(null)
 	const out = new Map<number, PbSyncCreds>()
 	for (const [key, raw] of Object.entries(all)) {
 		if (!key.startsWith(KEY_PREFIX)) continue
@@ -130,22 +130,24 @@ export async function loadAllCreds(): Promise<Map<number, PbSyncCreds>> {
 
 /**
  * Wipe every per-tab slot if this is the first service-worker boot of a
- * fresh browser session. Uses a sentinel in `chrome.storage.session`
+ * fresh browser session. Uses a sentinel in `browser.storage.session`
  * (cleared by the browser on each restart) to detect the cold-boot
  * boundary. After a wipe, no tab auto-rejoins until the user re-pastes
  * a share URL.
  *
- * MV3-only: `chrome.storage.session` is unavailable in Firefox MV2; a
- * Firefox port will need a module-scope `let booted = false` flag set
- * on first `defineBackground` invocation as the alternate signal.
+ * `storage.session` landed in Firefox 115 and Chrome 102, independent of
+ * manifest version — so it's present on both build targets (Chrome MV3,
+ * Firefox MV2). Below Firefox 115 (down to our `strict_min_version` of
+ * 109) it's absent; the guard below then no-ops the wipe, degrading
+ * gracefully to "creds may survive a restart" rather than throwing.
  */
 export async function wipeIfFreshBrowserSession(): Promise<void> {
-	const sessionStore = chrome.storage.session
+	const sessionStore = browser.storage.session
 	if (!sessionStore) return
 	const { [BOOT_SENTINEL]: booted } = await sessionStore.get(BOOT_SENTINEL)
 	if (booted === true) return
-	const all = await chrome.storage.local.get(null)
+	const all = await browser.storage.local.get(null)
 	const stale = Object.keys(all).filter(k => k.startsWith(KEY_PREFIX))
-	if (stale.length > 0) await chrome.storage.local.remove(stale)
+	if (stale.length > 0) await browser.storage.local.remove(stale)
 	await sessionStore.set({ [BOOT_SENTINEL]: true })
 }

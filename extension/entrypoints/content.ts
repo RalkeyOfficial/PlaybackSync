@@ -2,7 +2,7 @@
  * Content-script entrypoint. Runs on every adapter host (workshop §2
  * rule 3: unsupported pages stay silent) and bootstraps the adapter
  * runtime with a {@link RuntimeBridge} that forwards every outbound
- * call to the background via `chrome.runtime.sendMessage`. Inbound
+ * call to the background via `browser.runtime.sendMessage`. Inbound
  * `command` messages from the background are routed straight into the
  * runtime, which dispatches them to the active adapter.
  *
@@ -32,16 +32,16 @@ export default defineContentScript({
 		let contextInvalidated = false
 		const send = (msg: ContentToBackground) => {
 			if (contextInvalidated) return
-			// `chrome.runtime.id` is the canonical "is this script still
+			// `browser.runtime.id` is the canonical "is this script still
 			// attached to a live extension" probe — it goes `undefined` the
 			// moment the worker is gone, before any `sendMessage` call has
 			// a chance to throw.
-			if (!chrome.runtime?.id) {
+			if (!browser.runtime?.id) {
 				contextInvalidated = true
 				return
 			}
 			try {
-				void chrome.runtime.sendMessage(msg).catch(() => {
+				void browser.runtime.sendMessage(msg).catch(() => {
 					// Background worker may be sleeping (MV3); message dropped
 					// is fine until the next event re-wakes it.
 				})
@@ -78,8 +78,9 @@ export default defineContentScript({
 			},
 		}
 
-		chrome.runtime.onMessage.addListener((msg: BackgroundToContent) => {
-			if (msg.kind === 'command') deliverCommand(msg.command)
+		browser.runtime.onMessage.addListener((msg: unknown) => {
+			const m = msg as BackgroundToContent
+			if (m.kind === 'command') deliverCommand(m.command)
 		})
 
 		void start(bridge)

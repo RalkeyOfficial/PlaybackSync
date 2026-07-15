@@ -3,9 +3,18 @@
  * greyscale variant, so any tab we never touch is automatically
  * "inactive". This module owns the exception: each tab whose WS room
  * is currently `joined` gets the color variant via
- * `chrome.action.setIcon({ tabId, … })`. Multiple tabs can be colored
+ * `action.setIcon({ tabId, … })`. Multiple tabs can be colored
  * simultaneously — one per syncing tab.
  */
+
+/**
+ * The toolbar-action API, resolved across manifest versions. Chrome ships
+ * MV3 and exposes `browser.action`; Firefox ships MV2 (see `wxt.config.ts`),
+ * where the same surface is `browser.browserAction`. `BrowserAction.Static`
+ * extends `Action.Static`, so everything we call here (`setIcon`) is
+ * identical on both — only the property name differs.
+ */
+const action = browser.action ?? browser.browserAction
 
 const COLOR_PATHS = {
 	16: 'icon/16.png',
@@ -39,9 +48,9 @@ const coloredTabs = new Set<number>()
  * a clean slate.
  */
 export async function initGreyscaleDefaults(): Promise<void> {
-	void chrome.action.setIcon({ path: GREY_PATHS }).catch(() => {})
+	void action.setIcon({ path: GREY_PATHS }).catch(() => {})
 	try {
-		const tabs = await chrome.tabs.query({})
+		const tabs = await browser.tabs.query({})
 		for (const t of tabs) {
 			if (t.id !== undefined) paintTab(t.id, GREY_PATHS)
 		}
@@ -86,5 +95,5 @@ export function forgetIconForTab(tabId: number): void {
 function paintTab(tabId: number, path: Record<number, string>): void {
 	// A tab can disappear between the decision to paint and this call;
 	// swallow the resulting "No tab with id" error.
-	void chrome.action.setIcon({ tabId, path }).catch(() => {})
+	void action.setIcon({ tabId, path }).catch(() => {})
 }
