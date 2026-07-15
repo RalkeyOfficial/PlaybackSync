@@ -16,12 +16,17 @@
 
 import { deliverCommand, start, type RuntimeBridge } from '@/src/adapters/runtime'
 import { ADAPTER_MATCHES } from '@/src/adapters/host-matches'
+import { initNotifications, showNotice } from '@/src/ui/notifications'
 import type { BackgroundToContent, ContentToBackground } from '@/src/messages'
 
 export default defineContentScript({
 	matches: [...ADAPTER_MATCHES],
 	runAt: 'document_idle',
-	main() {
+	main(ctx) {
+		// Register the on-page notification UI. Lazy: the shadow root only
+		// mounts once the first notice arrives, so pages that never sync pay
+		// nothing.
+		initNotifications(ctx)
 		// Latched once the extension worker has been torn down (typical in
 		// dev: `wxt dev` reload, or any extension reload). Content scripts
 		// outlive their host extension, so the runtime keeps polling
@@ -81,6 +86,9 @@ export default defineContentScript({
 		browser.runtime.onMessage.addListener((msg: unknown) => {
 			const m = msg as BackgroundToContent
 			if (m.kind === 'command') deliverCommand(m.command)
+			else if (m.kind === 'notice') showNotice(m.notice)
+			// Fire-and-forget: return undefined so the browser doesn't hold the
+			// message channel open waiting for a sendResponse we never call.
 		})
 
 		void start(bridge)

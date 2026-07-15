@@ -231,6 +231,7 @@ function buildSnapshot(tabId: number): PopupSnapshot {
 			tabId: null,
 			status,
 			clientId: null,
+			nickname: null,
 			cursor: null,
 			mode: null,
 			syncUrl: null,
@@ -242,6 +243,7 @@ function buildSnapshot(tabId: number): PopupSnapshot {
 		tabId,
 		status,
 		clientId: session?.clientId ?? null,
+		nickname: session?.nickname ?? null,
 		cursor: session?.cursor ?? null,
 		// `mode` is only meaningful once `ROOM_STATE` lands; before then
 		// the session default ('default') would be misleading.

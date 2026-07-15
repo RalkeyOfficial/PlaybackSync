@@ -54,6 +54,7 @@ import {
 	notifyRoomStateChanged,
 } from './popupBroadcast'
 import type { AuthoritativeCommand } from '@/src/adapters/types'
+import type { Notice } from '@/src/messages'
 
 /** Close codes whose meaning is "give up, don't reconnect". */
 const TERMINAL_ERROR_CODES = new Set([
@@ -104,6 +105,12 @@ const FIRST_JOIN_DEFERRAL_MS = 3_000
 export interface WsCallbacks {
 	/** Deliver an authoritative command to this runtime's tab. */
 	dispatchCommand(cmd: AuthoritativeCommand): void
+	/**
+	 * Deliver a display-only notice (peer action or self "welcome") to this
+	 * runtime's tab for rendering as an on-page toast. Fire-and-forget —
+	 * ignored if the tab has no content script listening.
+	 */
+	dispatchNotice(notice: Notice): void
 	/** Surface a fatal protocol/connection error for logging. */
 	onTerminal(reason: string, code: string | null): void
 	/**
@@ -160,6 +167,13 @@ interface WsRuntime {
 	 * — `currentlyShowing` / `catalogFragment` are first-JOIN-only.
 	 */
 	firstJoinSent: boolean
+	/**
+	 * Whether the self-facing "welcome" notice has been emitted for this
+	 * runtime. Latched on the first `ROOM_STATE` so a reconnect (which
+	 * re-sends `ROOM_STATE`) doesn't re-trigger the welcome badge — it
+	 * fires once per join session, not once per socket.
+	 */
+	welcomeShown: boolean
 }
 
 const pool = new Map<number, WsRuntime>()
@@ -202,6 +216,7 @@ export function connect(tabId: number, creds: PbSyncCreds, session: SessionState
 		catalogReported: false,
 		pendingJoinDeadline: null,
 		firstJoinSent: false,
+		welcomeShown: false,
 	}
 	pool.set(tabId, r)
 	openSocket(r)
@@ -566,6 +581,13 @@ function handleFrame(r: WsRuntime, frame: InboundFrame): void {
 				tabId: r.tabId, cursor: r.session.cursor?.videoId ?? null,
 				mode: r.session.mode, playerState: frame.playerState, pos: frame.videoPos,
 			})
+			// Self-facing welcome: fired once per join session (latched), not on
+			// every reconnect ROOM_STATE. Derived entirely client-side from the
+			// frame — the server never sends a welcome notice.
+			if (!r.welcomeShown) {
+				r.welcomeShown = true
+				r.cb.dispatchNotice({ event: 'welcome', actorId: frame.nickname })
+			}
 			notifyRoomStateChanged(r.tabId)
 			r.cb.onLifecycleChange?.()
 			return
@@ -614,6 +636,17 @@ function handleFrame(r: WsRuntime, frame: InboundFrame): void {
 			})
 			return
 		}
+		case 'NOTICE':
+			// Display-only peer notification — forward verbatim to the content
+			// script's toast layer. Never touches session/playback state.
+			r.cb.dispatchNotice({
+				event: frame.event,
+				actor: frame.actor,
+				actorId: frame.actorId,
+				data: frame.data,
+			})
+			log('debug', 'NOTICE forwarded', { tabId: r.tabId, event: frame.event, actorId: frame.actorId })
+			return
 		case 'ERROR':
 			log('warn', 'server ERROR frame', { tabId: r.tabId, code: frame.code, message: frame.message })
 			if (TERMINAL_ERROR_CODES.has(frame.code)) {

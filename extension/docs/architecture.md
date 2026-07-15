@@ -7,7 +7,7 @@ The PlaybackSync extension is a two-process WXT application: a **background serv
 | File | Role | `runAt` |
 |------|------|---------|
 | `entrypoints/background.ts` | Service worker / background page. WS lifecycle, message routing, command dispatch. | n/a |
-| `entrypoints/content.ts` | Adapter runtime bootstrap — picks an adapter for the page, runs status polling, delivers inbound commands. | `document_idle` |
+| `entrypoints/content.ts` | Adapter runtime bootstrap — picks an adapter for the page, runs status polling, delivers inbound commands, and hosts the on-page notification UI (see [`notifications.md`](notifications.md)). | `document_idle` |
 | `entrypoints/credentials.content.ts` | One-shot share-URL credential sniffer. Sends a `credentials` message when the URL fragment carries `#sync_url=&sync_password=` and exits. See [`storage.md`](storage.md). | `document_start` |
 | `entrypoints/popup/` | Toolbar popup — status pill, current cursor, Leave Room. See [`popup.md`](popup.md). | n/a |
 
@@ -61,6 +61,10 @@ The background is the *protocol client*; the content runtime is the *adapter man
 
 The popup talks to the background over a `chrome.runtime.Port` named `'pbsync-popup'`. On connect, the popup posts a `subscribe` envelope naming the tab it cares about (the active tab when the popup opened); the background binds the port to that tab and broadcasts a typed `PopupSnapshot` on every popup-visible state change *for that tab* (lifecycle transitions, `ROOM_STATE`, `CURSOR_CHANGE`, creds change) — never on per-tick `STATE` frames. The popup never reads raw socket / `clientId` / creds fields; it sees only the derived `status` tag (`no_credentials` / `connecting` / `joined` / `disconnected`) plus the cursor and mode for the bound tab. Details in [`popup.md`](popup.md).
 
+### On-page notification UI
+
+The content script is the extension's only *injected page UI*. When the background forwards a `notice` message, the content script renders it in a WXT shadow-root (`src/ui/notifications.ts`) — isolated from the host page's CSS. Two surfaces: bottom-right auto-dismissing **peer toasts** ("SwiftFox42 paused", driven by server `NOTICE` frames) and a centered animated **welcome badge** shown once when you join (synthesised client-side from the first `ROOM_STATE`, never sent over the wire). The layer is display-only and mounts lazily on the first notice. Details in [`notifications.md`](notifications.md).
+
 ## The message envelope
 
 `src/messages.ts` defines two discriminated unions:
@@ -82,6 +86,7 @@ The popup talks to the background over a `chrome.runtime.Port` named `'pbsync-po
 | kind | payload | when |
 |------|---------|------|
 | `command` | `command: AuthoritativeCommand` | Server told us to play / pause / seek / nudge_rate / cursor_change |
+| `notice` | `notice: Notice` | A display-only peer action (from a server `NOTICE` frame) or the client-synthesised `welcome`. Rendered as an on-page toast / badge; never affects playback. See [`notifications.md`](notifications.md). |
 
 `tabId` is read from `sender.tab?.id` on the background side; the content side never sets it.
 

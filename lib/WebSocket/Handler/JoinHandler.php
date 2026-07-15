@@ -139,6 +139,21 @@ class JoinHandler {
 			'data' => ['nickname' => $client->nickname],
 		]);
 
+		// Notify the existing peers that someone joined. Only the joiner's own
+		// `client_joined` exists at this point, so pre-existing members are not
+		// re-announced to the joiner — the joiner instead gets the client-side
+		// self "welcome" (emitted from ROOM_STATE in the extension).
+		$runtime->broadcastNotice(
+			$this->encoder,
+			'client_joined',
+			'presence',
+			'client',
+			$client->nickname,
+			['nickname' => $client->nickname],
+			$nowMs,
+			$client->clientId,
+		);
+
 		$replay = [];
 		if (($payload['lastEventId'] ?? null) !== null) {
 			$replay = $runtime->recentEventsSince((int)$payload['lastEventId']);
@@ -146,6 +161,7 @@ class JoinHandler {
 
 		$conn->send($this->encoder->roomState(
 			$client->clientId,
+			$client->nickname,
 			$runtime->state,
 			$runtime->cursorEntry(),
 			$runtime->singleMode,

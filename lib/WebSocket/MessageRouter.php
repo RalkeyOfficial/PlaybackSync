@@ -141,6 +141,20 @@ class MessageRouter implements MessageComponentInterface {
 					'actorId' => null,
 					'data' => ['nickname' => $client->nickname, 'reason' => $reason],
 				]);
+				// Notify the remaining peers that someone left. The leaver's
+				// nickname rides in `data` (actor is `system`, so actorId is
+				// null); exclude the leaver's own clientId for good measure —
+				// their socket is closing anyway.
+				$runtime?->broadcastNotice(
+					$this->encoder,
+					'client_left',
+					'presence',
+					'system',
+					null,
+					['nickname' => $client->nickname, 'reason' => $reason],
+					$nowMs,
+					$ctx->clientId,
+				);
 			}
 		}
 

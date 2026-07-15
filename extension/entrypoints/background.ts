@@ -13,6 +13,7 @@ import type { AuthoritativeCommand, ContentIdentity } from '@/src/adapters/types
 import type {
 	BackgroundToContent,
 	ContentToBackground,
+	Notice,
 	PopupToBackground,
 } from '@/src/messages'
 import type { CursorRef, VideoRefWithMeta } from '@/src/background/protocol'
@@ -158,6 +159,7 @@ const reconcileTimers = new Map<number, ReturnType<typeof setInterval>>()
 function makeCallbacks(tabId: number): WsCallbacks {
 	return {
 		dispatchCommand: (cmd) => dispatchCommand(tabId, cmd),
+		dispatchNotice: (notice) => dispatchNotice(tabId, notice),
 		onTerminal: (reason, code) => {
 			// Terminal codes (ROOM_NOT_FOUND, ROOM_EXPIRED, ROOM_DELETED, KICKED,
 			// AUTH_FAILED, CLIENT_ID_IN_USE) all mean this tab's stored creds
@@ -1111,6 +1113,23 @@ function dispatchCommand(tabId: number, cmd: AuthoritativeCommand): void {
 		: {}
 	log('bg', 'info', `command dispatched: ${cmd.type}`, { tabId, ...detail })
 	const payload: BackgroundToContent = { kind: 'command', command: cmd }
+	void browser.tabs.sendMessage(tabId, payload).catch(() => {
+		// Tab closed or content script not present; nothing actionable.
+	})
+}
+
+/**
+ * Forward a display-only {@link Notice} to a tab's content script so it can
+ * render an on-page toast (peer action) or the centered welcome badge. Unlike
+ * {@link dispatchCommand} this needs no session/suppression bookkeeping —
+ * notices are purely visual and never reflect back as intents. Fire-and-
+ * forget: a missing tab or absent content script is a silent no-op.
+ *
+ * @param tabId Browser tab id to deliver the notice to.
+ * @param notice The notice to render.
+ */
+function dispatchNotice(tabId: number, notice: Notice): void {
+	const payload: BackgroundToContent = { kind: 'notice', notice }
 	void browser.tabs.sendMessage(tabId, payload).catch(() => {
 		// Tab closed or content script not present; nothing actionable.
 	})

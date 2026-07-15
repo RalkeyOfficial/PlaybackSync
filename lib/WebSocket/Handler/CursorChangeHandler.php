@@ -124,6 +124,20 @@ class CursorChangeHandler {
 			$peerConn->send($cursorFrame);
 		}
 
+		// Peer notification: "X changed the video to <label>". Exclude the
+		// actor — the CURSOR_CHANGE above already steers their own tab. The
+		// videoRef carries the label so the toast can name the new video.
+		$runtime->broadcastNotice(
+			$this->encoder,
+			'cursor_change',
+			'playback',
+			'client',
+			$client->nickname,
+			['videoRef' => self::videoRefOf($outcome->cursor)],
+			$nowMs,
+			$ctx->clientId,
+		);
+
 		// 3. Log the cursor_change envelope. Use pushEnvelope (not pushEvent)
 		// so the data shape matches the owner-triggered path in
 		// RoomBroadcastController — the event-log UI parses one shape.

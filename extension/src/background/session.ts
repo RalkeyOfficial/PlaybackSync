@@ -93,6 +93,8 @@ export interface RoomPlayback {
 export interface SessionState {
 	/** Server-assigned client id; persists across reconnects. */
 	clientId: string | null
+	/** Server-assigned nickname (e.g. `SwiftFox42`); `null` before the first `ROOM_STATE`. Surfaced in the popup. */
+	nickname: string | null
 	/** Highest `eventId` we've seen; sent on JOIN for tombstone replay. */
 	lastEventId: number
 	/** Current cursor entry; `null` for an empty playlist. */
@@ -177,6 +179,7 @@ export interface SessionState {
 export function createSession(): SessionState {
 	return {
 		clientId: null,
+		nickname: null,
 		lastEventId: 0,
 		cursor: null,
 		pendingCursorTarget: null,
@@ -310,6 +313,9 @@ export function effectiveCursorVideoId(s: SessionState): string | null {
  */
 export function applyRoomState(s: SessionState, frame: RoomStateFrame): AuthoritativeCommand[] {
 	s.clientId = frame.clientId
+	// Empty when an older daemon omits it; normalise to null so the popup can
+	// treat "unknown" uniformly.
+	s.nickname = frame.nickname || null
 	s.lastEventId = frame.lastEventId
 	s.cursor = frame.cursor
 	// ROOM_STATE only arrives on (re)JOIN; any locally-forwarded cursor target
