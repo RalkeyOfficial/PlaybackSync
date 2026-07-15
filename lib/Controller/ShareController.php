@@ -88,9 +88,16 @@ class ShareController extends Controller {
 	 * Extract the password from a `Basic` Authorization header.
 	 *
 	 * Returns `null` for a missing, non-Basic, or otherwise unparseable header.
-	 * Username is intentionally ignored to match the OLD_CODE behaviour and to
-	 * accommodate browsers that strip user info from URLs. Splitting on the
-	 * first `:` keeps passwords containing colons intact.
+	 * Splitting on the first `:` keeps passwords containing colons intact.
+	 *
+	 * This method reads only the password half and doesn't look at the username,
+	 * but that does NOT mean callers may send a non-empty username: Nextcloud
+	 * core (`\OC\User\Session::tryBasicAuthLogin()`, invoked from `base.php`
+	 * during `OC::init`) treats any Basic credentials whose username is
+	 * non-empty as a Nextcloud login attempt and 401s the request before this
+	 * public controller runs. Only an empty username reaches here. Visitors must
+	 * therefore leave the username blank and enter only the room password — see
+	 * the note in `docs/api.md` (Public share endpoint).
 	 */
 	private function extractBasicPassword(string $authHeader): ?string {
 		if ($authHeader === '' || !str_starts_with($authHeader, 'Basic ')) {

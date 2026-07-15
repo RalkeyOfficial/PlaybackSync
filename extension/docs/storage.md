@@ -35,7 +35,7 @@ Per-tab keying means multiple rooms can coexist in one browser, share-URL pickup
 The standard way creds enter the extension is the share-link flow:
 
 1. Visit `/apps/playbacksync/r/{uuid}`; the browser surfaces a Basic Auth prompt.
-2. Enter the one-time password; `ShareController` 302s to `room.bootstrapUrl#sync_url=…&sync_password=…` — the creds ride the **fragment**, not the query string.
+2. Enter the one-time password and **leave the username blank** (a non-empty username makes Nextcloud core try to log that user in and 401 before the share endpoint runs — see [`docs/api.md`](../../docs/api.md#public-share-endpoint-ruuid)). `ShareController` 302s to `room.bootstrapUrl#sync_url=…&sync_password=…` — the creds ride the **fragment**, not the query string.
 3. The dedicated content script [`entrypoints/credentials.content.ts`](../entrypoints/credentials.content.ts) reads those params out of `location.hash` at `document_start` and sends a `credentials` message to the background — tagged with the capturing tab's `sender.tab.id` (Chrome supplies this).
 4. The background's `handleCredentials(tabId, …)` writes the pair to `pbsync.tab.<tabId>` via `saveCreds(tabId, …)` and calls `ensureConnectedWithCreds(tabId, …)`.
 
