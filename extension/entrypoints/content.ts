@@ -59,9 +59,6 @@ export default defineContentScript({
 		}
 
 		const bridge: RuntimeBridge = {
-			sendIntent(adapterId, intent) {
-				send({ kind: 'intent', adapterId, intent })
-			},
 			sendIdentity(adapterId, identity, guardNavigation) {
 				// `pageUrl` is captured here (not by the adapter) so the
 				// adapter contract stays focused on identity comparison.
@@ -69,11 +66,8 @@ export default defineContentScript({
 				// `JOIN.currentlyShowing` field; see messages.ts.
 				send({ kind: 'identity', adapterId, identity, pageUrl: location.href, guardNavigation })
 			},
-			sendStatus(adapterId, state) {
-				send({ kind: 'status', adapterId, state })
-			},
 			sendFail(adapterId, reason) {
-				send({ kind: 'fail', adapterId, reason })
+				send({ kind: 'fail', role: 'page', adapterId, reason })
 			},
 			sendCatalog(adapterId, catalog) {
 				send({ kind: 'catalog', adapterId, catalog })

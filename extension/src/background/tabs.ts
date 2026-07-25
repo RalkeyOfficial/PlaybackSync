@@ -34,7 +34,11 @@ const tabs = new Map<number, TabEntry>()
 export function recordStatus(tabId: number, adapterId: string, state: VideoState): void {
 	const existing = tabs.get(tabId)
 	tabs.set(tabId, {
-		adapterId,
+		// `status` now comes from the media frame (a media adapter id like
+		// `strmcx`), while `adapterId` is meant to name the page adapter (used
+		// for nav-guard URL matching). Preserve the page id once `identity` has
+		// set it; only fall back to the reporter's id when status lands first.
+		adapterId: existing?.adapterId ?? adapterId,
 		latestState: state,
 		identity: existing?.identity ?? null,
 		lastStateAt: Date.now(),

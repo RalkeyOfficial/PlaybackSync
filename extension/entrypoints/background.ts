@@ -81,6 +81,43 @@ const sessions = new Map<number, SessionState>()
 const navGuardedTabs = new Map<number, string>()
 
 /**
+ * Per-tab frame ids for cross-frame command routing. A site can span two frames
+ * of one tab — the top **page** frame (identity/catalog/cursor/nav) and a
+ * (usually cross-origin) **media** frame that owns the `<video>`. The background
+ * learns each frame id from the sender of that frame's messages, then targets
+ * `play`/`pause`/`seek`/`nudge_rate` at the media frame and `cursor_change` +
+ * notices at the page frame. `pageFrameId` defaults to `0` (the top frame);
+ * `mediaFrameId` is undefined until the embed frame says `media_hello` or
+ * reports status, and commands fall back to a tab-wide broadcast while it's
+ * unknown. Cleared on every session-teardown path.
+ */
+interface TabFrames {
+	pageFrameId: number
+	mediaFrameId?: number
+}
+const tabFrames = new Map<number, TabFrames>()
+
+/** Record which frame is the page (top) half of a tab's site. */
+function setPageFrame(tabId: number, frameId: number): void {
+	const existing = tabFrames.get(tabId)
+	if (existing) existing.pageFrameId = frameId
+	else tabFrames.set(tabId, { pageFrameId: frameId })
+}
+
+/** Record which frame owns the `<video>`, so playback commands can target it. */
+function setMediaFrame(tabId: number, frameId: number): void {
+	const existing = tabFrames.get(tabId)
+	if (existing) existing.mediaFrameId = frameId
+	else tabFrames.set(tabId, { pageFrameId: 0, mediaFrameId: frameId })
+}
+
+/** Forget a tab's media frame (a targeted send failed, or the media frame failed). */
+function clearMediaFrame(tabId: number): void {
+	const existing = tabFrames.get(tabId)
+	if (existing) existing.mediaFrameId = undefined
+}
+
+/**
  * How long the navigation-guard waits before acting on an off-playlist
  * URL. The window lets the DOM-driven pull-back (`pullTabBackToCursor`
  * synth-click, fired from the same user click) land first; the guard
@@ -187,6 +224,7 @@ function makeCallbacks(tabId: number): WsCallbacks {
 async function tearDownTab(tabId: number): Promise<void> {
 	await clearCreds(tabId)
 	sessions.delete(tabId)
+	tabFrames.delete(tabId)
 	clearNavGuard(tabId)
 	notifyPopupCredsCleared(tabId)
 	setColored(tabId, false)
@@ -275,7 +313,7 @@ export default defineBackground(() => {
 			// browser to hold the message channel open for a `sendResponse`
 			// call we never make.
 			void (async () => {
-				await routeMessage(sender.tab?.id, msg as ContentToBackground)
+				await routeMessage(sender.tab?.id, sender.frameId ?? 0, msg as ContentToBackground)
 			})()
 		},
 	)
@@ -303,6 +341,7 @@ export default defineBackground(() => {
 		void clearCreds(tabId)
 		forgetTab(tabId)
 		sessions.delete(tabId)
+		tabFrames.delete(tabId)
 		clearNavGuard(tabId)
 	})
 
@@ -375,7 +414,7 @@ function ensureConnectedWithCreds(tabId: number, creds: { syncUrl: string; syncP
 	connect(tabId, creds, session, makeCallbacks(tabId))
 }
 
-async function routeMessage(tabId: number | undefined, msg: ContentToBackground): Promise<void> {
+async function routeMessage(tabId: number | undefined, frameId: number, msg: ContentToBackground): Promise<void> {
 	// Every arm is tab-scoped now — `credentials` writes to the
 	// capturing tab's slot, so a sender tab id is required.
 	if (tabId === undefined) return
@@ -385,6 +424,9 @@ async function routeMessage(tabId: number | undefined, msg: ContentToBackground)
 			await handleCredentials(tabId, msg.syncUrl, msg.syncPassword)
 			return
 		case 'intent': {
+			// Intents come from the media frame — stamp it so playback commands
+			// can be routed back to the frame that owns the `<video>`.
+			setMediaFrame(tabId, frameId)
 			const session = sessions.get(tabId)
 			if (!session) return
 			log('bg', 'debug', `intent received: ${msg.intent.type}`, { tabId, time: msg.intent.time })
@@ -420,6 +462,9 @@ async function routeMessage(tabId: number | undefined, msg: ContentToBackground)
 			return
 		}
 		case 'status': {
+			// Status comes from the media frame — stamp it (in case `media_hello`
+			// was missed) so playback commands reach the video-owning frame.
+			setMediaFrame(tabId, frameId)
 			recordStatus(tabId, msg.adapterId, msg.state)
 			void ensureConnected(tabId)
 			const session = sessions.get(tabId)
@@ -436,7 +481,30 @@ async function routeMessage(tabId: number | undefined, msg: ContentToBackground)
 			}
 			return
 		}
+		case 'media_hello': {
+			// The embed frame resolved a controllable `<video>`. Learn its frame
+			// id now so playback commands target it, and — if a room is already
+			// in progress on this tab — push the room's cached playback down so a
+			// late-appearing or reloaded media frame converges immediately instead
+			// of waiting for the next periodic `SYNC_ADJUST`.
+			setMediaFrame(tabId, frameId)
+			void ensureConnected(tabId)
+			const session = sessions.get(tabId)
+			if (session) {
+				const cmds = buildResyncCommands(session)
+				if (cmds.length > 0) {
+					log('bg', 'info', 'media frame ready; resyncing to room playback', {
+						tabId, frameId, playerState: session.lastRoomPlayback?.playerState,
+					})
+					for (const cmd of cmds) dispatchCommand(tabId, cmd)
+				}
+			}
+			return
+		}
 		case 'identity': {
+			// Identity comes from the page (top) frame — stamp it so
+			// `cursor_change` and notices target the right frame.
+			setPageFrame(tabId, frameId)
 			log('nav', 'info', 'identity reported', {
 				tabId, videoId: msg.identity.videoId, guard: msg.guardNavigation,
 			})
@@ -472,6 +540,17 @@ async function routeMessage(tabId: number | undefined, msg: ContentToBackground)
 			await handleCursorTrigger(tabId, msg.target)
 			return
 		case 'fail':
+			if (msg.role === 'media') {
+				// Soft fail: no controllable video in the embed frame. Leave the
+				// tab's room session (creds, WS, nav-guard) intact — the page
+				// frame's room must survive a videoless embed — just forget the
+				// media frame so commands fall back to broadcast until it recovers.
+				log('bg', 'warn', 'media adapter soft-failed', {
+					tabId, adapterId: msg.adapterId, reason: msg.reason,
+				})
+				clearMediaFrame(tabId)
+				return
+			}
 			log('bg', 'warn', 'adapter failed', {
 				tabId, adapterId: msg.adapterId, reason: msg.reason,
 			})
@@ -479,6 +558,7 @@ async function routeMessage(tabId: number | undefined, msg: ContentToBackground)
 			await clearCreds(tabId)
 			forgetTab(tabId)
 			sessions.delete(tabId)
+			tabFrames.delete(tabId)
 			clearNavGuard(tabId)
 			forgetIconForTab(tabId)
 			return
@@ -1113,8 +1193,21 @@ function dispatchCommand(tabId: number, cmd: AuthoritativeCommand): void {
 		: {}
 	log('bg', 'info', `command dispatched: ${cmd.type}`, { tabId, ...detail })
 	const payload: BackgroundToContent = { kind: 'command', command: cmd }
-	void browser.tabs.sendMessage(tabId, payload).catch(() => {
-		// Tab closed or content script not present; nothing actionable.
+
+	// Route to the frame that can act on this command: `cursor_change` drives
+	// the page (top) frame's in-page navigation; `play`/`pause`/`seek`/
+	// `nudge_rate` drive the `<video>` in the media frame. Targeting keeps a
+	// `cursor_change` from ever reaching (and potentially navigating) the embed
+	// frame. When the target frame id isn't known yet, fall back to a tab-wide
+	// broadcast — each frame's runtime ignores commands outside its role.
+	const frames = tabFrames.get(tabId)
+	const targetFrameId = cmd.type === 'cursor_change' ? frames?.pageFrameId : frames?.mediaFrameId
+	const options = targetFrameId !== undefined ? { frameId: targetFrameId } : undefined
+	void browser.tabs.sendMessage(tabId, payload, options).catch(() => {
+		// A targeted media send that rejects usually means that frame is gone
+		// (iframe reload/recreation with a new id). Drop the stale id so the next
+		// command broadcasts and the frame is re-learned from its `media_hello`.
+		if (cmd.type !== 'cursor_change' && targetFrameId !== undefined) clearMediaFrame(tabId)
 	})
 }
 
@@ -1130,7 +1223,12 @@ function dispatchCommand(tabId: number, cmd: AuthoritativeCommand): void {
  */
 function dispatchNotice(tabId: number, notice: Notice): void {
 	const payload: BackgroundToContent = { kind: 'notice', notice }
-	void browser.tabs.sendMessage(tabId, payload).catch(() => {
+	// Notices render in the page frame's on-page UI (the media frame has no
+	// notification UI and ignores them). Target the page frame so the toast
+	// isn't mounted inside the tiny embed iframe; broadcast if unknown.
+	const targetFrameId = tabFrames.get(tabId)?.pageFrameId
+	const options = targetFrameId !== undefined ? { frameId: targetFrameId } : undefined
+	void browser.tabs.sendMessage(tabId, payload, options).catch(() => {
 		// Tab closed or content script not present; nothing actionable.
 	})
 }

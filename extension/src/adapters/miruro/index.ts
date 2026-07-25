@@ -1,6 +1,6 @@
-import type { AdapterFactory, ContentIdentity } from '../types';
+import type { ContentIdentity, PageAdapterFactory } from '../types';
 import type { VideoRefWithMeta } from '../../background/protocol';
-import { BaseAdapter } from '../base';
+import { PageBaseAdapter } from '../base';
 import { waitForElement } from '../video-driver';
 // Host/path patterns and the video-id format live in the pure `url` module
 // so the background's navigation guard can share them (see that file and
@@ -8,50 +8,22 @@ import { waitForElement } from '../video-driver';
 import { HOST_RE, PATH_RE, makeVideoId, makeWatchUrl } from './url';
 
 /**
- * Scoped selector for the *player's* video element. miruro can render a
- * second `<video>` elsewhere on the page (trailer / hero), so a
- * document-wide `querySelector('video')` is unsafe.
+ * The player-embed host custom element. Its presence is miruro's "the player
+ * has mounted" signal, by which time the SPA has appended the `?ep=` query
+ * param {@link resolveIdentity} needs. {@link resolveReady} waits for it before
+ * reading identity. The `<video>` itself lives inside a cross-origin `strm.cx`
+ * iframe under this element and is owned by the `strmcx` media adapter — not by
+ * this page adapter.
  */
-const VIDEO_SELECTOR = '#player-container .player video';
+const EMBED_HOST_SELECTOR = 'strmcx-embed';
 
 /**
- * miruro's cold-page "click to load" button. Lives in the Vidstack layout
- * overlay. A regular `click()` does not trigger the load — the player only
- * responds to the keyboard `Space` activation, so the adapter dispatches the
- * full keydown + keyup pair when needed.
+ * How long {@link resolveReady} waits for the player embed to mount before
+ * giving up and letting {@link resolveIdentity} try anyway. If `?ep=` still
+ * isn't present the adapter fails cleanly and the runtime re-evaluates when the
+ * SPA's `replaceState` finally adds it (see {@link canHandlePage}).
  */
-const LOAD_BUTTON_SELECTOR = '#player-container .vds-video-layout button';
-
-/**
- * How long the adapter waits for the Vidstack player to hydrate. Beyond
- * this the page is treated as unsupported and the adapter fails — better
- * to be silent than to attach to a partially-rendered player.
- */
-const VIDEO_WAIT_TIMEOUT_MS = 10_000;
-
-/**
- * How long to wait for the manual-load button after the `<video>` element
- * has appeared. The button is rendered by the Vidstack layout overlay and
- * lands a few frames after the `<video>` itself, so a synchronous lookup
- * right after {@link VIDEO_SELECTOR} resolves is racy.
- */
-const LOAD_BUTTON_WAIT_TIMEOUT_MS = 5_000;
-
-/**
- * Settle time between the button appearing in the DOM and dispatching the
- * synthesized Space activation. Vidstack inserts the button before its
- * click handler is fully wired; dispatching immediately reaches a no-op
- * handler. Verified empirically on miruro: 300ms covers the gap.
- */
-const LOAD_BUTTON_SETTLE_MS = 300;
-
-/**
- * How long to wait for `loadedmetadata` after dispatching the synthesized
- * space-press. If the source never arrives the adapter still proceeds with
- * listener wiring — the user can press play themselves, and the room's
- * authoritative state will reconcile.
- */
-const LOAD_TIMEOUT_MS = 5_000;
+const READY_WAIT_TIMEOUT_MS = 10_000;
 
 /**
  * Selectors used by {@link MiruroAdapter.scrapeCatalog}. miruro's class
@@ -83,34 +55,30 @@ const EPISODE_TITLE_RE = /^EP\s+(\d+)\b/i;
 const EPISODE_LIST_WAIT_TIMEOUT_MS = 1_500;
 
 /**
- * Adapter for the miruro family of streaming sites (`miruro.tv` / `.to` /
- * `.bz` / `.ru`). Handles four quirks of the live site, each mapped onto a
- * {@link BaseAdapter} hook:
+ * Page-role adapter for the miruro family of streaming sites (`miruro.tv` /
+ * `.to` / `.bz` / `.ru`). It owns the top-frame half only — content identity,
+ * the episode catalog, and in-page cursor navigation. The `<video>` moved into
+ * a cross-origin `strm.cx` iframe and is owned by the generic `strmcx` media
+ * adapter (`src/adapters/strmcx/index.ts`); this adapter never touches it.
  *
- * 1. **Multi-video pages** — {@link resolveVideo} uses a container-scoped
- *    selector, not `document.querySelector('video')`.
- * 2. **Late hydration** — the Vidstack player mounts after `document_idle`,
- *    so {@link resolveVideo} waits via {@link waitForElement} rather than
- *    failing immediately.
- * 3. **Manual-load cold start** — on a freshly-loaded page the `<video>` has
- *    no source until a "click to load" button is activated (only via a
- *    synthesized `Space` keydown/keyup pair, not `click()`).
- *    {@link ensurePlayable} drives it.
- * 4. **One-shot auto-play** — miruro auto-plays once when the source loads;
- *    `holdsAutoplay = true` lets the base hold the video paused until the
- *    room's first `play`/`pause` command arrives.
+ * Quirks handled here:
+ *
+ * 1. **Late hydration / late `?ep=`** — miruro sometimes loads the watch page
+ *    without `?ep=` and adds it via `replaceState` once the player mounts.
+ *    {@link resolveReady} waits for the {@link EMBED_HOST_SELECTOR} embed host
+ *    so identity is read after the param arrives.
+ * 2. **URL-identity cursor moves** — every episode change updates `?ep=`, so
+ *    the background navigation-guard (`guardNavigation = true` + `videoIdForUrl`
+ *    in ./url.ts) is the single detector; {@link applyCursorChange} replays the
+ *    episode-list click so miruro's SPA does the navigation.
  */
-class MiruroAdapter extends BaseAdapter {
+class MiruroAdapter extends PageBaseAdapter {
   readonly id = 'miruro';
 
   // miruro's watch URLs are canonical `/watch/<show>?ep=<n>` and resolve
   // cleanly to a videoId via `videoIdForUrl` (see ./url), so the background's
   // identity-based navigation-guard is safe to enable here.
   readonly guardNavigation = true;
-
-  // miruro auto-plays exactly once when the source loads; the base holds it
-  // paused until the room's first authoritative command takes over.
-  protected readonly holdsAutoplay = true;
 
   /**
    * Memoised wait for the episode-list container. Shared by
@@ -125,16 +93,22 @@ class MiruroAdapter extends BaseAdapter {
     if (!PATH_RE.test(url.pathname)) return false;
     // `?ep=` is intentionally NOT required here: miruro sometimes loads the
     // watch page without the query param and adds it via `replaceState` once
-    // the player initialises. The ep is re-read in `resolveIdentity` after the
-    // video element is found, by which time the param has arrived. If it still
-    // hasn't, the base calls `ctx.fail` and the runtime's URL-change listener
-    // re-evaluates when the param finally appears.
+    // the player initialises. The ep is re-read in `resolveIdentity` after
+    // `resolveReady` waits for the player embed, by which time the param has
+    // arrived. If it still hasn't, the base calls `ctx.fail` and the runtime's
+    // URL-change listener re-evaluates when the param finally appears.
     return true;
   }
 
-  protected resolveVideo(): Promise<HTMLVideoElement | null> {
-    return waitForElement<HTMLVideoElement>(VIDEO_SELECTOR, {
-      timeoutMs: VIDEO_WAIT_TIMEOUT_MS,
+  /**
+   * Wait for the player embed host to mount before reading identity. On the
+   * old single-frame model the `<video>` wait implicitly gated this; with the
+   * video gone to the `strm.cx` iframe, this explicit wait is what gives the
+   * SPA time to append `?ep=`.
+   */
+  protected async resolveReady(): Promise<void> {
+    await waitForElement(EMBED_HOST_SELECTOR, {
+      timeoutMs: READY_WAIT_TIMEOUT_MS,
       signal: this.signal,
     });
   }
@@ -142,9 +116,9 @@ class MiruroAdapter extends BaseAdapter {
   protected resolveIdentity(): ContentIdentity | null {
     const showId = PATH_RE.exec(location.pathname)?.[1];
     if (!showId) return null;
-    // Re-read ep *after* the video wait (which resolveVideo guarantees before
-    // this runs): miruro often appends `?ep=` only after the player
-    // initialises, so reading at adapter entry is racy.
+    // Re-read ep *after* resolveReady (which guarantees the embed mounted):
+    // miruro often appends `?ep=` only after the player initialises, so
+    // reading at adapter entry is racy.
     const ep = new URL(location.href).searchParams.get('ep');
     if (!ep) return null;
     return {
@@ -152,74 +126,6 @@ class MiruroAdapter extends BaseAdapter {
       videoId: makeVideoId(showId, ep),
       normalizedUrl: `/watch/${showId}?ep=${ep}`,
     };
-  }
-
-  /**
-   * Ensure the `<video>` has a source. The base only calls this when
-   * {@link BaseAdapter.canPlay} is false (no `currentSrc`). On cold loads
-   * miruro renders the player with an empty `<video>` and a manual-load button
-   * that only responds to a `Space` keydown/keyup pair (a regular `click()` is
-   * ignored — verified live). After the source arrives the video is paused
-   * immediately so the room's authoritative state can take over without a
-   * flash of auto-play.
-   */
-  protected async ensurePlayable(): Promise<void> {
-    const video = this.video;
-    if (!video) return;
-
-    const button = await this.waitForLoadButton(video);
-    if (this.signal.aborted) return;
-    if (video.currentSrc) {
-      this.log('info', 'video gained a source while waiting for manual-load button');
-      return;
-    }
-    if (!button) {
-      this.log(
-        'warn',
-        `no source and no manual-load button after ${LOAD_BUTTON_WAIT_TIMEOUT_MS}ms — letting the user start playback manually`
-      );
-      return;
-    }
-
-    // Vidstack inserts the button into the DOM before its click handler is
-    // fully wired up. A synchronous dispatch reaches the button but the
-    // handler is a no-op; the responsive-layout pass + capability detection
-    // settle a few hundred ms later, and only then does the click actually
-    // start playback. See {@link LOAD_BUTTON_SETTLE_MS}.
-    await new Promise((r) => setTimeout(r, LOAD_BUTTON_SETTLE_MS));
-    if (this.signal.aborted) return;
-
-    this.log('info', 'dispatching synthesized Space keydown/keyup on manual-load button');
-    button.focus();
-    const eventInit: KeyboardEventInit = {
-      key: ' ',
-      code: 'Space',
-      keyCode: 32,
-      which: 32,
-      bubbles: true,
-      cancelable: true,
-    };
-    button.dispatchEvent(new KeyboardEvent('keydown', eventInit));
-    button.dispatchEvent(new KeyboardEvent('keyup', eventInit));
-
-    await new Promise<void>((resolve) => {
-      let settled = false;
-      const settle = () => {
-        if (settled) return;
-        settled = true;
-        video.removeEventListener('loadedmetadata', settle);
-        clearTimeout(timer);
-        resolve();
-      };
-      video.addEventListener('loadedmetadata', settle, { once: true });
-      const timer = setTimeout(settle, LOAD_TIMEOUT_MS);
-    });
-
-    if (this.signal.aborted) return;
-    // Vidstack auto-plays after the load; pause immediately so the room's
-    // first authoritative command (default: paused) wins without a race. The
-    // base's autoplay hold also re-pauses, but pausing here avoids the flash.
-    video.pause();
   }
 
   /**
@@ -318,7 +224,7 @@ class MiruroAdapter extends BaseAdapter {
   /**
    * Memoised wait for `#episodes-list-container`. {@link scrapeCatalog} needs
    * it; sharing one promise means one observer/timer pair, torn down on destroy
-   * via {@link BaseAdapter.signal}.
+   * via {@link PageBaseAdapter.signal}.
    */
   private episodeList(): Promise<Element | null> {
     if (!this.episodeListPromise) {
@@ -328,27 +234,6 @@ class MiruroAdapter extends BaseAdapter {
       });
     }
     return this.episodeListPromise;
-  }
-
-  /**
-   * Resolve to the manual-load button, or `null` on timeout, on adapter
-   * teardown, or as soon as the video begins loading a source on its own
-   * (the `loadstart` short-circuit — so a page that self-loads doesn't waste
-   * the full timeout). The `loadstart` listener rides the adapter's lifetime
-   * signal, so it's cleaned up with everything else on destroy.
-   *
-   * @param video Player element, watched for `loadstart`.
-   */
-  private waitForLoadButton(video: HTMLVideoElement): Promise<HTMLButtonElement | null> {
-    const loadStarted = new AbortController();
-    video.addEventListener('loadstart', () => loadStarted.abort(), {
-      once: true,
-      signal: this.signal,
-    });
-    return waitForElement<HTMLButtonElement>(LOAD_BUTTON_SELECTOR, {
-      timeoutMs: LOAD_BUTTON_WAIT_TIMEOUT_MS,
-      signal: AbortSignal.any([this.signal, loadStarted.signal]),
-    });
   }
 
   /**
@@ -398,4 +283,4 @@ class MiruroAdapter extends BaseAdapter {
   }
 }
 
-export const miruroAdapterFactory: AdapterFactory = () => new MiruroAdapter();
+export const miruroAdapterFactory: PageAdapterFactory = () => new MiruroAdapter();

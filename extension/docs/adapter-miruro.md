@@ -2,6 +2,8 @@
 
 `miruro` is the first real-site adapter — see [adapter-contract.md](adapter-contract.md) for the contract it implements. The source is [`src/adapters/miruro/index.ts`](../src/adapters/miruro/index.ts); the spec that introduced it lives at [`agent-os/specs/2026-05-24-1700-extension-miruro-adapter/`](../../agent-os/specs/2026-05-24-1700-extension-miruro-adapter/).
 
+> **Page/media split (2026-07).** miruro moved its player into a **cross-origin `strm.cx` iframe**, so the `<video>` is no longer in the miruro document. The adapter is now a **page-role** adapter (`PageBaseAdapter`) that owns identity, catalog, and cursor navigation only; the `<video>` is owned by the generic **`strmcx` media adapter** ([`src/adapters/strmcx/index.ts`](../src/adapters/strmcx/index.ts)) running in the embed frame. The two halves are bridged by the background per tab. See [adapter-contract.md §Two roles](adapter-contract.md#two-roles-page-and-media) and the spec at [`agent-os/specs/2026-07-25-1200-extension-cross-frame-media-adapter/`](../../agent-os/specs/2026-07-25-1200-extension-cross-frame-media-adapter/).
+
 ## Supported hosts
 
 Enumerated, no wildcard: `miruro.tv`, `miruro.to`, `miruro.bz`, `miruro.ru` (with or without the `www.` prefix). miruro is known to rotate TLDs; the list is hard-coded rather than wildcarded so a hostile actor registering `miruro.<anything>` can't trigger the adapter. Adding a new TLD is a code change + release. A future slice may move the list to app config.
@@ -37,45 +39,21 @@ The split exists so the background service worker can answer "is this URL one of
 
 miruro sets **`guardNavigation = true`**: its `/watch/<show>?ep=<n>` URLs are canonical, navigable, and resolve cleanly to identity, so the background's navigation-guard pulls the tab back when it lands on a URL outside the room's playlist by any means the in-page click listener can't observe (home link, related-video thumbnails, address bar, back/forward, cross-site). See [`protocol-client.md` §The navigation-guard](protocol-client.md#the-navigation-guard-non-click-departures) and [`adapter-contract.md` §Navigation-guard & the URL matcher](adapter-contract.md#navigation-guard--the-url-matcher).
 
-## DOM quirks
+## The player lives in a cross-origin iframe
 
-### Two `<video>` elements
+As of 2026-07 the watch page renders `#app … strmcx-embed` (an **open** shadow root) containing an `<iframe src="https://strm.cx/?embed=1">`. The Vidstack `media-player → media-provider → <video>` (blob source) lives inside that **cross-origin** `strm.cx` document. Same-Origin Policy walls it off from the miruro top frame, so the miruro page adapter neither resolves nor drives the `<video>` — that is the **`strmcx` media adapter**'s job, running in the embed frame via `entrypoints/media.content.ts` (`all_frames`).
 
-Watch pages can render more than one `<video>` (e.g. a hero / trailer in addition to the player). The adapter binds to the player's element via the scoped selector `#player-container .player video` — never `document.querySelector('video')`.
+What the page adapter still does in the top frame:
 
-### Late hydration
+### Waiting for `?ep=` (late hydration)
 
-The player uses [Vidstack](https://www.vidstack.io/) (`.vds-video-layout.dark` in the DOM). It mounts after `document_idle`, so a synchronous `querySelector` at adapter `init` time may return `null`. The adapter waits via `MutationObserver` on `document.body`, with a 10 s timeout — if Vidstack hasn't hydrated by then the adapter `ctx.fail`s.
+miruro appends `?ep=` via `history.replaceState` once the player mounts. The page adapter's `resolveReady()` waits for the `strmcx-embed` host element (`MutationObserver` on `document.body`, 10 s timeout) before reading identity, so `resolveIdentity()` sees the settled `?ep=`. If it's still missing, the adapter `ctx.fail`s and the runtime re-evaluates when `replaceState` finally fires.
 
-### Cold-page manual-load button
+### What moved to the `strmcx` media adapter
 
-On a freshly-loaded watch page the `<video>` exists but has no source. A "click to load" button sits at `#player-container .vds-video-layout button`. A regular `.click()` is **not** sufficient — verified live, the player only responds to a keyboard `Space` activation. The adapter dispatches the synthesized pair:
-
-```ts
-const eventInit: KeyboardEventInit = {
-  key: ' ',
-  code: 'Space',
-  keyCode: 32,
-  which: 32,
-  bubbles: true,
-  cancelable: true,
-}
-button.dispatchEvent(new KeyboardEvent('keydown', eventInit))
-button.dispatchEvent(new KeyboardEvent('keyup', eventInit))
-```
-
-Two timing quirks sit around the dispatch:
-
-1. **Button appears after the `<video>`.** Vidstack's layout overlay lands a few frames after the `<video>` itself, so a synchronous lookup right after `waitForVideo` resolves is racy. `waitForLoadButton` re-observes `document.body` for up to `LOAD_BUTTON_WAIT_TIMEOUT_MS` (5 s), and short-circuits via the video's `loadstart` event so a page that loads its source on its own (refresh, second activation, server-side hydration) doesn't wait the full timeout. Returns `null` on timeout, in which case the adapter logs and lets the user start playback manually.
-2. **Click handler wires up after the button mounts.** Vidstack inserts the button into the DOM *before* its click handler is fully attached — the responsive-layout pass + capability detection settle a few hundred ms later. Dispatching immediately reaches a no-op handler, so the adapter waits `LOAD_BUTTON_SETTLE_MS` (300 ms, verified empirically) after the button appears before firing the synthesized keys.
-
-### Holding the one-shot autoplay
-
-Vidstack auto-plays exactly once when the source loads, and rides a delayed resume-position seek with it. Both would leak to the room as phantom intents — at first join, and again after a navigation-guard reload. The adapter holds the autoplay rather than letting it fire and relying solely on the background's suppression (see [`adapter-contract.md` §Holding autoplay](adapter-contract.md#holding-autoplay-until-the-rooms-first-command) for the general pattern):
-
-1. A `play` listener (`holdAutoplay`) is attached **before** `ensureLoaded`, so it catches the auto-play whichever path the load takes (warm revisit with a source already present, or cold manual-load). While `autoplayHeld` is set it re-`pause()`s the video on every `play`.
-2. The hold is released on the **first** `onCommand` invocation, *before* the command is applied — so a room `play` command isn't immediately re-paused by the guard. `releaseAutoplayHold` is idempotent and also runs from `destroy`.
-3. `AUTOPLAY_HOLD_TIMEOUT_MS` (10 s) lifts the hold even if no command ever arrives (e.g. a brand-new room with no state), so the viewer is never stuck unable to start playback. The happy path lifts it far sooner.
+- **Resolving the `<video>`** — inside the `strm.cx` document the embed is a dedicated player frame with a single `<video>`, so a plain `video` selector is safe (no hero/trailer to disambiguate; the old `#player-container .player video` scoping was a top-frame concern).
+- **Cold-start load** — confirmed live (via the `debug-ext/` probe) that the embed self-loads its blob source at `readyState 4` within ~1 s, so no manual-load button is needed; the `strmcx` adapter uses the base's default `canPlay`/`ensurePlayable`. If a future embed needs a load control, it's the media adapter's `ensurePlayable` override — and lives in the embed frame where that DOM is.
+- **Autoplay hold** — the generic hold (`holdsAutoplay = true`, re-pause on stray auto-play until the room's first command, 10 s safety release) is inherited from `MediaBaseAdapter`. See [`adapter-contract.md` §Holding autoplay](adapter-contract.md#holding-autoplay-until-the-rooms-first-command).
 
 ## Catalog scraping
 
@@ -101,7 +79,7 @@ If any of these flip, the adapter returns `null` cleanly — a polluted catalog 
 
 ### Behavior
 
-1. `scrapeCatalog` waits up to `EPISODE_LIST_WAIT_TIMEOUT_MS` (1.5 s) for `#episodes-list-container` to mount via `MutationObserver`. The wait uses a separate observer pair (`catalogObserver` / `catalogTimer`) from the `<video>` / manual-load flow so they can coexist on cold pages.
+1. `scrapeCatalog` waits up to `EPISODE_LIST_WAIT_TIMEOUT_MS` (1.5 s) for `#episodes-list-container` to mount via `waitForElement` (a single memoised `episodeListPromise`, so one observer/timer pair serves both the scrape and `applyCursorChange`).
 2. Once the container appears, the adapter walks every `button[data-episode-id]` inside it. For each button, the episode number is parsed from the `title` attribute via `EPISODE_TITLE_RE`; entries whose title doesn't match the `EP <n>` prefix are dropped.
 3. Each surviving button becomes a `VideoRefWithMeta`:
    - `videoId: \`${showId}-ep${ep}\`` (same shape as the adapter's own `ContentIdentity.videoId`).
@@ -112,27 +90,19 @@ If any of these flip, the adapter returns `null` cleanly — a polluted catalog 
 
 Multi-season shows render a separate season picker (`#root > … > ._seasonCardGrid_*`) where each season is its own `/watch/<seasonShowId>` page. Cross-season cataloging would require switching `showId` per entry and isn't in scope for this slice — the current adapter scrapes the *current* season only, and the room reconciles across seasons via cursor changes that change `showId`.
 
-`destroy()` disconnects `catalogObserver` and clears `catalogTimer` so an SPA navigation mid-scrape doesn't leak handlers.
+The memoised wait rides the adapter's lifetime `signal`, so an SPA navigation mid-scrape (which aborts the signal via `destroy()`) tears down the observer/timer without leaking handlers.
 
 ## Episode switching
 
-The miruro UI navigates between episodes via `history.pushState` (URL changes from `?ep=4` to `?ep=5` with no full reload). The runtime's `installNavigationListeners` ([`runtime.ts:184-207`](../src/adapters/runtime.ts#L184-L207)) catches this and calls `destroy()` + re-evaluates the registry. The adapter therefore re-binds to the new episode automatically; no in-adapter SPA handling is needed.
+The miruro UI navigates between episodes via `history.pushState` (URL changes from `?ep=4` to `?ep=5` with no full reload). The page runtime's `installNavigationListeners` ([`runtime.ts`](../src/adapters/runtime.ts)) catches this and calls `destroy()` + re-evaluates the registry. The page adapter therefore re-binds to the new episode automatically; no in-adapter SPA handling is needed. The embed frame reloads with the new source and re-runs its own media adapter (which re-announces `media_hello`); the two halves re-converge per tab in the background.
 
 ## Viewer-driven cursor changes
 
-The adapter both **announces** the user's episode-list clicks toward the room and **applies** authoritative `cursor_change` commands by replaying a click on the matching button. See [`adapter-contract.md` §The `AdapterContext` bridge](adapter-contract.md#the-adaptercontext-bridge) and [`protocol-client.md` §Viewer-driven cursor changes](protocol-client.md#viewer-driven-cursor-changes) for the cross-cutting flow.
+The adapter **applies** authoritative `cursor_change` commands by replaying a click on the matching episode button. It does **not** implement a DOM click listener to *announce* moves — see below. See [`protocol-client.md` §Viewer-driven cursor changes](protocol-client.md#viewer-driven-cursor-changes) for the cross-cutting flow.
 
-### Sender path (announce)
+### Sender path (announce) — via the navigation-guard, not a click listener
 
-The adapter attaches one **delegated, passive** `click` listener on `#episodes-list-container` rather than per-button listeners — robust against miruro re-rendering the inner buttons, no per-button bookkeeping. The handler:
-
-1. Filters on `Event.isTrusted` so synthetic clicks dispatched by the receiver path (below) don't loop back to the server.
-2. Resolves the clicked `button[data-episode-id]` via `closest()`.
-3. Parses the ep number from the button's `title` attribute via `EPISODE_TITLE_RE`.
-4. Builds a `VideoRefWithMeta` in the same shape `scrapeCatalog` produces (full `pageUrl`, `videoId = ${showId}-ep${ep}`, `episodeNumber`, `label`).
-5. Calls `ctx.emitCursorTrigger(target)`.
-
-The listener never calls `preventDefault` — miruro's own SPA routing handles the local nav; we just piggyback the announcement. `destroy()` removes the delegated listener.
+Every episode change also changes `?ep=`, and miruro's `/watch/<show>?ep=<n>` URLs encode identity, so the adapter sets `guardNavigation = true` and lets the **background navigation-guard** be the single detector for cursor moves. The guard (a `browser.tabs.onUpdated` listener that resolves the live URL through `videoIdForUrl`) catches the episode list, the player's "Next episode" button, keyboard shortcuts, and autoplay-advance alike. A DOM click listener would only cover the episode-list case *and* would double-fire alongside the guard, so miruro deliberately **omits** `watchCursorTriggers` (the base's no-op stays in force). See [`adapter-contract.md` §Navigation-guard & the URL matcher](adapter-contract.md#navigation-guard--the-url-matcher).
 
 ### Receiver path (apply)
 
@@ -153,5 +123,5 @@ The runtime re-arms the join settle window on every `CURSOR_CHANGE` so miruro's 
 
 ## Out of scope
 
-- Cross-origin iframe support — miruro's player is top-level, so this isn't needed.
+- Cross-season cataloging — `scrapeCatalog` scrapes the current season only (see above).
 - Provider-specific `nudge_rate` handling — the runtime-driven `setPlaybackRate` clamp is identical across adapters today, and the Vidstack `<video>` element responds to `playbackRate` natively. If Vidstack's own UI ever fights the assignment, miruro can override `setPlaybackRate` to route through the player API instead.
