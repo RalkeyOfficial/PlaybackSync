@@ -1,0 +1,76 @@
+============================================================
+IDEA: remote selector/config registry (hot-fix adapters without a release)
+============================================================
+Problem it solves: when a site (e.g. miruro) renames a class / moves the load
+button, today that's a code change -> store re-review -> wait for every user to
+update. A remote-fetched config lets us edit one JSON and fix the fleet in
+hours instead of days.
+
+Scope it precisely -- "externalize the tunables of EXISTING adapters as
+validated DATA, with bundled fallback." Not "remote adapters", not "add sites
+without updating."
+
+HARD LIMITS (not negotiable):
+  1. Can't add new SITES remotely. Content scripts only inject on manifest
+     `matches`, and `host_permissions` can't widen at runtime without a user
+     re-consent prompt. Registry keeps EXISTING adapters alive/tunable only.
+     New sites / new embed hosts still need an extension update + review.
+  2. DATA, never CODE. Chrome MV3 + Mozilla AMO both BAN remotely hosted code,
+     but allow fetching data/config. So: selector strings, numbers, booleans,
+     enumerated keys only. Nothing eval'd / new Function'd / that chooses a
+     network sink. CSS selectors -> querySelector = data (fine). Regexes from
+     strings = gray area, keep minimal + obviously config. If a reviewer reads
+     the JSON as "settings" you're safe; as "logic" it's a rejection.
+
+HOSTING (this is where GitHub rate-limits matter):
+  - GitHub REST API (api.github.com/.../contents) -> NEVER. 60 req/hour PER IP,
+    so everyone behind one NAT/CGNAT shares it -> instant throttle. Also base64.
+  - raw.githubusercontent.com -> ok small, risky at scale. Not the API (not on
+    60/hr), Fastly ~5min cache, but GitHub says it's "not a CDN" and may throttle
+    aggregate abuse. Fine for a small user base; use only as a fallback mirror.
+  - jsDelivr (cdn.jsdelivr.net/gh/user/repo@branch/registry.json) or GitHub Pages
+    -> THE ANSWER. Real CDNs, no API rate limit, proper ETag/Last-Modified.
+    jsDelivr = least setup, versionable, has a purge endpoint to refresh @latest
+    on demand. Pages = first-party. Pick one of these as primary.
+
+POLLING DISCIPLINE (makes rate-limit a non-issue regardless of host):
+  1. ONE fetch per browser, in the BACKGROUND -- never per frame/tab (with the
+     two-frame arch, per-content-script fetch would multiply requests). BG
+     fetches once, writes storage.local; all content scripts read the cache.
+  2. Conditional GET: store ETag, send If-None-Match -> cheap 304, no body.
+  3. Poll rarely + jittered: on worker boot + an `alarms` timer every ~6-24h,
+     with a random per-install offset (avoid thundering herd). Only fetch if the
+     cache is older than the interval.
+  4. Cache-first always: adapters read cached config merged over bundled
+     defaults. Offline / GitHub down / throttled -> last-good cache, then bundled
+     defaults. Fetch never sits on the critical path.
+  => ~2 conditional reqs/browser/day, almost all 304s, almost all CDN-edge. Fine
+     at any realistic scale.
+
+REFRAME: we don't need it FAST. Bundled defaults mean staleness is harmless;
+the win is days -> hours. A 6-24h propagation already wins. Chasing minute-level
+freshness is what creates rate-limit exposure and buys nothing. Slow, conditional,
+cached, jittered -- boring on purpose.
+
+PLUMBING (implementation sketch):
+  - Add the CDN host to host_permissions (e.g. https://cdn.jsdelivr.net/* or
+    https://<you>.github.io/*). Explain in AMO reviewer notes: "fetches a static
+    selector-config JSON; data only, no code."
+  - Background: alarms-driven conditional fetch -> validate -> storage.local key.
+  - Shared getConfig(): reads storage.local, strict schema-validates (schemaVersion,
+    clamp numbers, reject unknown shapes), merges over bundled defaults, returns
+    typed config. Both page + media content scripts use it.
+  - Adapters read selectors/timeouts/flags from getConfig() instead of const's.
+    Keyed by adapter id, e.g.:
+      { schemaVersion, adapters: {
+          miruro:  { embedHostSelector, episodeListContainer, episodeEntry, ... },
+          strmcx:  { videoSelector, loadButton?, holdsAutoplay, ... } } }
+
+BLAST RADIUS: some selectors drive actions (.click() episode buttons, synth Space
+on load button), so a compromised registry could click things -- but only within
+already-permitted streaming origins, and it can NEVER change where data goes (the
+daemon URL / creds never come from remote config). Strict schema validation +
+"config never picks a network sink" keeps it bounded.
+
+NEXT STEP: deserves its own agent-os spec (delivery design + schema + getConfig
+merge layer + adapter changes), not a quick patch.

@@ -20,7 +20,7 @@ import type { Notice } from '@/src/messages'
 /** Max simultaneously-visible peer toasts before the oldest is evicted. */
 const MAX_TOASTS = 4
 /** How long a peer toast lingers before auto-dismissing (ms). */
-const TOAST_MS = 5_000
+const TOAST_MS = 3_000
 /** How long the self-facing welcome badge lingers (ms) — longer than a toast. */
 const WELCOME_MS = 4_500
 /** Fallback removal delay if a CSS `transitionend` never fires (ms). */

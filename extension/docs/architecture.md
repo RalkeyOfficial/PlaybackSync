@@ -1,13 +1,16 @@
 # Architecture
 
-The PlaybackSync extension is a two-process WXT application: a **background service worker** (Chromium MV3) / **long-lived background page** (Firefox MV2), and **content scripts** that run in every page's isolated world. They communicate only through `chrome.runtime` message passing — the background never touches the DOM, the content side never opens a WebSocket. That separation is what makes new-site support a single-file change rather than a refactor.
+The PlaybackSync extension is a two-process WXT application: a **background service worker** (Chromium MV3) / **long-lived background page** (Firefox MV2), and **content scripts** that run in page isolated worlds. They communicate only through `chrome.runtime` message passing — the background never touches the DOM, the content side never opens a WebSocket.
+
+A site's DOM can span **two frames** of one tab: the **page** frame (top, page host) owns identity/catalog/navigation, and a **media** frame (an embed player, often a cross-origin iframe like `strm.cx`) owns the `<video>`. Two content scripts run accordingly — the page runtime top-frame-only, the media runtime with `all_frames` scoped to embed hosts — and the background bridges them per `tabId` (see [Two roles](adapter-contract.md#two-roles-page-and-media)). New-site support is a small, per-role change rather than a refactor.
 
 ## Entrypoints
 
 | File | Role | `runAt` |
 |------|------|---------|
 | `entrypoints/background.ts` | Service worker / background page. WS lifecycle, message routing, command dispatch. | n/a |
-| `entrypoints/content.ts` | Adapter runtime bootstrap — picks an adapter for the page, runs status polling, delivers inbound commands, and hosts the on-page notification UI (see [`notifications.md`](notifications.md)). | `document_idle` |
+| `entrypoints/content.ts` | **Page** runtime bootstrap (top frame) — picks a page adapter, reports identity/catalog, applies `cursor_change`, and hosts the on-page notification UI (see [`notifications.md`](notifications.md)). | `document_idle` |
+| `entrypoints/media.content.ts` | **Media** runtime bootstrap (`all_frames`, embed hosts) — picks a media adapter for the frame, resolves the `<video>`, reports intents/status, says `media_hello`, applies play/pause/seek/nudge. | `document_idle` |
 | `entrypoints/credentials.content.ts` | One-shot share-URL credential sniffer. Sends a `credentials` message when the URL fragment carries `#sync_url=&sync_password=` and exits. See [`storage.md`](storage.md). | `document_start` |
 | `entrypoints/popup/` | Toolbar popup — status pill, current cursor, Leave Room. See [`popup.md`](popup.md). | n/a |
 
@@ -41,21 +44,24 @@ The PlaybackSync extension is a two-process WXT application: a **background serv
                                                 getState /    │   │
                                                 setIdentity   │   ▼
                                      ┌────────────────────────────────────────────────────────────────────┐
-                                     │  Site adapter                        (src/adapters/<site>/)        │
+                                     │  Site adapter — two roles                                          │
                                      │  ──────────────────────────────────────────────────────────────    │
-                                     │  · Find the <video> element                                        │
-                                     │  · Observe user play/pause/seek → emit local intents               │
-                                     │  · Apply authoritative commands verbatim                           │
-                                     │  · Derive strict content identity                                  │
-                                     │  · Expose current state on demand for heartbeats                   │
+                                     │  PAGE  (src/adapters/<site>/, top frame)                           │
+                                     │   · Derive strict content identity · scrape catalog                │
+                                     │   · Apply cursor_change · navigation-guard opt-in                  │
+                                     │  MEDIA (src/adapters/<player>/, embed frame)                       │
+                                     │   · Find the <video> · observe play/pause/seek → intents          │
+                                     │   · Apply play/pause/seek/nudge · expose state · autoplay hold     │
                                      └────────────────────────────────────────────────────────────────────┘
 ```
+
+The content-runtime box above is really **two** runtimes — `src/adapters/runtime.ts` (page) top-frame-only, and `src/adapters/media/runtime.ts` (media) under `all_frames` — each bootstrapped by its own entrypoint and each talking to the background independently for the same `tabId`. The page runtime reports identity/catalog and applies `cursor_change`; the media runtime polls `getState()` at 1 Hz, reports intents/status, and applies playback commands.
 
 ### Why this split
 
 The legacy prototype's [workshop v1 design](../../OLD_CODE/extension/docs/playback_sync_extension_architecture_adapter_based_design_workshop_v_1.md) made the case explicitly: **adapters MUST NOT touch the WebSocket, MUST NOT decide suppression, MUST NOT communicate across tabs**. That keeps every site adapter small, statically auditable, and safe to write without understanding the protocol. The price is the dance of message passing, which is worth paying.
 
-The background is the *protocol client*; the content runtime is the *adapter manager*; site adapters are the *execution layer*. Adding a new site means writing one file that implements the `Adapter` contract and adding it to the registry in `src/adapters/runtime.ts`.
+The background is the *protocol client*; the content runtimes are the *adapter managers*; site adapters are the *execution layer*. Adding a new site means writing a `PageRole` (identity/catalog/cursor) in `src/adapters/<site>/` and registering it in `src/adapters/runtime.ts`; its `<video>` is served by a `MediaRole` — reuse an existing one (e.g. `strmcx`) if the site embeds that player, or add a new one under `src/adapters/<player>/` + `src/adapters/media/registry.ts` + `src/adapters/embed-matches.ts`.
 
 ### Popup snapshot channel
 
@@ -73,22 +79,23 @@ The content script is the extension's only *injected page UI*. When the backgrou
 
 | kind | payload | when |
 |------|---------|------|
-| `intent` | `adapterId`, `intent: LocalIntent` (`play`/`pause`/`seek` + time) | User did something to the video |
-| `status` | `adapterId`, `state: VideoState` (`currentPos`, `playerState`) | Every 1 s while an adapter is active |
-| `identity` | `adapterId`, `identity: ContentIdentity` (`providerId`, `videoId`, `normalizedUrl`), `pageUrl` (full `location.href`), `guardNavigation` (the active adapter's opt-in) | Once per adapter init |
-| `catalog` | `adapterId`, `catalog: VideoRefWithMeta[] \| null` | Once per adapter init, after `scrapeCatalog()` resolves |
+| `intent` | `adapterId`, `intent: LocalIntent` (`play`/`pause`/`seek` + time) | User did something to the video (media frame) |
+| `status` | `adapterId`, `state: VideoState` (`currentPos`, `playerState`) | Every 1 s while a media adapter is active (media frame) |
+| `media_hello` | `mediaAdapterId` | Media frame resolved a controllable `<video>` — lets the background learn the media `frameId` + resync a room already in progress |
+| `identity` | `adapterId`, `identity: ContentIdentity` (`providerId`, `videoId`, `normalizedUrl`), `pageUrl` (full `location.href`), `guardNavigation` (the active adapter's opt-in) | Once per page adapter init |
+| `catalog` | `adapterId`, `catalog: VideoRefWithMeta[] \| null` | Once per page adapter init, after `scrapeCatalog()` resolves |
 | `cursor_trigger` | `adapterId`, `target: VideoRefWithMeta` | User clicked an in-page nav control (e.g. an episode button) |
-| `fail` | `adapterId`, `reason: string` | Adapter can't run on this page |
+| `fail` | `role: 'page' \| 'media'`, `adapterId`, `reason: string` | Adapter can't run. A `media` fail is **soft** (leaves the room intact); a `page` fail tears the tab down |
 | `credentials` | `syncUrl`, `syncPassword` | Share-URL pickup fires once at `document_start`; binds to the capturing tab's `pbsync.tab.<tabId>` slot |
 
 **Background → Content** (`BackgroundToContent`):
 
 | kind | payload | when |
 |------|---------|------|
-| `command` | `command: AuthoritativeCommand` | Server told us to play / pause / seek / nudge_rate / cursor_change |
-| `notice` | `notice: Notice` | A display-only peer action (from a server `NOTICE` frame) or the client-synthesised `welcome`. Rendered as an on-page toast / badge; never affects playback. See [`notifications.md`](notifications.md). |
+| `command` | `command: AuthoritativeCommand` | Server told us to play / pause / seek / nudge_rate / cursor_change. **Frame-targeted:** `cursor_change` → page frame; `play`/`pause`/`seek`/`nudge_rate` → media frame (broadcast fallback if the media frame id isn't known yet) |
+| `notice` | `notice: Notice` | A display-only peer action (from a server `NOTICE` frame) or the client-synthesised `welcome`. Targeted at the page frame; rendered as an on-page toast / badge; never affects playback. See [`notifications.md`](notifications.md). |
 
-`tabId` is read from `sender.tab?.id` on the background side; the content side never sets it.
+`tabId` is read from `sender.tab?.id` on the background side; `sender.frameId` distinguishes the page frame (identity/catalog/cursor) from the media frame (intent/status/`media_hello`) so commands can be routed back to the right one (`tabFrames: Map<tabId, {pageFrameId, mediaFrameId?}>`). The content side never sets either.
 
 ## Where state lives
 
@@ -99,7 +106,8 @@ The content script is the extension's only *injected page UI*. When the backgrou
 | Per-tab status cache + identity | `src/background/tabs.ts` (`Map<tabId, TabEntry>`) | Heartbeat needs fresh state without round-trips |
 | Suppression windows + convergence gates | `SessionState.recentCommands`, `converged`, `everConverged` (connection-scoped latch), `settleUntil`, `awaitingReload`, `pendingCursorTarget` (in-flight cursor forward) (one session per tab — all scalars now that each WS runtime is keyed by `tabId`) | Co-located with the rest of session state; pruned on record / on tab close / on (re)connect — see [`protocol-client.md`](protocol-client.md#feedback-loop-suppression) |
 | Navigation-guard arming | `navGuardedTabs: Map<tabId, adapterId>` + `navGuardTimers` in `entrypoints/background.ts` | Independent of `sessions` (the `identity` message can arrive before the WS session exists); cleared on every teardown path |
-| Adapter activation, command handler ref, status interval | Module-level in `src/adapters/runtime.ts` | One adapter per page; module-state matches |
+| Per-tab frame ids (page/media) | `tabFrames: Map<tabId, {pageFrameId, mediaFrameId?}>` in `entrypoints/background.ts` | Route commands to the frame that can act on them; `mediaFrameId` learned from `media_hello`/status, dropped on a failed targeted send; cleared on teardown |
+| Adapter activation, command handler ref, status interval | Module-level in `src/adapters/runtime.ts` (page) and `src/adapters/media/runtime.ts` (media) | One adapter per frame; module-state matches (each content script is its own realm) |
 | Creds (`syncUrl`, `syncPassword`, `clientId`) | `chrome.storage.local['pbsync.tab.<tabId>']`, one slot per syncing tab | Survive worker termination; wiped on `chrome.tabs.onRemoved` and on browser restart; see [`storage.md`](storage.md) |
 
 The content side never persists anything across page loads — it boots fresh in every tab, and the SPA-navigation hook tears the active adapter down + re-evaluates whenever `location.href` changes.

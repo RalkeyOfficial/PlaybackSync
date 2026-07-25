@@ -29,6 +29,7 @@ Concrete work items:
 
 - JOIN handshake with `clientId` + `lastEventId` persistence; reconnect with the same `clientId` on bare 1006 drops within the tombstone window; branch by typed `ERROR` code for terminal vs retryable closes.
 - Content-script video adapter that observes play/pause/seek and applies server `STATE` / `CURSOR_CHANGE` / `SYNC_ADJUST` frames, suppressing feedback loops.
+- Cross-frame adapter split (page role + media role) so a `<video>` in a cross-origin embed iframe (miruro → strm.cx) can be driven, bridged by a frameId-aware background per tab. See `agent-os/specs/2026-07-25-1200-extension-cross-frame-media-adapter/`.
 - `currentlyShowing` + `catalogFragment` reporting on JOIN so the daemon can steer / seed / auto-append per mode.
 - Toolbar popup for room status, join via share link, and a clear "leave room" action.
 - Cross-browser packaging (Chromium MV3 + Firefox MV2 from the same source).

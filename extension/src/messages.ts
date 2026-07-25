@@ -1,6 +1,7 @@
 import type {
 	AuthoritativeCommand,
 	ContentIdentity,
+	FrameRole,
 	LocalIntent,
 	VideoState,
 } from './adapters/types'
@@ -46,20 +47,44 @@ export type ContentToBackground =
 		 */
 		pageUrl: string
 		/**
-		 * The active adapter's `Adapter.guardNavigation` opt-in flag. When
+		 * The active adapter's `PageRole.guardNavigation` opt-in flag. When
 		 * `true`, the background arms its navigation-guard for this tab:
 		 * subsequent navigations to a URL not in the room's playlist pull
-		 * the tab back to the cursor. See {@link Adapter.guardNavigation}.
+		 * the tab back to the cursor. See {@link PageRole.guardNavigation}.
 		 */
 		guardNavigation: boolean
 	}
 	| { kind: 'status'; adapterId: string; state: VideoState }
-	| { kind: 'fail'; adapterId: string; reason: string }
+	| {
+		/**
+		 * The media frame owns a controllable `<video>` (sent once per media
+		 * adapter activation). Lets the background learn this tab's media
+		 * `frameId` — so it can target playback commands at it — and push the
+		 * room's cached playback down when a room is already in progress
+		 * (video-appears-after-JOIN, iframe reload). See
+		 * {@link ../adapters/media/runtime.MediaBridge}.
+		 */
+		kind: 'media_hello'
+		mediaAdapterId: string
+	}
+	| {
+		kind: 'fail'
+		/**
+		 * Which half of the site failed. A `'media'` fail is **soft** — the
+		 * background goes inactive for that frame but leaves the tab's room
+		 * session (creds, WS, nav-guard) intact, because a videoless embed must
+		 * not tear down the room the `'page'` frame established. A `'page'`
+		 * fail keeps the full tab teardown.
+		 */
+		role: FrameRole
+		adapterId: string
+		reason: string
+	}
 	| {
 		kind: 'catalog'
 		adapterId: string
 		/**
-		 * Result of {@link Adapter.scrapeCatalog} for the currently active
+		 * Result of {@link PageRole.scrapeCatalog} for the currently active
 		 * adapter, or `null` when the adapter omits the method, throws, or
 		 * the runtime's scrape timeout elapses. The background uses this
 		 * (alongside the most recent `identity`) to populate the JOIN

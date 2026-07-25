@@ -20,7 +20,7 @@ This directory is the source of truth for *how the extension is shaped and why*.
 |------|--------------|
 | [`architecture.md`](architecture.md) | Three-layer split, message envelope, where state lives, anchored-room pull-back + navigation-guard |
 | [`protocol-client.md`](protocol-client.md) | Connection lifecycle, reconnect, heartbeat, clock-sync, drift handling, suppression, viewer-driven cursor changes + navigation-guard |
-| [`adapter-contract.md`](adapter-contract.md) | `Adapter` / `AdapterContext` / `LocalIntent` / `AuthoritativeCommand` / `ContentIdentity` / `VideoState`, `guardNavigation` + the `videoIdForUrl` matcher, autoplay-hold — how to write an adapter |
+| [`adapter-contract.md`](adapter-contract.md) | The two roles (page + media), `PageRole` / `MediaRole` / `PageContext` / `MediaContext` / `LocalIntent` / `AuthoritativeCommand` / `ContentIdentity` / `VideoState`, `guardNavigation` + the `videoIdForUrl` matcher, autoplay-hold — how to write an adapter |
 | [`storage.md`](storage.md) | Per-tab `chrome.storage.local['pbsync.tab.<tabId>']` schema; cold-boot sentinel; dev-time creds workflow |
 | [`popup.md`](popup.md) | Toolbar popup: snapshot channel, `PopupStatus`, leave-room flow |
 | [`notifications.md`](notifications.md) | On-page toasts + welcome badge: `NOTICE` frame, `notice` message, copy map, shadow-root rendering |
@@ -40,5 +40,6 @@ The extension is being built in slices, each with its own spec under [`agent-os/
 
 - [`2026-05-24-0959-extension-plugin-foundation`](../../agent-os/specs/2026-05-24-0959-extension-plugin-foundation/) — adapter contract + runtime + `_template`.
 - [`2026-05-24-1230-extension-ws-client`](../../agent-os/specs/2026-05-24-1230-extension-ws-client/) — the WS client and documentation policy.
+- [`2026-07-25-1200-extension-cross-frame-media-adapter`](../../agent-os/specs/2026-07-25-1200-extension-cross-frame-media-adapter/) — split the adapter into page + media roles so a `<video>` in a cross-origin embed iframe (miruro → strm.cx) can be driven; frameId-aware background bridge.
 
-Future slices (credential pickup from share URLs, first real site adapter, popup UI) will add to this list.
+Future slices will add to this list.

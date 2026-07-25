@@ -2,9 +2,23 @@
 
 Adapters are the **only** code that knows how a particular streaming site lays out its DOM. They find the `<video>`, observe what the user does to it, apply commands from the room, and derive an identity that uniquely names the content. They never see the WebSocket, never decide whether an action is suppressed, never know what other tabs are doing.
 
-Every adapter **extends [`BaseAdapter`](../src/adapters/base.ts)**, which owns the parts that are identical across sites — reading `<video>` state, wiring the play/pause/seek intent listeners, applying `play`/`pause`/`seek` commands, the autoplay hold, and all teardown — and drives them through a **sealed `init` lifecycle**. You implement a handful of small, named hooks; you never re-implement (or override) the boilerplate. The generic mechanics themselves live in the pure, testable helper [`src/adapters/video-driver.ts`](../src/adapters/video-driver.ts) (`readVideoState`, `wireIntentListeners`, `waitForElement`).
+## Two roles (page and media)
 
-This page is a working tutorial for writing one. The reference implementation is [`src/adapters/_template/`](../src/adapters/_template/index.ts).
+A site's DOM can span **two frames** of one tab. Some sites (e.g. miruro) delegate playback to a third-party player loaded in a **cross-origin iframe** (`strm.cx`), so the `<video>` is in a different frame — and origin — from the page's identity/navigation. An adapter therefore splits into two roles, each running in its own content script:
+
+| Role | Frame | Base class | Owns |
+|------|-------|-----------|------|
+| **Page** | top frame (page host) | [`PageBaseAdapter`](../src/adapters/base.ts) | content identity, catalog scrape, in-page cursor navigation, the navigation-guard opt-in |
+| **Media** | embed frame (embed host, `all_frames`) | [`MediaBaseAdapter`](../src/adapters/media/base.ts) | the `<video>`: resolve it, observe intents, report state, apply `play`/`pause`/`seek`/`nudge_rate`, the autoplay hold |
+
+Each base owns the parts identical across sites for its half and drives them through a **sealed `init` lifecycle**; you implement a handful of small, named hooks and never re-implement the boilerplate. The generic video mechanics live in the pure, testable helper [`src/adapters/video-driver.ts`](../src/adapters/video-driver.ts) (`readVideoState`, `wireIntentListeners`, `waitForElement`).
+
+The two halves never share an object — a cross-origin boundary is a separate JS realm. They are bridged by the **background** on the shared `tabId`: the page frame reports identity/catalog, the media frame reports intents/status and says `media_hello`, and the background targets each authoritative command at the frame that can act on it (`cursor_change` → page, `play`/`pause`/`seek`/`nudge_rate` → media). Since a media adapter carries no site-identity knowledge, **one generic media adapter serves every page site that embeds the same player** — [`src/adapters/strmcx/index.ts`](../src/adapters/strmcx/index.ts) is the strm.cx one, registered in [`src/adapters/media/registry.ts`](../src/adapters/media/registry.ts) with its host in [`src/adapters/embed-matches.ts`](../src/adapters/embed-matches.ts).
+
+**Page hooks:** `canHandlePage`, `resolveReady?`, `resolveIdentity`, `applyCursorChange?`, `watchCursorTriggers?`, `scrapeCatalog?`, `guardNavigation?`.
+**Media hooks:** `canHandleFrame`, `resolveVideo`, `canPlay?`, `ensurePlayable?`, `holdsAutoplay?`.
+
+The rest of this page is a working tutorial. The hooks below are grouped by role. The reference page template is [`src/adapters/_template/`](../src/adapters/_template/index.ts); the reference media adapter is [`src/adapters/strmcx/index.ts`](../src/adapters/strmcx/index.ts).
 
 ## The hooks you implement
 
@@ -225,4 +239,5 @@ See [`miruro/index.ts`](../src/adapters/miruro/index.ts) `scrapeCatalog` for a w
 
 - **`currentlyShowing()`** — derivable from identity already; if the protocol's `currentlyShowing` ends up needing more fields, we'll add it.
 - **`onError(callback)`** — adapters that need to surface non-fatal issues can just call `this.log('warn', ...)`. There's no rich error channel.
-- **Page-context (MAIN-world) hooks** — workshop §3.D allows them but no current adapter needs them. When a site does need them (e.g. to reach into a JS player object that the isolated world can't see), an `injected/` script paired with `postMessage` is the right shape. Out of scope for the contract itself.
+- **Cross-frame / cross-origin video** — no longer out of scope. When the `<video>` lives in a different (possibly cross-origin) frame, that's the **media role** running in the embed frame (see [Two roles](#two-roles-page-and-media)), bridged to the page role through the background — not a `postMessage` escape hatch on a single-frame adapter.
+- **Page-context (MAIN-world) hooks** — workshop §3.D allows them but no current adapter needs them. When a site does need to reach into a JS player object the isolated world can't see, an `injected/` script paired with `postMessage` is the right shape. Out of scope for the contract itself.

@@ -1,47 +1,13 @@
 import type {
-	Adapter,
-	AdapterContext,
-	AdapterFactory,
 	AuthoritativeCommand,
 	ContentIdentity,
-	LocalIntent,
-	VideoState,
+	PageAdapterFactory,
+	PageContext,
+	PageRole,
 } from './types'
 import type { VideoRefWithMeta } from '../background/protocol'
 import { miruroAdapterFactory } from './miruro'
-import { templateAdapterFactory } from './_template'
-
-/**
- * How often the runtime samples `adapter.getState()` and pushes a `status`
- * message to the background. The wire-format `HEARTBEAT` cadence is 5 s
- * (`docs/ws-protocol.md` §HEARTBEAT); polling at 1 s keeps the background's
- * cache fresh enough for that, and for `BUFFER_*` transition detection,
- * without flooding the channel.
- */
-const STATUS_POLL_MS = 1000
-
-/**
- * Magnitude of the rate clamp for a `nudge_rate` command. The daemon's
- * nudge-rate band is 200–500 ms of drift (`docs/ws-protocol.md`
- * §SYNC_ADJUST); 5 % closes most of that within a few seconds while
- * staying inaudible. Anything larger starts to sound like fast-forward.
- */
-const NUDGE_RATE_OFFSET = 0.05
-
-/**
- * Hard cap on how long the rate stays clamped. Bounds the worst case so a
- * stale `currentPos` reading can't leave playback nudged indefinitely; if
- * drift persists, the daemon resends `SYNC_ADJUST` and a fresh nudge
- * re-arms.
- */
-const NUDGE_MAX_DURATION_MS = 3000
-
-/**
- * Dead band around `targetPos`. Drift smaller than this is treated as
- * already converged — clamping at ±5 % for ≤50 ms would be measurable
- * jitter for no real correction.
- */
-const NUDGE_DEAD_BAND_S = 0.05
+import { templatePageAdapterFactory } from './_template'
 
 /**
  * Hard cap on how long the runtime waits for `adapter.scrapeCatalog()`
@@ -52,39 +18,35 @@ const NUDGE_DEAD_BAND_S = 0.05
 const SCRAPE_CATALOG_TIMEOUT_MS = 2000
 
 /**
- * Static registry of bundled adapters. Adding a new site = appending its
- * factory here. First match wins (workshop §9 "first adapter whose
- * canHandlePage returns true is activated").
+ * Static registry of bundled **page-role** adapters (the top-frame half of a
+ * site). Adding a new site = appending its factory here. First match wins
+ * (workshop §9 "first adapter whose canHandlePage returns true is activated").
+ * The `<video>`-owning media adapters live in a separate registry — see
+ * `src/adapters/media/registry.ts`.
  */
-const ADAPTERS: AdapterFactory[] = [
+const ADAPTERS: PageAdapterFactory[] = [
 	miruroAdapterFactory,
-	templateAdapterFactory,
+	templatePageAdapterFactory,
 ]
 
 /**
- * Outbound bridge supplied by the content entrypoint. The runtime is
+ * Outbound bridge supplied by the page content entrypoint. The runtime is
  * chrome-API-agnostic so it can be tested in isolation; the entrypoint
- * forwards these to `chrome.runtime.sendMessage`.
+ * forwards these to `browser.runtime.sendMessage`. There is no `sendIntent` /
+ * `sendStatus` here — those come from the `<video>`, which lives in the media
+ * frame (see the media runtime's bridge).
  */
 export interface RuntimeBridge {
-	/** Forward an observed user action (play/pause/seek) to the background. */
-	sendIntent(adapterId: string, intent: LocalIntent): void
 	/**
 	 * Forward the page's content identity (once per adapter activation).
 	 * `guardNavigation` echoes the active adapter's opt-in flag so the
 	 * background knows whether to arm its navigation-guard for this tab.
 	 */
 	sendIdentity(adapterId: string, identity: ContentIdentity, guardNavigation: boolean): void
-	/**
-	 * Forward a periodic state snapshot. The runtime drives the cadence
-	 * via {@link STATUS_POLL_MS}; the background caches the latest value
-	 * for its `HEARTBEAT` and `BUFFER_*` wire-frame emission.
-	 */
-	sendStatus(adapterId: string, state: VideoState): void
 	/** Forward an adapter's fatal failure so the background can clear tab state. */
 	sendFail(adapterId: string, reason: string): void
 	/**
-	 * Forward the result of {@link Adapter.scrapeCatalog} (or `null` if the
+	 * Forward the result of {@link PageRole.scrapeCatalog} (or `null` if the
 	 * adapter omits the method, the scrape times out, or it throws). Called
 	 * once per adapter lifetime, after activation.
 	 */
@@ -101,28 +63,15 @@ export interface RuntimeBridge {
 
 type RuntimeState =
 	| { kind: 'idle' }
-	| { kind: 'active'; adapter: Adapter; commandHandler: ((cmd: AuthoritativeCommand) => void) | null }
+	| { kind: 'active'; adapter: PageRole; commandHandler: ((cmd: AuthoritativeCommand) => void) | null }
 	| { kind: 'failed'; adapterId: string; reason: string }
 
 let state: RuntimeState = { kind: 'idle' }
 let bridge: RuntimeBridge | null = null
 let started = false
-let statusInterval: ReturnType<typeof setInterval> | null = null
 
 /**
- * In-flight nudge restore timer. Set whenever the runtime applies a
- * `nudge_rate` command; cleared and reset to `1.0` when the timer fires,
- * a subsequent `nudge_rate` arrives, a competing command (play / pause /
- * seek) lands mid-window, or the adapter tears down.
- *
- * Kept at module scope alongside `statusInterval` because both share the
- * same lifecycle: per-content-script (i.e. per-tab) singletons that the
- * runtime owns from `start()` to `teardown()`.
- */
-let nudgeTimer: ReturnType<typeof setTimeout> | null = null
-
-/**
- * Boot the runtime. Idempotent within a content-script lifetime; the
+ * Boot the page runtime. Idempotent within a content-script lifetime; the
  * entrypoint should call this exactly once.
  */
 export async function start(b: RuntimeBridge): Promise<void> {
@@ -138,97 +87,23 @@ export async function start(b: RuntimeBridge): Promise<void> {
 
 /**
  * Forward a server command (received by the entrypoint via
- * `chrome.runtime.onMessage`) to the active adapter. No-op if no adapter is
- * active or the adapter hasn't registered a handler yet.
+ * `browser.runtime.onMessage`) to the active page adapter. No-op if no adapter
+ * is active or the adapter hasn't registered a handler yet.
  *
- * `nudge_rate` is handled here rather than forwarded — the runtime owns
- * the rate math and the restore timer so the algorithm lives in one
- * place. Competing authoritative commands (`play` / `pause` / `seek`)
- * cancel any in-flight nudge before they land; otherwise a hard seek
- * would commit at a clamped rate.
+ * Only `cursor_change` is actionable in the page frame; `play`/`pause`/`seek`/
+ * `nudge_rate` are the media frame's job and are handled there. The background
+ * targets each command at the right frame, but a broadcast fallback can still
+ * land a playback command here — the page adapter's handler no-ops those, so
+ * forwarding everything is harmless and keeps this path trivial.
  */
 export function deliverCommand(cmd: AuthoritativeCommand): void {
 	if (state.kind !== 'active') return
-	if (cmd.type === 'nudge_rate') {
-		applyNudgeRate(state.adapter, cmd.targetPos)
-		return
-	}
-	if (cmd.type === 'play' || cmd.type === 'pause' || cmd.type === 'seek') {
-		cancelNudge(state.adapter)
-	}
 	state.commandHandler?.(cmd)
-}
-
-/**
- * Apply a `nudge_rate` command: cancel any in-flight nudge, read the
- * adapter's current position, derive the rate clamp and restore duration,
- * write through `adapter.setPlaybackRate`, and schedule the restore.
- *
- * Bails (after cancelling the prior nudge) when `getState()` returns
- * `null` or when the drift is already inside the dead band — either case
- * means there's nothing useful to nudge.
- */
-function applyNudgeRate(adapter: Adapter, targetPos: number): void {
-	cancelNudge(adapter)
-
-	const snapshot = adapter.getState()
-	if (!snapshot) {
-		log('warn', adapter.id, 'nudge_rate dropped: getState() returned null')
-		return
-	}
-
-	const delta = targetPos - snapshot.currentPos
-	if (Math.abs(delta) < NUDGE_DEAD_BAND_S) return
-
-	const rate = 1 + (delta > 0 ? NUDGE_RATE_OFFSET : -NUDGE_RATE_OFFSET)
-	const durationMs = Math.min(
-		(Math.abs(delta) / NUDGE_RATE_OFFSET) * 1000,
-		NUDGE_MAX_DURATION_MS,
-	)
-
-	try {
-		adapter.setPlaybackRate(rate)
-	} catch (err) {
-		log('error', adapter.id, 'setPlaybackRate(nudge) threw', {
-			reason: err instanceof Error ? err.message : String(err),
-		})
-		return
-	}
-
-	nudgeTimer = setTimeout(() => {
-		nudgeTimer = null
-		try {
-			adapter.setPlaybackRate(1)
-		} catch (err) {
-			log('error', adapter.id, 'setPlaybackRate(restore) threw', {
-				reason: err instanceof Error ? err.message : String(err),
-			})
-		}
-	}, durationMs)
-}
-
-/**
- * Tear down an in-flight nudge: clear the timer and restore the adapter's
- * playback rate to baseline. Safe to call when no nudge is active.
- * Swallows `setPlaybackRate` exceptions because we never want a teardown
- * path to throw.
- */
-function cancelNudge(adapter: Adapter): void {
-	if (nudgeTimer === null) return
-	clearTimeout(nudgeTimer)
-	nudgeTimer = null
-	try {
-		adapter.setPlaybackRate(1)
-	} catch (err) {
-		log('error', adapter.id, 'setPlaybackRate(cancel) threw', {
-			reason: err instanceof Error ? err.message : String(err),
-		})
-	}
 }
 
 async function evaluate(): Promise<void> {
 	const url = new URL(location.href)
-	let adapter: Adapter | null = null
+	let adapter: PageRole | null = null
 	for (const factory of ADAPTERS) {
 		const candidate = factory()
 		if (candidate.canHandlePage(url)) {
@@ -250,7 +125,6 @@ async function evaluate(): Promise<void> {
 		}
 		state = { kind: 'active', adapter, commandHandler: pendingHandler }
 		pendingHandler = null
-		startStatusPolling(adapter)
 		runCatalogScrape(adapter)
 		log('info', adapter.id, 'adapter activated')
 	} catch (err) {
@@ -263,12 +137,9 @@ async function evaluate(): Promise<void> {
 
 let pendingHandler: ((cmd: AuthoritativeCommand) => void) | null = null
 
-function buildContext(adapterId: string, guardNavigation: boolean): AdapterContext {
+function buildContext(adapterId: string, guardNavigation: boolean): PageContext {
 	pendingHandler = null
 	return {
-		emitIntent(intent) {
-			bridge?.sendIntent(adapterId, intent)
-		},
 		emitCursorTrigger(target) {
 			bridge?.sendCursorTrigger(adapterId, target)
 		},
@@ -293,9 +164,7 @@ function buildContext(adapterId: string, guardNavigation: boolean): AdapterConte
 }
 
 function teardown(): void {
-	stopStatusPolling()
 	if (state.kind === 'active') {
-		cancelNudge(state.adapter)
 		try {
 			state.adapter.destroy()
 			log('info', state.adapter.id, 'adapter torn down')
@@ -309,22 +178,6 @@ function teardown(): void {
 	pendingHandler = null
 }
 
-function startStatusPolling(adapter: Adapter): void {
-	stopStatusPolling()
-	statusInterval = setInterval(() => {
-		const snapshot = adapter.getState()
-		if (!snapshot) return
-		bridge?.sendStatus(adapter.id, snapshot)
-	}, STATUS_POLL_MS)
-}
-
-function stopStatusPolling(): void {
-	if (statusInterval !== null) {
-		clearInterval(statusInterval)
-		statusInterval = null
-	}
-}
-
 /**
  * Fire-and-forget a single `scrapeCatalog` call against the active adapter
  * and forward the result to the background. Bounded by
@@ -335,7 +188,7 @@ function stopStatusPolling(): void {
  *
  * @param adapter The adapter that just transitioned to `active`.
  */
-function runCatalogScrape(adapter: Adapter): void {
+function runCatalogScrape(adapter: PageRole): void {
 	if (!adapter.scrapeCatalog) {
 		bridge?.sendCatalog(adapter.id, null)
 		return

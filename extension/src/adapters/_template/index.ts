@@ -1,30 +1,31 @@
-import type { AdapterFactory, ContentIdentity } from '../types'
-import { BaseAdapter } from '../base'
+import type { ContentIdentity, PageAdapterFactory } from '../types'
+import { PageBaseAdapter } from '../base'
 
 /**
- * Baseline adapter. Activates only when the URL contains the query parameter
- * `pbsync-template`, so it stays inert on every real site. New site adapters
- * are forked from this file: extend {@link BaseAdapter}, match a real host in
- * {@link canHandlePage}, resolve the player in {@link resolveVideo}, and derive
- * identity in {@link resolveIdentity}. Everything else — state polling, intent
- * wiring, the command switch, teardown — is inherited.
+ * Baseline **page-role** adapter. Activates only when the URL contains the
+ * query parameter `pbsync-template`, so it stays inert on every real site. New
+ * page adapters are forked from this file: extend {@link PageBaseAdapter}, match
+ * a real host in {@link canHandlePage}, wait for the page to settle in
+ * {@link PageBaseAdapter.resolveReady} (if the site mutates the URL after load),
+ * and derive identity in {@link resolveIdentity}. Cursor navigation, the command
+ * handler, and teardown are inherited.
  *
- * Optional hooks a real adapter often adds: {@link BaseAdapter.ensurePlayable}
- * / {@link BaseAdapter.canPlay} (cold-start players), `holdsAutoplay`
- * (auto-playing players), {@link BaseAdapter.applyCursorChange} +
- * {@link BaseAdapter.watchCursorTriggers} (in-page episode navigation),
+ * The `<video>` is a separate concern: it belongs to a media-role adapter (see
+ * `src/adapters/media/base.ts` and `src/adapters/strmcx/index.ts`). For a site
+ * whose player is same-frame, list its host in `embed-matches.ts` and ship a
+ * `MediaRole` too; for an embed site, the existing embed media adapter serves it.
+ *
+ * Optional page hooks a real adapter often adds:
+ * {@link PageBaseAdapter.applyCursorChange} +
+ * {@link PageBaseAdapter.watchCursorTriggers} (in-page episode navigation),
  * `scrapeCatalog` (episode lists), and `guardNavigation` (identity-bearing
  * URLs). See `docs/adapter-contract.md`.
  */
-class TemplateAdapter extends BaseAdapter {
+class TemplatePageAdapter extends PageBaseAdapter {
 	readonly id = 'template'
 
 	canHandlePage(url: URL): boolean {
 		return url.searchParams.has('pbsync-template')
-	}
-
-	protected async resolveVideo(): Promise<HTMLVideoElement | null> {
-		return document.querySelector<HTMLVideoElement>('video')
 	}
 
 	protected resolveIdentity(): ContentIdentity | null {
@@ -36,4 +37,4 @@ class TemplateAdapter extends BaseAdapter {
 	}
 }
 
-export const templateAdapterFactory: AdapterFactory = () => new TemplateAdapter()
+export const templatePageAdapterFactory: PageAdapterFactory = () => new TemplatePageAdapter()

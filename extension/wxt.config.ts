@@ -1,5 +1,6 @@
 import { defineConfig } from 'wxt'
 import { ADAPTER_MATCHES } from './src/adapters/host-matches'
+import { EMBED_MATCHES } from './src/adapters/embed-matches'
 
 export default defineConfig({
 	// Manifest version is left to WXT's per-browser default: Chrome → MV3
@@ -21,13 +22,13 @@ export default defineConfig({
 		return {
 			name: `PlaybackSync${nameSuffix}`,
 			description: 'Frame-tight video sync across browsers — every play, pause, and seek mirrored in milliseconds over a self-hosted WebSocket relay.',
-			version: '1.1.0',
+			version: '1.1.1',
 			permissions: [
 				'storage',
 				'alarms',
 				'tabs',
 			],
-			host_permissions: [...ADAPTER_MATCHES],
+			host_permissions: [...ADAPTER_MATCHES, ...EMBED_MATCHES],
 			action: {
 				default_title: `PlaybackSync${nameSuffix}`,
 			},
