@@ -1,0 +1,34 @@
+{
+  "manifest_version": 3,
+  "name": "PlaybackSync Debug Probe",
+  "version": "0.2.0",
+  "description": "On-page adapter-development probe: live selector watchboard, video state, cross-frame playback controls, frame map. Dev tool, not shipped.",
+  "content_scripts": [
+    {
+      "matches": [
+        "*://miruro.tv/*", "*://*.miruro.tv/*",
+        "*://miruro.to/*", "*://*.miruro.to/*",
+        "*://miruro.bz/*", "*://*.miruro.bz/*",
+        "*://miruro.ru/*", "*://*.miruro.ru/*",
+        "*://strm.cx/*", "*://*.strm.cx/*"
+      ],
+      "js": ["main-world.js"],
+      "run_at": "document_start",
+      "world": "MAIN",
+      "all_frames": true
+    },
+    {
+      "matches": [
+        "*://miruro.tv/*", "*://*.miruro.tv/*",
+        "*://miruro.to/*", "*://*.miruro.to/*",
+        "*://miruro.bz/*", "*://*.miruro.bz/*",
+        "*://miruro.ru/*", "*://*.miruro.ru/*",
+        "*://strm.cx/*", "*://*.strm.cx/*"
+      ],
+      "js": ["overlay.js"],
+      "run_at": "document_start",
+      "world": "ISOLATED",
+      "all_frames": true
+    }
+  ]
+}
