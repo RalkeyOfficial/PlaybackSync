@@ -28,20 +28,26 @@ const VIDEO_SELECTOR = 'video'
 const VIDEO_WAIT_TIMEOUT_MS = 10_000
 
 /**
- * Vidstack's play-toggle custom element inside the strm.cx embed. On some
- * providers the `<video>` mounts without a source and only acquires one once
- * this control is activated (see {@link StrmcxAdapter.ensurePlayable}). The
- * full DOM path is `#app > strmcx-player > media-player > media-play-button`;
- * the bare tag is used because it's the same element and survives the layout
- * nesting churning between player builds.
+ * Vidstack's play-button custom element inside the strm.cx embed. It is an
+ * **overlay**: it sits on top of the `<video>` with higher precedence and hides
+ * it until pressed. It is independent of the video's source — the `<video>`
+ * self-loads its blob source on its own regardless of this button, and pressing
+ * the button neither loads nor otherwise influences that source. Its sole effect
+ * when pressed is to dismiss the overlay so the (already loaded) video becomes
+ * visible and playable. The press only *functions* once a source is present,
+ * though: pressed while the `<video>` is still sourceless it does nothing — so
+ * a source is a precondition for a working press, not a reason to skip it (see
+ * {@link StrmcxAdapter.ensurePlayable}). The full DOM path is
+ * `#app > strmcx-player > media-player > media-play-button`; the bare tag is
+ * used because it's the same element and survives the layout nesting churning
+ * between player builds.
  */
 const PLAY_BUTTON_SELECTOR = 'media-play-button'
 
 /**
- * How long {@link StrmcxAdapter.ensurePlayable} waits for the play button to
- * mount before giving up. Aborted early once the video begins loading a source
- * on its own (the `loadstart` short-circuit), so a self-loading provider never
- * waits the full window.
+ * How long {@link StrmcxAdapter.ensurePlayable} waits for the play-button
+ * overlay to mount before giving up. If it never appears there is no overlay to
+ * dismiss, so activation is left to the user / room.
  */
 const PLAY_BUTTON_WAIT_TIMEOUT_MS = 5_000
 
@@ -54,9 +60,9 @@ const PLAY_BUTTON_WAIT_TIMEOUT_MS = 5_000
 const PLAY_BUTTON_SETTLE_MS = 300
 
 /**
- * How long to wait for the `<video>` to actually start loading after the play
- * button is driven, before moving on. Bounds the worst case so a control that
- * silently does nothing can't hang activation.
+ * How long to wait for the `<video>` to self-load a source (so the overlay
+ * press will actually function) before giving up. Bounds the worst case so a
+ * player that never loads a source on its own can't hang activation.
  */
 const LOAD_METADATA_TIMEOUT_MS = 5_000
 
@@ -77,12 +83,14 @@ const KEY_RELEASE_DELAY_MS = 30
  * identity, catalog, and navigation are the page frame's job (see
  * `src/adapters/miruro/index.ts`).
  *
- * Most providers self-load their blob source, in which case {@link canPlay}
- * (source present) short-circuits {@link ensurePlayable}. Some render the
- * player with a sourceless `<video>` and a Vidstack `<media-play-button>` that
- * must be activated first; {@link ensurePlayable} drives it. `holdsAutoplay` is
- * kept `true` so any one-shot auto-play as the source settles is held until the
- * room's first authoritative command, matching the pre-embed miruro behaviour.
+ * The `<video>` self-loads its blob source on its own, but the player also
+ * shows a Vidstack `<media-play-button>` **overlay** that hides the video until
+ * it is pressed. {@link ensurePlayable} dismisses that overlay (a synthesized
+ * `Space`) so playback can begin under room control; pressing does not load the
+ * source, it only clears the overlay, and only functions once a source is
+ * present. `holdsAutoplay` is kept `true` so any one-shot auto-play as the
+ * source settles is held until the room's first authoritative command, matching
+ * the pre-embed miruro behaviour.
  */
 class StrmcxAdapter extends MediaBaseAdapter {
 	readonly id = 'strmcx'
@@ -102,31 +110,51 @@ class StrmcxAdapter extends MediaBaseAdapter {
 
 	/**
 	 * Cold-start activation. The base only calls this when {@link canPlay} is
-	 * false (the `<video>` has no `currentSrc`). Drives the Vidstack play button
-	 * so the embed loads its source, then pauses so the room's first
-	 * authoritative command wins without an auto-play flash.
+	 * false (the `<video>` has no `currentSrc` yet). Dismisses the Vidstack
+	 * play-button **overlay** — which hides the video until pressed — so the
+	 * self-loaded video becomes playable, then pauses so the room's first
+	 * authoritative command wins without an auto-play flash. Pressing the button
+	 * does not load the source (the `<video>` self-loads on its own); it only
+	 * clears the overlay, and only functions once a source is present.
 	 *
+	 * Waits for the overlay button and then for the `<video>` to self-load a
+	 * source (the press is a no-op while sourceless) before driving it.
 	 * Activation is a synthesized `Space` keydown/keyup on the button — a plain
 	 * `.click()` is ignored by this control (verified live), only keyboard
-	 * activation loads the source. The keyup is delayed by
+	 * activation dismisses the overlay. The keyup is delayed by
 	 * {@link KEY_RELEASE_DELAY_MS}: a synchronous release isn't registered, and
 	 * the player then treats Space as held and ramps to 2×.
 	 *
-	 * No-ops cleanly when the video self-loads (the `loadstart` short-circuit in
-	 * {@link waitForPlayButton} resolves the wait early and `currentSrc` is set)
-	 * or when no button ever appears.
+	 * No-ops cleanly when no button ever appears (nothing to dismiss) or when the
+	 * `<video>` never self-loads a source (pressing would do nothing).
 	 */
 	protected async ensurePlayable(): Promise<void> {
 		const video = this.video
 		if (!video) return
 
-		const button = await this.waitForPlayButton(video)
+		const button = await waitForElement<HTMLElement>(PLAY_BUTTON_SELECTOR, {
+			timeoutMs: PLAY_BUTTON_WAIT_TIMEOUT_MS,
+			signal: this.signal,
+		})
 		if (this.signal.aborted) return
-		if (video.currentSrc) return // gained a source on its own (self-load)
 		if (!button) {
 			this.log(
 				'warn',
-				`no source and no <media-play-button> after ${PLAY_BUTTON_WAIT_TIMEOUT_MS}ms — leaving playback for the user / room to start`,
+				`no <media-play-button> after ${PLAY_BUTTON_WAIT_TIMEOUT_MS}ms — leaving playback for the user / room to start`,
+			)
+			return
+		}
+
+		// The press only dismisses the overlay once the <video> has a source —
+		// pressing a still-sourceless player is a no-op, and the press never loads
+		// the source itself. The <video> self-loads on its own, so wait for that
+		// source to arrive before driving the button.
+		const loaded = await this.waitForLoad(video)
+		if (this.signal.aborted) return
+		if (!loaded) {
+			this.log(
+				'warn',
+				`<media-play-button> present but no source after ${LOAD_METADATA_TIMEOUT_MS}ms — pressing would be a no-op; leaving playback for the user / room to start`,
 			)
 			return
 		}
@@ -135,7 +163,7 @@ class StrmcxAdapter extends MediaBaseAdapter {
 		await this.delay(PLAY_BUTTON_SETTLE_MS)
 		if (this.signal.aborted) return
 
-		this.log('info', 'activating play via synthesized Space on <media-play-button>')
+		this.log('info', 'dismissing <media-play-button> overlay via synthesized Space')
 		const init: KeyboardEventInit = {
 			key: ' ',
 			code: 'Space',
@@ -151,39 +179,10 @@ class StrmcxAdapter extends MediaBaseAdapter {
 		await this.delay(KEY_RELEASE_DELAY_MS)
 		if (this.signal.aborted) return
 		button.dispatchEvent(new KeyboardEvent('keyup', init))
-		await this.waitForLoad(video)
-		if (this.signal.aborted) return
 
 		// Pause so the room's first authoritative command wins cleanly. The
 		// base's autoplay hold also re-pauses; this avoids the flash.
 		video.pause()
-	}
-
-	/**
-	 * Resolve to the Vidstack `<media-play-button>`, or `null` on timeout, on
-	 * adapter teardown, or as soon as the video begins loading a source on its
-	 * own (the `loadstart` short-circuit — so a self-loading provider doesn't
-	 * waste the full window).
-	 *
-	 * Combines the adapter lifetime signal with the `loadstart` short-circuit
-	 * manually rather than via `AbortSignal.any`, which isn't available on our
-	 * Firefox floor (`strict_min_version` 109; `AbortSignal.any` is 124+).
-	 *
-	 * @param video Player element, watched for `loadstart`.
-	 * @returns The play button element, or `null`.
-	 */
-	private waitForPlayButton(video: HTMLVideoElement): Promise<HTMLElement | null> {
-		const ac = new AbortController()
-		if (this.signal.aborted) {
-			ac.abort()
-		} else {
-			this.signal.addEventListener('abort', () => ac.abort(), { once: true })
-			video.addEventListener('loadstart', () => ac.abort(), { once: true, signal: this.signal })
-		}
-		return waitForElement<HTMLElement>(PLAY_BUTTON_SELECTOR, {
-			timeoutMs: PLAY_BUTTON_WAIT_TIMEOUT_MS,
-			signal: ac.signal,
-		})
 	}
 
 	/**

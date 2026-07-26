@@ -66,8 +66,8 @@ export function wireIntentListeners(
  *
  * `signal` is load-bearing, not just for teardown: a caller can short-circuit
  * the wait on an unrelated event by wiring that event to `AbortController.abort`
- * and passing its signal here (miruro aborts its manual-load-button wait on the
- * video's `loadstart`). An already-aborted signal resolves to `null` immediately.
+ * and passing its signal here. An already-aborted signal resolves to `null`
+ * immediately.
  *
  * @param selector CSS selector to resolve against `root`.
  * @param opts.timeoutMs How long to wait before giving up with `null`.
