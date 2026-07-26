@@ -102,6 +102,29 @@ export function start(b: MediaBridge): void {
 	}
 	started = true
 	bridge = b
+	// The strm.cx player swaps episodes *in place*: a new <video> source loads in
+	// this same frame with no reload, so there is no fresh content-script
+	// injection to re-init from. A `loadstart` while an adapter is already active
+	// is that swap — re-bind to the new video. `loadstart` doesn't bubble, so
+	// listen in the capture phase at the document.
+	document.addEventListener('loadstart', onInFrameSourceChange, { capture: true })
+}
+
+/**
+ * Re-initialise the media adapter when the embed swaps its `<video>` source in
+ * place (an episode change). Acts only while an adapter is active: the initial
+ * load's `loadstart` fires mid-init — before we go active — and a `loadstart`
+ * landing during a re-init sees the runtime transiently idle. Both are ignored,
+ * so neither the first load nor an in-flight re-init triggers a spurious pass.
+ *
+ * @param e The `loadstart` event; ignored unless it targets a `<video>`.
+ */
+function onInFrameSourceChange(e: Event): void {
+	if (state.kind !== 'active') return
+	if ((e.target as Element | null)?.tagName !== 'VIDEO') return
+	log('info', 'media', 're-initialising: embed swapped its <video> source in place')
+	teardown()
+	void evaluate()
 }
 
 /**
