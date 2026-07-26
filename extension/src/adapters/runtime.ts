@@ -243,22 +243,32 @@ function runCatalogScrape(adapter: PageRole): void {
 	})
 }
 
+/** Last URL {@link handleLocationChange} acted on; de-dupes redundant triggers. */
+let lastHref = location.href
+
 /**
- * Catch every URL change a page can produce: back/forward (`popstate`) plus
- * SPA pushes (`history.pushState` / `replaceState`, which fire no native
- * event). The monkey-patch dispatches a synthetic `pbsync:locationchange`.
+ * Re-evaluate the adapter when the page's URL changes. De-dupes against the
+ * last-seen href, so several triggers for the same navigation collapse to one
+ * pass (e.g. a `popstate` and a background {@link reevaluate} for the same move).
+ */
+function handleLocationChange(): void {
+	if (location.href === lastHref) return
+	lastHref = location.href
+	teardown()
+	void evaluate()
+}
+
+/**
+ * Wire in-page URL-change detection: `popstate` covers back/forward. The
+ * `history.pushState` monkey-patch is kept but **cannot** intercept the page's
+ * own SPA navigations — a content script's isolated world doesn't share method
+ * overrides with the page, and miruro routes episodes via `pushState` (which
+ * fires no `popstate`). The background's nav-guard closes that gap by calling
+ * {@link reevaluate}; see `entrypoints/background.ts`.
  */
 function installNavigationListeners(): void {
-	let lastHref = location.href
-	const onChange = () => {
-		if (location.href === lastHref) return
-		lastHref = location.href
-		teardown()
-		void evaluate()
-	}
-
-	window.addEventListener('popstate', onChange)
-	window.addEventListener('pbsync:locationchange', onChange)
+	window.addEventListener('popstate', handleLocationChange)
+	window.addEventListener('pbsync:locationchange', handleLocationChange)
 
 	const fire = () => window.dispatchEvent(new Event('pbsync:locationchange'))
 	const origPush = history.pushState.bind(history)
@@ -271,6 +281,17 @@ function installNavigationListeners(): void {
 		origReplace(...args)
 		fire()
 	}
+}
+
+/**
+ * Re-evaluate the adapter for the current URL on demand. Invoked by the
+ * background when its nav-guard observes a navigation the in-page listeners
+ * miss — miruro's `pushState` episode routing is invisible to the isolated
+ * world and fires no `popstate`, but `browser.tabs.onUpdated` sees every URL
+ * change, so the background is the reliable trigger.
+ */
+export function reevaluate(): void {
+	handleLocationChange()
 }
 
 function log(

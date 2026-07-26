@@ -14,7 +14,7 @@
  * runtime owns adapter lifecycle, the background owns the WebSocket.
  */
 
-import { deliverCommand, setRoomActive, start, type RuntimeBridge } from '@/src/adapters/runtime'
+import { deliverCommand, reevaluate, setRoomActive, start, type RuntimeBridge } from '@/src/adapters/runtime'
 import { ADAPTER_MATCHES } from '@/src/adapters/host-matches'
 import { initNotifications, showNotice } from '@/src/ui/notifications'
 import type { BackgroundToContent, ContentToBackground } from '@/src/messages'
@@ -82,6 +82,7 @@ export default defineContentScript({
 			if (m.kind === 'command') deliverCommand(m.command)
 			else if (m.kind === 'notice') showNotice(m.notice)
 			else if (m.kind === 'room_active') setRoomActive(m.active)
+			else if (m.kind === 'reevaluate') reevaluate()
 			// Fire-and-forget: return undefined so the browser doesn't hold the
 			// message channel open waiting for a sendResponse we never call.
 		})

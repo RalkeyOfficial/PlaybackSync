@@ -354,6 +354,10 @@ export default defineBackground(() => {
 	// `Adapter.guardNavigation`. See `handleTabNavigation`.
 	browser.tabs.onUpdated.addListener((tabId, changeInfo) => {
 		if (changeInfo.url === undefined) return
+		// The page frame can't see miruro's SPA `pushState` from its isolated
+		// world; this listener fires for every URL change, so tell the page frame
+		// to re-evaluate its adapter for the new episode. Gated to room tabs.
+		if (sessions.has(tabId)) pushReevaluate(tabId)
 		handleTabNavigation(tabId, changeInfo.url)
 	})
 })
@@ -1218,6 +1222,24 @@ async function handlePopupMessage(msg: PopupToBackground): Promise<void> {
 function pushRoomActive(tabId: number): void {
 	const payload: BackgroundToContent = { kind: 'room_active', active: sessions.has(tabId) }
 	void browser.tabs.sendMessage(tabId, payload).catch(() => {
+		// No content script listening / tab gone; nothing actionable.
+	})
+}
+
+/**
+ * Tell a tab's page frame to re-evaluate its adapter for the current URL —
+ * driven from nav-guard detection because the page frame's isolated world can't
+ * intercept miruro's SPA navigation. Targets the page frame; broadcasts if its
+ * id isn't known yet (the media frame ignores this message). The page runtime
+ * de-dupes against the last-seen href, so a no-op URL change costs nothing.
+ *
+ * @param tabId The tab whose page frame should re-evaluate.
+ */
+function pushReevaluate(tabId: number): void {
+	const payload: BackgroundToContent = { kind: 'reevaluate' }
+	const targetFrameId = tabFrames.get(tabId)?.pageFrameId
+	const options = targetFrameId !== undefined ? { frameId: targetFrameId } : undefined
+	void browser.tabs.sendMessage(tabId, payload, options).catch(() => {
 		// No content script listening / tab gone; nothing actionable.
 	})
 }

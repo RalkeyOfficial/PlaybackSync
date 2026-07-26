@@ -162,6 +162,10 @@ export type BackgroundToContent =
 	// on this — nothing runs until it's `true`. Pushed on session create/teardown
 	// and in reply to `content_ready`.
 	| { kind: 'room_active'; active: boolean }
+	// Tells the page frame to re-evaluate its adapter for the current URL. The
+	// nav-guard drives this because a content script's isolated world can't
+	// intercept miruro's SPA `pushState` episode routing.
+	| { kind: 'reevaluate' }
 
 /**
  * Derived connection state surfaced to the toolbar popup. The popup
