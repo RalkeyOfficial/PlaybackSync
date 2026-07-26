@@ -228,6 +228,8 @@ async function tearDownTab(tabId: number): Promise<void> {
 	clearNavGuard(tabId)
 	notifyPopupCredsCleared(tabId)
 	setColored(tabId, false)
+	// Session gone — re-gate the content runtimes so their adapters tear down.
+	pushRoomActive(tabId)
 }
 
 /**
@@ -412,6 +414,9 @@ function ensureConnectedWithCreds(tabId: number, creds: { syncUrl: string; syncP
 	sessions.set(tabId, session)
 	setPopupCreds(tabId, { syncUrl: creds.syncUrl })
 	connect(tabId, creds, session, makeCallbacks(tabId))
+	// The tab now has a room session — release the content runtimes' activation
+	// gate so their adapters come up.
+	pushRoomActive(tabId)
 }
 
 async function routeMessage(tabId: number | undefined, frameId: number, msg: ContentToBackground): Promise<void> {
@@ -422,6 +427,13 @@ async function routeMessage(tabId: number | undefined, frameId: number, msg: Con
 	switch (msg.kind) {
 		case 'credentials':
 			await handleCredentials(tabId, msg.syncUrl, msg.syncPassword)
+			return
+		case 'content_ready':
+			// A content frame booted with its adapter held inactive. Trigger the
+			// lazy connect that pre-activation `status`/`media_hello` used to (for
+			// stored-creds tabs), then tell the frame the tab's current room state.
+			await ensureConnected(tabId)
+			pushRoomActive(tabId)
 			return
 		case 'intent': {
 			// Intents come from the media frame — stamp it so playback commands
@@ -574,6 +586,8 @@ async function routeMessage(tabId: number | undefined, frameId: number, msg: Con
 			tabFrames.delete(tabId)
 			clearNavGuard(tabId)
 			forgetIconForTab(tabId)
+			// Session gone — re-gate the content runtimes so their adapters tear down.
+			pushRoomActive(tabId)
 			return
 	}
 }
@@ -1183,6 +1197,22 @@ async function handlePopupMessage(msg: PopupToBackground): Promise<void> {
 			// Handled by popupBroadcast.ts via the port directly.
 			return
 	}
+}
+
+/**
+ * Tell every frame of a tab whether it is in a room — the content runtimes gate
+ * all adapter activation on this (see the `room_active` arm of
+ * {@link BackgroundToContent}). Broadcast (no `frameId`) so page and media
+ * frames both hear it. Fire-and-forget: no content script / a closed tab is a
+ * harmless no-op.
+ *
+ * @param tabId The tab whose frames to notify.
+ */
+function pushRoomActive(tabId: number): void {
+	const payload: BackgroundToContent = { kind: 'room_active', active: sessions.has(tabId) }
+	void browser.tabs.sendMessage(tabId, payload).catch(() => {
+		// No content script listening / tab gone; nothing actionable.
+	})
 }
 
 function dispatchCommand(tabId: number, cmd: AuthoritativeCommand): void {

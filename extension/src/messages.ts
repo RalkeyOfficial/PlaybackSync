@@ -109,6 +109,10 @@ export type ContentToBackground =
 		target: VideoRefWithMeta
 	}
 	| { kind: 'credentials'; syncUrl: string; syncPassword: string }
+	// A frame booted with its adapter held inactive (activation is room-gated).
+	// Asks the background to lazily connect a stored-creds tab and reply with the
+	// tab's current `room_active` state.
+	| { kind: 'content_ready' }
 
 /**
  * Event-specific payload attached to a {@link Notice}. Structurally the same as
@@ -150,6 +154,10 @@ export interface Notice {
 export type BackgroundToContent =
 	| { kind: 'command'; command: AuthoritativeCommand }
 	| { kind: 'notice'; notice: Notice }
+	// Whether the tab is in a room. Content runtimes gate all adapter activation
+	// on this — nothing runs until it's `true`. Pushed on session create/teardown
+	// and in reply to `content_ready`.
+	| { kind: 'room_active'; active: boolean }
 
 /**
  * Derived connection state surfaced to the toolbar popup. The popup

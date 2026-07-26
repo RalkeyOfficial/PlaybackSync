@@ -71,10 +71,19 @@ let bridge: RuntimeBridge | null = null
 let started = false
 
 /**
- * Boot the page runtime. Idempotent within a content-script lifetime; the
- * entrypoint should call this exactly once.
+ * Whether the tab is in a room. The core guard: no adapter is evaluated (no
+ * identity read, catalog scrape, or command handling) until the background
+ * confirms room membership via {@link setRoomActive}.
  */
-export async function start(b: RuntimeBridge): Promise<void> {
+let roomActive = false
+
+/**
+ * Boot the page runtime. Idempotent within a content-script lifetime; the
+ * entrypoint should call this exactly once. Does **not** activate an adapter —
+ * that waits for {@link setRoomActive}; navigation listeners install now so a
+ * URL change mid-room re-evaluates.
+ */
+export function start(b: RuntimeBridge): void {
 	if (started) {
 		console.warn('[playbacksync] runtime.start called twice; ignoring')
 		return
@@ -82,7 +91,19 @@ export async function start(b: RuntimeBridge): Promise<void> {
 	started = true
 	bridge = b
 	installNavigationListeners()
-	await evaluate()
+}
+
+/**
+ * Set room membership. Activating evaluates the adapter; deactivating tears it
+ * down. Idempotent — repeated same-value calls are ignored.
+ *
+ * @param active Whether the tab is now in a room.
+ */
+export function setRoomActive(active: boolean): void {
+	if (active === roomActive) return
+	roomActive = active
+	if (active) void evaluate()
+	else teardown()
 }
 
 /**
@@ -102,6 +123,9 @@ export function deliverCommand(cmd: AuthoritativeCommand): void {
 }
 
 async function evaluate(): Promise<void> {
+	// Gate: never activate outside a room. Guards the nav-triggered re-evaluate
+	// too, so a URL change while not in a room stays idle.
+	if (!roomActive) return
 	const url = new URL(location.href)
 	let adapter: PageRole | null = null
 	for (const factory of ADAPTERS) {
@@ -119,6 +143,12 @@ async function evaluate(): Promise<void> {
 	const ctx = buildContext(adapter.id, adapter.guardNavigation ?? false)
 	try {
 		await adapter.init(ctx)
+		if (!roomActive) {
+			// Left the room mid-init — discard rather than going active.
+			try { adapter.destroy() } catch { /* teardown must never throw */ }
+			state = { kind: 'idle' }
+			return
+		}
 		if ((state as RuntimeState).kind === 'failed') {
 			// fail() was called synchronously during init — keep that state.
 			return

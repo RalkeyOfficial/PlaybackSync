@@ -69,6 +69,13 @@ let started = false
 let statusInterval: ReturnType<typeof setInterval> | null = null
 
 /**
+ * Whether the tab is in a room. The core guard: no media adapter is evaluated
+ * (no `<video>` resolution, no cold-start play-button press) until the
+ * background confirms room membership via {@link setRoomActive}.
+ */
+let roomActive = false
+
+/**
  * In-flight nudge restore timer. Set whenever the runtime applies a
  * `nudge_rate` command; cleared and reset to `1.0` when the timer fires,
  * a subsequent `nudge_rate` arrives, a competing command (play / pause /
@@ -82,14 +89,48 @@ let nudgeTimer: ReturnType<typeof setTimeout> | null = null
  * no navigation listeners — an embed frame's URL only changes by a full frame
  * reload, which re-injects the content script fresh.
  */
-export async function start(b: MediaBridge): Promise<void> {
+export function start(b: MediaBridge): void {
 	if (started) {
 		console.warn('[playbacksync:media] runtime.start called twice; ignoring')
 		return
 	}
 	started = true
 	bridge = b
-	await evaluate()
+}
+
+/**
+ * Set room membership. Activating evaluates the media adapter; deactivating
+ * tears it down (destroy the adapter, stop polling, cancel any nudge).
+ * Idempotent — repeated same-value calls are ignored.
+ *
+ * @param active Whether the tab is now in a room.
+ */
+export function setRoomActive(active: boolean): void {
+	if (active === roomActive) return
+	roomActive = active
+	if (active) void evaluate()
+	else teardown()
+}
+
+/**
+ * Tear the active media adapter down: stop status polling, cancel any in-flight
+ * nudge, and destroy the adapter (which aborts its lifetime signal, unwinding a
+ * mid-flight `ensurePlayable`). Safe to call from any state.
+ */
+function teardown(): void {
+	stopStatusPolling()
+	if (state.kind === 'active') {
+		cancelNudge(state.adapter)
+		try {
+			state.adapter.destroy()
+		} catch (err) {
+			log('error', state.adapter.id, 'destroy threw', {
+				reason: err instanceof Error ? err.message : String(err),
+			})
+		}
+	}
+	state = { kind: 'idle' }
+	pendingHandler = null
 }
 
 /**
@@ -183,6 +224,8 @@ function cancelNudge(adapter: MediaRole): void {
 }
 
 async function evaluate(): Promise<void> {
+	// Gate: never activate outside a room.
+	if (!roomActive) return
 	const url = new URL(location.href)
 	const adapter = selectMediaAdapter(url)
 	if (!adapter) {
@@ -193,6 +236,12 @@ async function evaluate(): Promise<void> {
 	const ctx = buildContext(adapter.id)
 	try {
 		await adapter.init(ctx)
+		if (!roomActive) {
+			// Left the room mid-init — discard rather than going active.
+			try { adapter.destroy() } catch { /* teardown must never throw */ }
+			state = { kind: 'idle' }
+			return
+		}
 		if ((state as RuntimeState).kind === 'failed') {
 			// fail() was called synchronously during init — keep that state.
 			return

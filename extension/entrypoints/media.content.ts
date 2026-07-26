@@ -17,7 +17,7 @@
  * WebSocket, and the page frame owns everything URL-derived.
  */
 
-import { deliverCommand, start, type MediaBridge } from '@/src/adapters/media/runtime'
+import { deliverCommand, setRoomActive, start, type MediaBridge } from '@/src/adapters/media/runtime'
 import { EMBED_MATCHES } from '@/src/adapters/embed-matches'
 import type { BackgroundToContent, ContentToBackground } from '@/src/messages'
 
@@ -67,13 +67,17 @@ export default defineContentScript({
 
 		browser.runtime.onMessage.addListener((msg: unknown) => {
 			const m = msg as BackgroundToContent
-			// Only `command` is actionable in the media frame; `notice` renders in
-			// the page frame's on-page UI, so it's ignored here.
+			// Only `command` and `room_active` are actionable in the media frame;
+			// `notice` renders in the page frame's on-page UI, so it's ignored here.
 			if (m.kind === 'command') deliverCommand(m.command)
+			else if (m.kind === 'room_active') setRoomActive(m.active)
 			// Fire-and-forget: return undefined so the browser doesn't hold the
 			// message channel open waiting for a sendResponse we never call.
 		})
 
-		void start(bridge)
+		start(bridge)
+		// Adapter activation is gated on room membership; announce readiness so the
+		// background lazily connects a stored-creds tab and replies `room_active`.
+		send({ kind: 'content_ready' })
 	},
 })
