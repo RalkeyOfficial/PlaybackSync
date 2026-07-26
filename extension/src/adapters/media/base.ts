@@ -113,6 +113,10 @@ export abstract class MediaBaseAdapter implements MediaRole {
 			return
 		}
 		this.video = video
+		// Announce ownership the instant the <video> is resolved — before the slow
+		// cold-start prep below — so the background registers this frame as the
+		// video owner well before any phantom sibling's videoless fail can arrive.
+		ctx.claimVideo()
 
 		if (this.holdsAutoplay) this.installAutoplayHold(video)
 
@@ -292,12 +296,17 @@ export abstract class MediaBaseAdapter implements MediaRole {
 	 * (its load/buffer auto-play, or the hold's own compensating re-pause).
 	 *
 	 * Primary signal is the User Activation API (`navigator.userActivation`,
-	 * Chrome 72+ / Firefox 120+): `isActive` is true only while a real user
-	 * gesture is driving the turn, and — crucially — it does **not** survive a
+	 * Chrome 72+ / Firefox 120+): `isActive` reflects **transient activation** —
+	 * `true` for a few seconds (~5 s in Chromium) after any real user gesture,
+	 * not only while a handler runs. Crucially it does **not** survive a
 	 * navigation, so a page freshly (re)loaded starts inactive and the site's
-	 * load/buffer auto-play reads as unsolicited. Falls back, on browsers
-	 * without the API (below our Firefox floor), to "a trusted pointer/key
-	 * gesture within {@link USER_GESTURE_WINDOW_MS}" — best-effort only.
+	 * load/buffer auto-play reads as unsolicited. The window is deliberately
+	 * loose: a stray gesture within it can misread a late buffered auto-play as
+	 * viewer-driven (leaking a `play`), but erring the other way — re-pausing a
+	 * genuine viewer play — is the worse, more visible failure, and the 10 s hold
+	 * timer bounds the leak. Falls back, on browsers without the API (below our
+	 * Firefox floor), to "a trusted pointer/key gesture within
+	 * {@link USER_GESTURE_WINDOW_MS}" — best-effort only.
 	 *
 	 * @returns `true` if the action appears viewer-driven.
 	 */

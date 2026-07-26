@@ -60,6 +60,9 @@ export default defineContentScript({
 			sendMediaHello(adapterId) {
 				send({ kind: 'media_hello', mediaAdapterId: adapterId })
 			},
+			sendMediaOwner(adapterId) {
+				send({ kind: 'media_owner', mediaAdapterId: adapterId })
+			},
 			sendFail(adapterId, reason) {
 				send({ kind: 'fail', role: 'media', adapterId, reason })
 			},

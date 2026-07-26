@@ -54,6 +54,12 @@ export interface MediaBridge {
 	 * if a room is already in progress (video-appears-after-JOIN, iframe reload).
 	 */
 	sendMediaHello(adapterId: string): void
+	/**
+	 * Announce this frame owns a controllable `<video>`, sent the instant it's
+	 * resolved (before cold-start prep) so the background learns the owning frame
+	 * id early — before a phantom sibling's videoless fail could arrive.
+	 */
+	sendMediaOwner(adapterId: string): void
 	/** Forward a soft failure (no controllable video in this frame). */
 	sendFail(adapterId: string, reason: string): void
 }
@@ -266,6 +272,9 @@ function buildContext(adapterId: string): MediaContext {
 	return {
 		emitIntent(intent) {
 			bridge?.sendIntent(adapterId, intent)
+		},
+		claimVideo() {
+			bridge?.sendMediaOwner(adapterId)
 		},
 		onCommand(handler) {
 			pendingHandler = handler

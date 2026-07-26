@@ -67,6 +67,10 @@ export type ContentToBackground =
 		kind: 'media_hello'
 		mediaAdapterId: string
 	}
+	// This frame resolved a controllable <video>, claimed the instant it's found
+	// (before slow cold-start prep) so the background learns the owning frame id
+	// early enough to treat a phantom sibling's later fail as non-fatal.
+	| { kind: 'media_owner'; mediaAdapterId: string }
 	| {
 		kind: 'fail'
 		/**

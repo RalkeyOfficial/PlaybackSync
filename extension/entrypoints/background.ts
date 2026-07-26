@@ -493,6 +493,13 @@ async function routeMessage(tabId: number | undefined, frameId: number, msg: Con
 			}
 			return
 		}
+		case 'media_owner':
+			// The embed frame resolved its <video>, announced before cold-start
+			// prep — so ownership registers well before any phantom sibling's
+			// videoless fail, which the `fail` handler then treats as non-fatal.
+			setMediaFrame(tabId, frameId)
+			log('bg', 'info', 'media frame claimed video ownership', { tabId, frameId })
+			return
 		case 'media_hello': {
 			// The embed frame resolved a controllable `<video>`. Learn its frame
 			// id now so playback commands target it, and — if a room is already

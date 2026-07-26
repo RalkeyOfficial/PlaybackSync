@@ -221,6 +221,14 @@ export interface MediaContext {
 	emitIntent(intent: LocalIntent): void
 
 	/**
+	 * Announce this frame owns a controllable `<video>`, called the moment it's
+	 * resolved — before cold-start prep — so the background registers the owning
+	 * frame id early and won't treat a phantom sibling's later videoless fail as
+	 * fatal. Distinct from the post-init `media_hello`, which also drives resync.
+	 */
+	claimVideo(): void
+
+	/**
 	 * Register the one handler that applies authoritative commands from the
 	 * server. The media frame acts on `play`/`pause`/`seek` (and exhaustively
 	 * no-ops `nudge_rate`, which the runtime intercepts first). Calling this
