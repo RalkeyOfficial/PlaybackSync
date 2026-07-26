@@ -4,12 +4,22 @@ import { readVideoState, wireIntentListeners } from '../video-driver'
 /**
  * Safety release for the autoplay hold (see {@link MediaBaseAdapter.holdsAutoplay}).
  * A player that auto-plays once on load is held paused until the room's first
- * authoritative `play`/`pause` command arrives; if none ever does (e.g. a
- * brand-new room with no state yet) the hold lifts after this window so the
- * viewer is never left unable to start playback. The happy path lifts it far
- * sooner, on the first command.
+ * authoritative `play` command arrives; if none ever does (e.g. a brand-new
+ * room with no state yet, or a room that stays paused) the hold lifts after
+ * this window so the viewer is never left unable to start playback. The happy
+ * path lifts it far sooner, on the first `play`.
  */
 const AUTOPLAY_HOLD_TIMEOUT_MS = 10_000
+
+/**
+ * Fallback window for {@link MediaBaseAdapter.userInitiatedPlay} on browsers
+ * without the User Activation API (Firefox below our floor). A following
+ * `play` counts as viewer-initiated if a **trusted** pointer/key gesture fired
+ * within this window — long enough to cover gesture→play latency, short enough
+ * to stay below the gap to any unrelated auto-play. Unused where
+ * `navigator.userActivation` exists (Chrome, modern Firefox).
+ */
+const USER_GESTURE_WINDOW_MS = 1_000
 
 /**
  * Base class every **media-role** adapter extends — the embed-frame half of a
@@ -40,10 +50,11 @@ export abstract class MediaBaseAdapter implements MediaRole {
 
 	/**
 	 * Set `true` when the underlying player auto-plays once as the source
-	 * loads. The base then holds the video paused (re-pausing on any `play`)
-	 * until the room's first `play`/`pause` command takes over, so playback
+	 * loads. The base then holds the video paused — re-pausing the player's own
+	 * auto-play while letting a viewer-initiated `play` through — until the
+	 * room's first `play` command (or a viewer play) takes over, so playback
 	 * starts under room control without a flash of auto-play. See
-	 * {@link AUTOPLAY_HOLD_TIMEOUT_MS}.
+	 * {@link installAutoplayHold} and {@link AUTOPLAY_HOLD_TIMEOUT_MS}.
 	 */
 	protected readonly holdsAutoplay: boolean = false
 
@@ -55,11 +66,22 @@ export abstract class MediaBaseAdapter implements MediaRole {
 	private readonly cleanups: Array<() => void> = []
 
 	/**
-	 * While held, the player's one-shot load auto-play is immediately
-	 * re-paused. Released (idempotently) on the first `play`/`pause` command,
-	 * or by the safety timer.
+	 * While held, the player's **unsolicited** auto-play (load-time or late
+	 * buffered) is immediately re-paused; a viewer-initiated `play` is let
+	 * through and lifts the hold. Released (idempotently) on the first room
+	 * `play` command, a viewer play, or the safety timer — not on a room
+	 * `pause`/`seek`, so a late buffered auto-play stays caught against a paused
+	 * room. See {@link installAutoplayHold}.
 	 */
 	private autoplayHeld = false
+
+	/**
+	 * Timestamp (`Date.now()`) of the last **trusted** user gesture on the
+	 * player. Fallback signal for {@link userInitiatedPlay} where the User
+	 * Activation API is unavailable. `0` until the first real gesture. See
+	 * {@link USER_GESTURE_WINDOW_MS}.
+	 */
+	private lastUserGestureAt = 0
 
 	/**
 	 * Abort signal for this adapter's lifetime. Pass it to every
@@ -83,8 +105,10 @@ export abstract class MediaBaseAdapter implements MediaRole {
 		const video = await this.resolveVideo()
 		if (this.signal.aborted) return
 		if (!video) {
-			// Soft fail: no video in this frame. The runtime goes inactive but
-			// the background leaves the tab's room session intact.
+			// No controllable video in this frame. Control over the `<video>` is
+			// non-negotiable for sync, so this fails the activation loudly; the
+			// background tears the room down unless another frame owns the video
+			// (a phantom sibling frame). See {@link failInit}.
 			this.failInit(`${this.id}: no <video> element resolved`)
 			return
 		}
@@ -99,7 +123,20 @@ export abstract class MediaBaseAdapter implements MediaRole {
 
 		// Intents are wired after the hold listener so, on any stray auto-play,
 		// the hold's re-pause runs before the intent listener samples state.
-		wireIntentListeners(video, (intent) => this.emitIntent(intent), this.signal)
+		// While the hold is active, the player's own auto-play (and the guard's
+		// compensating re-pause) are not viewer actions: dropping their intents
+		// here stops a stray `play` from round-tripping through the room and
+		// forcing every client to play. A viewer action carries user activation
+		// and passes through. Re-pausing the local `<video>` alone is not enough
+		// — the leaked intent would come straight back as a room `play` command.
+		wireIntentListeners(
+			video,
+			(intent) => {
+				if (this.autoplayHeld && !this.isViewerDriven()) return
+				this.emitIntent(intent)
+			},
+			this.signal,
+		)
 
 		ctx.onCommand((cmd) => this.handleCommand(cmd))
 	}
@@ -137,8 +174,10 @@ export abstract class MediaBaseAdapter implements MediaRole {
 	/**
 	 * Find the player's `<video>` element in **this frame's** document, waiting
 	 * for late hydration if needed (use `waitForElement` with {@link signal}).
-	 * Return `null` to soft-fail the adapter on a frame that isn't actually
-	 * hosting a controllable player.
+	 * Return `null` only when this frame genuinely has no controllable player:
+	 * the base then fails the activation, and the background treats a videoless
+	 * owning frame as a fatal, room-tearing-down error (control over the
+	 * `<video>` is a hard requirement for sync).
 	 *
 	 * @returns The player element, or `null` if it never appears.
 	 */
@@ -190,23 +229,49 @@ export abstract class MediaBaseAdapter implements MediaRole {
 
 	// --- Sealed internals ---------------------------------------------------
 
-	/** Fail the activation and abort the lifetime signal so nothing leaks. */
+	/**
+	 * Fail the activation and abort the lifetime signal so nothing leaks. The
+	 * background escalates this to a full room teardown unless another frame
+	 * already owns the video (see the `fail` handler in `background.ts`).
+	 */
 	private failInit(reason: string): void {
 		this.ctx?.fail(reason)
 		this.abort.abort()
 	}
 
 	/**
-	 * Install the autoplay hold: re-pause on every `play` while held, plus a
-	 * safety timer that lifts the hold. Attached before the intent listeners
-	 * so the re-pause runs first.
+	 * Install the autoplay hold. On every `play` while held either lets it
+	 * through (a viewer-initiated play, which also lifts the hold) or re-pauses
+	 * it (the player's unsolicited auto-play). Plus a safety timer that lifts
+	 * the hold unconditionally. Attached before the intent listeners so the
+	 * re-pause runs first.
 	 */
 	private installAutoplayHold(video: HTMLVideoElement): void {
 		this.autoplayHeld = true
+
+		// Fallback-only gesture tracking for browsers without the User
+		// Activation API (see {@link userInitiatedPlay}). Only *trusted* gestures
+		// count — the synthesized keys a cold-start `ensurePlayable` dispatches
+		// are `isTrusted: false`, so the activation's own auto-play stays
+		// suppressed.
+		const markGesture = (e: Event) => {
+			if (e.isTrusted) this.lastUserGestureAt = Date.now()
+		}
+		document.addEventListener('pointerdown', markGesture, { signal: this.signal, capture: true })
+		document.addEventListener('keydown', markGesture, { signal: this.signal, capture: true })
+
 		video.addEventListener(
 			'play',
 			() => {
-				if (this.autoplayHeld && !video.paused) video.pause()
+				if (!this.autoplayHeld) return
+				// A viewer-driven play is the viewer taking control: honour it and
+				// lift the hold (their intent flows to the room). The player's own
+				// auto-play carries no user activation, so it's re-paused.
+				if (this.isViewerDriven()) {
+					this.releaseAutoplayHold()
+					return
+				}
+				if (!video.paused) video.pause()
 			},
 			{ signal: this.signal },
 		)
@@ -222,11 +287,38 @@ export abstract class MediaBaseAdapter implements MediaRole {
 	}
 
 	/**
+	 * Whether the action currently being handled (a `play`, or an intent about
+	 * to be emitted) is driven by the viewer rather than by the player itself
+	 * (its load/buffer auto-play, or the hold's own compensating re-pause).
+	 *
+	 * Primary signal is the User Activation API (`navigator.userActivation`,
+	 * Chrome 72+ / Firefox 120+): `isActive` is true only while a real user
+	 * gesture is driving the turn, and — crucially — it does **not** survive a
+	 * navigation, so a page freshly (re)loaded starts inactive and the site's
+	 * load/buffer auto-play reads as unsolicited. Falls back, on browsers
+	 * without the API (below our Firefox floor), to "a trusted pointer/key
+	 * gesture within {@link USER_GESTURE_WINDOW_MS}" — best-effort only.
+	 *
+	 * @returns `true` if the action appears viewer-driven.
+	 */
+	private isViewerDriven(): boolean {
+		const ua = (navigator as { userActivation?: { isActive: boolean } }).userActivation
+		if (ua) return ua.isActive
+		return Date.now() - this.lastUserGestureAt < USER_GESTURE_WINDOW_MS
+	}
+
+	/**
 	 * Apply an authoritative command verbatim. `play`/`pause`/`seek` drive the
 	 * `<video>` directly; `nudge_rate` is a no-op (the runtime intercepts it
 	 * before it reaches the adapter); `cursor_change` is the page frame's job
-	 * and is ignored here. The first `play`/`pause` lifts the autoplay hold
-	 * before applying, so a room `play` isn't re-paused by the hold guard.
+	 * and is ignored here.
+	 *
+	 * Only a room `play` lifts the autoplay hold (before applying, so it isn't
+	 * re-paused by the guard). `pause`/`seek` keep the hold engaged: some
+	 * players auto-play asynchronously once buffering settles, landing *after*
+	 * the room's resync `pause`, and the hold must still be there to catch it.
+	 * A viewer's own play lifts the hold separately (see
+	 * {@link installAutoplayHold}).
 	 */
 	private handleCommand(cmd: AuthoritativeCommand): void {
 		const video = this.video
@@ -237,7 +329,6 @@ export abstract class MediaBaseAdapter implements MediaRole {
 				void video.play()
 				return
 			case 'pause':
-				this.releaseAutoplayHold()
 				video.pause()
 				return
 			case 'seek':

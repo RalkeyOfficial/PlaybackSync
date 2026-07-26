@@ -225,7 +225,12 @@ function buildContext(adapterId: string): MediaContext {
 			}
 		},
 		fail(reason) {
-			log('warn', adapterId, 'media adapter soft-failed', { reason })
+			// No controllable `<video>` in this frame. The frame can't know
+			// whether it's the tab's only player or a phantom sibling, so it
+			// reports loudly and lets the background decide severity (fatal
+			// teardown vs. ignore a non-owner frame). Losing the video element
+			// is an extension-side failure, so log at error.
+			log('error', adapterId, 'media adapter failed: no controllable video', { reason })
 			state = { kind: 'failed', adapterId, reason }
 			bridge?.sendFail(adapterId, reason)
 		},

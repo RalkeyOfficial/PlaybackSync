@@ -85,7 +85,7 @@ The content script is the extension's only *injected page UI*. When the backgrou
 | `identity` | `adapterId`, `identity: ContentIdentity` (`providerId`, `videoId`, `normalizedUrl`), `pageUrl` (full `location.href`), `guardNavigation` (the active adapter's opt-in) | Once per page adapter init |
 | `catalog` | `adapterId`, `catalog: VideoRefWithMeta[] \| null` | Once per page adapter init, after `scrapeCatalog()` resolves |
 | `cursor_trigger` | `adapterId`, `target: VideoRefWithMeta` | User clicked an in-page nav control (e.g. an episode button) |
-| `fail` | `role: 'page' \| 'media'`, `adapterId`, `reason: string` | Adapter can't run. A `media` fail is **soft** (leaves the room intact); a `page` fail tears the tab down |
+| `fail` | `role: 'page' \| 'media'`, `adapterId`, `reason: string` | Adapter can't run — **fatal for both roles**, tears the tab down. A `media` fail (no controllable `<video>`) is only ignored when it comes from a non-owner frame (a phantom sibling embed); a `page` fail always tears down |
 | `credentials` | `syncUrl`, `syncPassword` | Share-URL pickup fires once at `document_start`; binds to the capturing tab's `pbsync.tab.<tabId>` slot |
 
 **Background → Content** (`BackgroundToContent`):

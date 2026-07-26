@@ -70,11 +70,13 @@ export type ContentToBackground =
 	| {
 		kind: 'fail'
 		/**
-		 * Which half of the site failed. A `'media'` fail is **soft** — the
-		 * background goes inactive for that frame but leaves the tab's room
-		 * session (creds, WS, nav-guard) intact, because a videoless embed must
-		 * not tear down the room the `'page'` frame established. A `'page'`
-		 * fail keeps the full tab teardown.
+		 * Which half of the site failed. Both roles are **fatal** — control over
+		 * the `<video>` (media) and a resolvable identity (page) are hard
+		 * requirements, so either failing tears the tab's room session (creds,
+		 * WS, nav-guard) down. The one exception: a `'media'` fail from a frame
+		 * that is *not* the tab's video owner (a phantom sibling embed frame) is
+		 * ignored, so a stray videoless frame can't kill a working room. See the
+		 * `fail` handler in `background.ts`.
 		 */
 		role: FrameRole
 		adapterId: string

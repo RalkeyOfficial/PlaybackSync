@@ -541,19 +541,32 @@ async function routeMessage(tabId: number | undefined, frameId: number, msg: Con
 			return
 		case 'fail':
 			if (msg.role === 'media') {
-				// Soft fail: no controllable video in the embed frame. Leave the
-				// tab's room session (creds, WS, nav-guard) intact — the page
-				// frame's room must survive a videoless embed — just forget the
-				// media frame so commands fall back to broadcast until it recovers.
-				log('bg', 'warn', 'media adapter soft-failed', {
+				// A media fail means a strm.cx frame ran the media adapter but never
+				// resolved a controllable `<video>`. If *another* frame already owns
+				// the video (owner set and it isn't this frame), this is a phantom
+				// sibling frame (e.g. a nested/preload embed) — stay soft and leave
+				// the working media frame untouched.
+				const owner = tabFrames.get(tabId)?.mediaFrameId
+				if (owner !== undefined && owner !== frameId) {
+					log('bg', 'warn', 'media adapter failed in a non-owner frame; ignoring', {
+						tabId, frameId, owner, adapterId: msg.adapterId, reason: msg.reason,
+					})
+					return
+				}
+				// Otherwise the tab's sole/owning embed frame came up videoless, so
+				// the tab has no controllable `<video>` at all. Losing the video
+				// element is an extension-side failure that makes sync impossible —
+				// per the error policy that's fatal, not something to sit through.
+				// Tear the room down loudly rather than stay in a party we can't
+				// drive.
+				log('bg', 'error', 'media adapter fatal: no controllable video in embed frame', {
+					tabId, frameId, adapterId: msg.adapterId, reason: msg.reason,
+				})
+			} else {
+				log('bg', 'warn', 'adapter failed', {
 					tabId, adapterId: msg.adapterId, reason: msg.reason,
 				})
-				clearMediaFrame(tabId)
-				return
 			}
-			log('bg', 'warn', 'adapter failed', {
-				tabId, adapterId: msg.adapterId, reason: msg.reason,
-			})
 			disconnect(tabId)
 			await clearCreds(tabId)
 			forgetTab(tabId)

@@ -49,7 +49,7 @@
     {
       group: 'Controls / frames',
       items: [
-        { sel: '#player-container .vds-video-layout button', note: 'cold-start load button' },
+        { sel: '#app > strmcx-player > media-player > media-play-button', note: 'cold-start load button' },
         { sel: 'iframe', note: 'iframes (embeds / ads)' },
       ],
     },
