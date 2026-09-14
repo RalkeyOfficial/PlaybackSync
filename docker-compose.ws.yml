@@ -19,6 +19,12 @@ services:
     # same one Apache's mod_proxy_wstunnel rule targets, and so occ reaches
     # database-mysql / redis exactly like the NC container does. Consequence:
     # no `ports:` and no `networks:` may be declared here.
+    #
+    # This binding is resolved once at this container's own startup and is NOT
+    # kept in sync afterwards — if master-nextcloud-1 restarts later, this
+    # container is left on its old, abandoned namespace (status API reports
+    # `not_running` even though the daemon looks fine from inside its own
+    # container). Restart this service after master-nextcloud-1 restarts.
     network_mode: "container:master-nextcloud-1"
     # Bypass the image's bootstrap.sh entrypoint — it rewrites Apache config,
     # chowns the shared volumes, and can trigger the auto-install flow, all of

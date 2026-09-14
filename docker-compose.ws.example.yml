@@ -35,6 +35,16 @@ services:
     #   - separate proxy:  <nc-app-service>:8765   (once ws_host = 0.0.0.0)
     # A standalone service on its own network would break the admin bridge unless
     # you exposed 8766, which the security guidance forbids.
+    #
+    # CAVEAT: this binding is resolved once, at this container's own startup,
+    # against whatever namespace the app container has *right then* — it is
+    # NOT kept in sync afterwards. If the app container restarts or gets
+    # recreated later, this container is left attached to the app's old,
+    # abandoned namespace: the daemon still looks healthy from inside its own
+    # container, but the app's PHP process gets "connection refused" on the
+    # exact same loopback address (status API reports `not_running`). Fix:
+    # restart THIS service after the app container restarts — there's no
+    # automatic re-attachment. See docs/ws-sync-server.md#troubleshooting.
     network_mode: "service:app"                   # <-- your Nextcloud app/php-fpm service name
     volumes:
       - nextcloud:/var/www/html                   # <-- the SAME html volume(s) your app service mounts

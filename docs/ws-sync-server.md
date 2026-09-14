@@ -410,6 +410,34 @@ docker exec <nextcloud-container> tail -n 100 /var/www/html/data/nextcloud.log |
 
 The most common cause is another process already holding the port.
 
+### Admin settings / `/api/v1/ws/status` reports `not_running`, but the daemon is clearly up
+
+`WsStatusController` only ever reports two states: reachable (`available: true`) or not (`not_running`) — it collapses every failure mode of the loopback probe (`HealthClient` → `ws_admin_host:ws_admin_port/healthz`) into that one reason. "The daemon process is running" and "PHP can reach its admin port" are two different facts; when the status page says `not_running` despite `pgrep -fa ws-serve` showing the process alive, the gap is almost always one of these two:
+
+1. **A stale bundled dependency conflicts with Nextcloud core's own HTTP client.** `Application::__construct` loads the app's own `vendor/autoload.php` on *every* web request (not just CLI), so anything it bundles — `guzzlehttp/psr7` via `cboden/ratchet`, for instance — sits in the same PHP process as core's Guzzle stack. If that bundled copy is older than what core's `guzzlehttp/guzzle` expects, `HealthClient`'s request throws instead of connecting, and it's logged as `HealthClient request failed`. Check the actual exception, not just the status flag:
+   ```bash
+   docker exec <nextcloud-container> sh -c "grep -i healthclient /var/www/html/data/nextcloud.log | tail -5"
+   ```
+   A `Call to undefined method GuzzleHttp\Psr7\...` (or similar "undefined method"/"class not found" error naming a bundled library) means a version drift in `vendor/`, not a networking problem. Confirm and fix by reinstalling to match the committed `composer.lock`:
+   ```bash
+   docker run --rm -v <nextcloud-html-volume>:/var/www/html \
+     -w /var/www/html/custom_apps/playbacksync \
+     composer:2 install --no-dev --optimize-autoloader
+   docker exec <nextcloud-container> chown -R www-data:www-data /var/www/html/custom_apps/playbacksync/vendor
+   ```
+   If the checked-in `composer.lock` itself is what's stale (a transitive dependency needs bumping past what core now requires), use `composer update <package> --with-all-dependencies` instead of `install`, then commit the regenerated lock file.
+
+2. **The daemon sidecar is bound to a stranded network namespace.** This applies to any Docker deployment where the daemon shares the app container's netns (`network_mode: "service:<app>"` / `"container:<app>"` — see [Docker Compose](#docker-compose)). That binding is resolved *once*, when the sidecar starts, against whatever namespace the target container has *at that moment* — it is not kept in sync afterwards. If the Nextcloud app container is later restarted or recreated (image update, `docker compose up -d` picking up a change, host reboot, manual restart) *after* the daemon sidecar already started, the app container gets a fresh namespace while the sidecar stays attached to the old, abandoned one. The daemon then answers fine from *inside its own container* (its own `/healthz`, its own `ss`/`/proc/net/tcp` all show it listening) while the app container's PHP process gets `Connection refused` on the exact same loopback address, because the two are no longer actually the same namespace. Confirm with:
+   ```bash
+   docker exec <nextcloud-container> readlink /proc/1/ns/net
+   docker exec <playbacksync-ws-container> readlink /proc/1/ns/net
+   ```
+   Different `net:[...]` values confirm this. Fix: restart the daemon sidecar (not the app container) so it re-resolves against the app container's *current* namespace:
+   ```bash
+   docker restart <playbacksync-ws-container>
+   ```
+   Going forward, whenever the Nextcloud app container restarts or gets recreated, restart the daemon sidecar right after it — there's no automatic re-attachment.
+
 ### Browser connects but immediately disconnects
 
 The proxy is forwarding the request but the daemon is closing it. Likeliest reasons, in order:
